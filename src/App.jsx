@@ -1849,39 +1849,13 @@ const _idb = {
 };
 
 // ─── Google Drive API (REST only — no gapi.js needed) ───
+
 const GDrive = {
   _token: null,
   _tokenExpiry: 0,
   _clientId: "",
   _folderId: null,
-  
-  _restoreToken() {
-    try {
-      const stored = localStorage.getItem("novelforge:gdrive_token");
-      if (stored) {
-        const { token, expiry } = JSON.parse(stored);
-        if (token && expiry && Date.now() < expiry - 60000) {
-          this._token = token;
-          this._tokenExpiry = expiry;
-          return true;
-        }
-      }
-    } catch {}
-    // Token expired or invalid — clean up
-    localStorage.removeItem("novelforge:gdrive_token");
-    return false;
-  },
-  
-  _saveToken() {
-    try {
-      if (this._token && this._tokenExpiry > Date.now()) {
-        localStorage.setItem("novelforge:gdrive_token", JSON.stringify({
-          token: this._token,
-          expiry: this._tokenExpiry,
-        }));
-      }
-    } catch {}
-  },
+  _fileId: null,  // ← Track the backup file ID after first create
 
   setClientId(id) { this._clientId = id; },
 
@@ -1898,7 +1872,6 @@ const GDrive = {
           if (resp.error) return reject(new Error(resp.error));
           this._token = resp.access_token;
           this._tokenExpiry = Date.now() + (resp.expires_in || 3600) * 1000;
-          this._saveToken(); // ← NEW: persist immediately
           resolve(resp.access_token);
         },
       });
@@ -1907,11 +1880,7 @@ const GDrive = {
   },
 
   async ensureToken() {
-    // If in-memory token is still valid, use it
     if (this._token && Date.now() < this._tokenExpiry - 60000) return this._token;
-    // Try restoring from localStorage (survives refresh)
-    if (this._restoreToken()) return this._token;
-    // Fall back to full re-authentication
     return this.authenticate();
   },
 
@@ -1948,32 +1917,60 @@ const GDrive = {
     const jsonStr = JSON.stringify(data, null, 2);
     const blob = new Blob([jsonStr], { type: "application/json" });
 
-    // Check if file exists
+    // ── If we already know the file ID, try updating it directly ──
+    if (this._fileId) {
+      try {
+        const form = new FormData();
+        form.append("metadata", new Blob([JSON.stringify({ name: filename })], { type: "application/json" }));
+        form.append("file", blob);
+        const updateRes = await fetch(
+          `https://www.googleapis.com/upload/drive/v3/files/${this._fileId}?uploadType=multipart`,
+          { method: "PATCH", headers: { Authorization: `Bearer ${this._token}` }, body: form }
+        );
+        if (updateRes.ok) return true;
+        // If update fails (file deleted, permissions, etc.), fall through to search+create
+        console.warn("[NovelForge] Direct update failed, falling back to search");
+        this._fileId = null;
+      } catch (e) {
+        console.warn("[NovelForge] Direct update error, falling back to search:", e.message);
+        this._fileId = null;
+      }
+    }
+
+    // ── Search for existing file by name in this folder ──
     const searchRes = await fetch(
-      `https://www.googleapis.com/drive/v3/files?q=name='${encodeURIComponent(filename)}'+and+'${folderId}'+in+parents+and+trashed=false&fields=files(id)`,
+      `https://www.googleapis.com/drive/v3/files?q=name='${encodeURIComponent(filename)}'+and+'${folderId}'+in+parents+and+trashed=false&fields=files(id)&pageSize=1`,
       { headers: { Authorization: `Bearer ${this._token}` } }
     );
     const searchData = await searchRes.json();
+
     const metadata = { name: filename, mimeType: "application/json" };
     const form = new FormData();
 
     if (searchData.files?.length > 0) {
-      // Update existing
+      // ── Update existing file ──
+      this._fileId = searchData.files[0].id;
       form.append("metadata", new Blob([JSON.stringify(metadata)], { type: "application/json" }));
       form.append("file", blob);
-      return (await fetch(
-        `https://www.googleapis.com/upload/drive/v3/files/${searchData.files[0].id}?uploadType=multipart`,
+      const updateRes = await fetch(
+        `https://www.googleapis.com/upload/drive/v3/files/${this._fileId}?uploadType=multipart`,
         { method: "PATCH", headers: { Authorization: `Bearer ${this._token}` }, body: form }
-      )).ok;
+      );
+      return updateRes.ok;
     } else {
-      // Create new
+      // ── Create new file (first sync) ──
       metadata.parents = [folderId];
       form.append("metadata", new Blob([JSON.stringify(metadata)], { type: "application/json" }));
       form.append("file", blob);
-      return (await fetch(
+      const createRes = await fetch(
         "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart",
         { method: "POST", headers: { Authorization: `Bearer ${this._token}` }, body: form }
-      )).ok;
+      );
+      if (createRes.ok) {
+        const created = await createRes.json();
+        this._fileId = created.id;  // ← Save for next time
+      }
+      return createRes.ok;
     }
   },
 
@@ -1981,31 +1978,23 @@ const GDrive = {
     await this.ensureToken();
     const folderId = this._folderId || await this.findOrCreateFolder();
     const searchRes = await fetch(
-      `https://www.googleapis.com/drive/v3/files?q=name='${encodeURIComponent(filename)}'+and+'${folderId}'+in+parents+and+trashed=false&fields=files(id)`,
+      `https://www.googleapis.com/drive/v3/files?q=name='${encodeURIComponent(filename)}'+and+'${folderId}'+in+parents+and+trashed=false&fields=files(id)&pageSize=1`,
       { headers: { Authorization: `Bearer ${this._token}` } }
     );
     const searchData = await searchRes.json();
     if (!searchData.files?.length) return null;
+
+    this._fileId = searchData.files[0].id;  // ← Cache for future saves
     const downloadRes = await fetch(
-      `https://www.googleapis.com/drive/v3/files/${searchData.files[0].id}?alt=media`,
+      `https://www.googleapis.com/drive/v3/files/${this._fileId}?alt=media`,
       { headers: { Authorization: `Bearer ${this._token}` } }
     );
     const data = await downloadRes.json();
     return data.projects ? data : null;
   },
 
-  isConnected() {
-    // Check in-memory first, then try restoring from storage
-    if (this._token && Date.now() < this._tokenExpiry) return true;
-    return this._restoreToken();
-  },
-
-  disconnect() {
-    this._token = null;
-    this._tokenExpiry = 0;
-    this._folderId = null;
-    localStorage.removeItem("novelforge:gdrive_token"); // ← NEW: clear persisted
-  },
+  isConnected() { return !!this._token && Date.now() < this._tokenExpiry; },
+  disconnect() { this._token = null; this._tokenExpiry = 0; this._folderId = null; this._fileId = null; },
 };
 
 // ─── Storage (IndexedDB — handles unlimited data including images) ───
@@ -5331,9 +5320,7 @@ Only suggest changes backed by events in the chapter. If no relationship changes
     } catch (e) { showToast(`Load failed: ${e.message}`, "error"); }
     setGdriveSyncing(false);
   }, [showToast]);
-  
-  
-
+ 
   // Auto-sync timer
   useEffect(() => {
     if (gdriveAutoSync && gdriveConnected && gdriveSyncInterval > 0) {
@@ -5343,15 +5330,32 @@ Only suggest changes backed by events in the chapter. If no relationship changes
           const allImages = [];
           for (const proj of projects) allImages.push(...(await GDriveImages.collectAllImages(proj)));
           if (allImages.length > 0) await GDriveImages.syncUpload(allImages);
+
           const projectsForDrive = projects.map(p => GDriveImages.markImages(JSON.parse(JSON.stringify(p))));
-          await GDrive.saveToDrive({ projects: projectsForDrive, settings, tabChats: tabChatHistories, _imageMap: GDriveImages._hashToDriveId });
+
+          // ✅ Use the SAME keys as the manual sync handler
+          await GDrive.saveToDrive({
+            projects: projectsForDrive,
+            settings,
+            tabChats: tabChatHistories,
+            _hashToDriveId: GDriveImages._hashToDriveId,
+            _pathToDriveId: GDriveImages._pathToDriveId,
+            _format: "novelforge-backup-v2",
+          });
+
+          // ✅ Also persist maps to IndexedDB
+          await _idb.set("novelforge:imageHash", GDriveImages._hashToDriveId);
+          await _idb.set("novelforge:pathToDriveId", GDriveImages._pathToDriveId);
+
           setGdriveLastSync(new Date());
-        } catch (e) { console.warn("[NovelForge] Auto-sync failed:", e.message); }
+        } catch (e) {
+          console.warn("[NovelForge] Auto-sync failed:", e.message);
+        }
       }, gdriveSyncInterval * 60 * 1000);
       return () => clearInterval(gdriveSyncTimerRef.current);
     }
   }, [gdriveAutoSync, gdriveConnected, gdriveSyncInterval, projects, settings, tabChatHistories]);
-
+ 
   useEffect(() => {
     if (settings.googleClientId) { setGdriveClientId(settings.googleClientId); GDrive.setClientId(settings.googleClientId); }
   }, [settings.googleClientId]);
