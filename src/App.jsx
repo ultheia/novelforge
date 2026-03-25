@@ -5205,7 +5205,6 @@ Only suggest changes backed by events in the chapter. If no relationship changes
     if (!GDrive.isConnected()) { showToast("Connect to Google Drive first", "error"); return; }
     setGdriveSyncing(true);
     try {
-      // Step 1: Collect all images across all projects
       showToast("Collecting images...", "info");
       const allImages = [];
       for (const proj of projects) {
@@ -5222,24 +5221,28 @@ Only suggest changes backed by events in the chapter. If no relationship changes
         }
       }
 
-      // Step 2: Save JSON — DEEP COPY before markImages so local state keeps base64
       const projectsForDrive = JSON.parse(JSON.stringify(projects));
       GDriveImages.markImages(projectsForDrive);
 
-      await GDrive.saveToDrive({
+      // ── Save BOTH mappings so load can download images ──
+      const drivePayload = {
         projects: projectsForDrive,
         settings,
         tabChats: tabChatHistories,
-        _imageMap: GDriveImages._hashToDriveId,
+        _hashToDriveId: GDriveImages._hashToDriveId,
         _pathToDriveId: GDriveImages._pathToDriveId,
-      });
+        _format: "novelforge-backup-v2",
+      };
 
-      // Persist mappings for cross-session dedup
+      await GDrive.saveToDrive(drivePayload);
+
+      // Persist both maps to IndexedDB for cross-session dedup
       await _idb.set("novelforge:imageHash", GDriveImages._hashToDriveId);
       await _idb.set("novelforge:pathToDriveId", GDriveImages._pathToDriveId);
 
       setGdriveLastSync(new Date());
-      showToast("Synced to Google Drive", "success");
+      const imageCount = Object.keys(GDriveImages._pathToDriveId).length;
+      showToast(`Synced to Google Drive${imageCount > 0 ? ` (${imageCount} images)` : ""}`, "success");
     } catch (e) {
       showToast(`Sync failed: ${e.message}`, "error");
       console.error("[NovelForge] Sync failed:", e);
@@ -5254,26 +5257,61 @@ Only suggest changes backed by events in the chapter. If no relationship changes
       const data = await GDrive.loadFromDrive();
       if (!data) { showToast("No backup found on Google Drive", "info"); setGdriveSyncing(false); return; }
 
+      // ── Detect old-format backups missing _pathToDriveId ──
+      const pathMap = data._pathToDriveId || {};
+      const pathMapSize = Object.keys(pathMap).length;
+      const hashMap = data._hashToDriveId || data._imageMap || {};
+      const hashMapSize = Object.keys(hashMap).length;
+
+      if (pathMapSize === 0 && hashMapSize > 0) {
+        showToast(
+          `Backup is from old format — ${hashMapSize} images cached but paths unknown. ` +
+          `Please sync again (with the latest code) to rebuild the backup, then load.`,
+          "error"
+        );
+        setGdriveSyncing(false);
+        return;
+      }
+
+      if (pathMapSize === 0) {
+        showToast("Backup contains no images to restore.", "info");
+      }
+
       setConfirmDialog({
-        message: `Load ${data.projects?.length || 0} projects from Google Drive? This replaces current data.`,
+        message: `Load ${data.projects?.length || 0} projects from Google Drive?${pathMapSize > 0 ? ` (${pathMapSize} images will be restored)` : ""}`,
         confirmLabel: "Load from Drive",
         onConfirm: async () => {
           setConfirmDialog(null);
           try {
-            // Restore BOTH mapping files
-            if (data._imageMap) GDriveImages._hashToDriveId = data._imageMap;
-            if (data._pathToDriveId) GDriveImages._pathToDriveId = data._pathToDriveId;
+            // Restore mappings
+            GDriveImages._hashToDriveId = hashMap;
+            GDriveImages._pathToDriveId = pathMap;
 
             // Download images using path→driveId mapping
-            if (data._pathToDriveId && Object.keys(data._pathToDriveId).length > 0) {
-              showToast("Downloading images from Drive...", "info");
-              await GDriveImages.syncDownload(data._pathToDriveId);
+            if (pathMapSize > 0) {
+              showToast(`Downloading ${pathMapSize} images from Drive...`, "info");
+              const downloaded = await GDriveImages.syncDownload(pathMap);
+              showToast(`Downloaded ${downloaded || 0}/${pathMapSize} images`, "success");
             }
 
             // Resolve GDRIVE_IMAGE markers → base64
             const restoredProjects = (data.projects || []).map(p =>
               GDriveImages.resolveImages(JSON.parse(JSON.stringify(p)))
             );
+
+            // Count how many images were actually resolved
+            let resolvedCount = 0;
+            for (const proj of restoredProjects) {
+              for (const ch of (proj.chapters || [])) {
+                if (ch.content) {
+                  const markers = (ch.content.match(/GDRIVE_IMAGE:/g) || []).length;
+                  resolvedCount += (ch.content.match(/src="data:image/g) || []).length;
+                }
+              }
+              for (const c of (proj.characters || [])) {
+                if (c.image?.startsWith("data:")) resolvedCount++;
+              }
+            }
 
             setProjects(restoredProjects);
             setActiveProjectId(restoredProjects[0]?.id || null);
@@ -5285,7 +5323,7 @@ Only suggest changes backed by events in the chapter. If no relationship changes
             await _idb.set("novelforge:pathToDriveId", GDriveImages._pathToDriveId);
 
             setGdriveLastSync(new Date());
-            showToast(`Loaded ${restoredProjects.length} projects from Drive`, "success");
+            showToast(`Loaded ${restoredProjects.length} projects (${resolvedCount} images restored)`, "success");
           } catch (e) { showToast(`Load failed: ${e.message}`, "error"); }
         },
         onCancel: () => setConfirmDialog(null),
@@ -5293,6 +5331,7 @@ Only suggest changes backed by events in the chapter. If no relationship changes
     } catch (e) { showToast(`Load failed: ${e.message}`, "error"); }
     setGdriveSyncing(false);
   }, [showToast]);
+  
   
 
   // Auto-sync timer
