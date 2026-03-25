@@ -8,6 +8,10 @@ const OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models";
 const LS_PROJECTS = "novelforge:projects";
 const LS_SETTINGS = "novelforge:settings";
 const LS_TAB_CHATS = "novelforge:tabChats";
+const IDB_DB_NAME = "novelforge-db";
+const IDB_STORE = "kv";
+const IDB_VERSION = 1;
+const GDRIVE_FILE_NAME = "novelforge-backup.json";
 
 // ─── THEME CONTEXT ───
 const ThemeContext = createContext({ theme: "dark", toggle: () => {} });
@@ -145,6 +149,315 @@ const TENSION_TYPE_OPTIONS = [
   { value: "neutral", label: "Neutral" }, { value: "acquaintance", label: "Acquaintance / Distant" },
   { value: "mixed", label: "Mixed / Complex" },
 ];
+
+// ─── IMAGE UTILITIES ───
+const ImageUtils = {
+  MAX_DIMENSION: 1200,
+  JPEG_QUALITY: 0.82,
+
+  async compressBase64(base64) {
+    return new Promise((resolve) => {
+      try {
+        const img = new Image();
+        img.onload = () => {
+          let { width, height } = img;
+          if (width <= this.MAX_DIMENSION && height <= this.MAX_DIMENSION && base64.length < 800000) {
+            resolve(base64);
+            return;
+          }
+          const scale = Math.min(this.MAX_DIMENSION / width, this.MAX_DIMENSION / height, 1);
+          const canvas = document.createElement("canvas");
+          canvas.width = Math.round(width * scale);
+          canvas.height = Math.round(height * scale);
+          const ctx = canvas.getContext("2d");
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+          const isPng = base64.startsWith("data:image/png");
+          const result = canvas.toDataURL(isPng ? "image/png" : "image/jpeg", isPng ? 1 : this.JPEG_QUALITY);
+          resolve(result);
+        };
+        img.onerror = () => resolve(base64);
+        img.src = base64;
+      } catch { resolve(base64); }
+    });
+  },
+
+  async hashBase64(str) {
+    const clean = str.split(",")[1] || str;
+    const bytes = Uint8Array.from(atob(clean), c => c.charCodeAt(0));
+    const hash = await crypto.subtle.digest("SHA-256", bytes);
+    return Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2, "0")).join("");
+  },
+
+  base64ToBlob(base64) {
+    const parts = base64.split(",");
+    const mime = parts[0].match(/:(.*?);/)?.[1] || "image/jpeg";
+    const binary = atob(parts[1] || parts[0]);
+    const arr = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) arr[i] = binary.charCodeAt(i);
+    return new Blob([arr], { type: mime });
+  },
+
+  blobToBase64(blob) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onloadend = () => resolve(reader.result);
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    });
+  },
+};
+
+// ─── Google Drive Image Handler ───
+
+const GDriveImages = {
+  _imageFolderId: null,
+  _hashToDriveId: {},      // hash → drive file ID (for dedup on re-upload)
+  _driveIdToBase64: {},    // drive file ID → base64 (DOWNLOAD cache only)
+  _pathToBase64: {},       // path → base64 (UPLOAD + RESOLVE mapping)
+  _pathToDriveId: {},      // path → drive file ID (sync dedup by path)
+
+  async findOrCreateImageFolder() {
+    if (this._imageFolderId) return this._imageFolderId;
+    await GDrive.ensureToken();
+    const res = await fetch(
+      `https://www.googleapis.com/drive/v3/files?q=name='NovelForge Images'+and+mimeType='application/vnd.google-apps.folder'+and+trashed=false&fields=files(id)`,
+      { headers: { Authorization: `Bearer ${GDrive._token}` } }
+    );
+    const data = await res.json();
+    if (data.files?.length > 0) { this._imageFolderId = data.files[0].id; return this._imageFolderId; }
+    const folderId = await GDrive.findOrCreateFolder();
+    const createRes = await fetch("https://www.googleapis.com/drive/v3/files", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${GDrive._token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "NovelForge Images", mimeType: "application/vnd.google-apps.folder", parents: [folderId] }),
+    });
+    const created = await createRes.json();
+    this._imageFolderId = created.id;
+    return this._imageFolderId;
+  },
+
+  async collectAllImages(project) {
+    const images = [];
+    for (const ch of (project.chapters || [])) {
+      if (ch.content) {
+        // Base64 images (fresh, never synced)
+        const b64Matches = [...ch.content.matchAll(/src="(data:image\/[^"]+)"/g)];
+        for (const m of b64Matches) images.push({ data: m[1], path: `chapters/${ch.id}`, key: ch.id, isNew: true });
+        // Already-marked images from a previous sync
+        const markerMatches = [...ch.content.matchAll(/src="GDRIVE_IMAGE:([^"]+)"/g)];
+        for (const m of markerMatches) {
+          const path = m[1];
+          // Skip if we already know where it lives on Drive
+          if (this._hashToDriveId[path] || this._pathToDriveId[path]) continue;
+          // If we have base64 cached for this path, re-upload
+          if (this._pathToBase64[path]) {
+            images.push({ data: this._pathToBase64[path], path, key: path.split("/").pop(), isNew: false });
+          }
+        }
+      }
+    }
+    for (const c of (project.characters || [])) {
+      if (c.image && c.image.startsWith("data:")) {
+        images.push({ data: c.image, path: `characters/${c.id}`, key: c.id, isNew: true });
+      } else if (c.image?.startsWith("GDRIVE_IMAGE:")) {
+        const path = c.image.replace("GDRIVE_IMAGE:", "");
+        if (!this._hashToDriveId[path] && !this._pathToDriveId[path] && this._pathToBase64[path]) {
+          images.push({ data: this._pathToBase64[path], path, key: c.id, isNew: false });
+        }
+      }
+    }
+    for (const w of (project.worldBuilding || [])) {
+      if (w.referenceImages && typeof w.referenceImages === "object") {
+        for (const key of Object.keys(w.referenceImages)) {
+          const ref = w.referenceImages[key];
+          if (ref?.startsWith("data:")) {
+            images.push({ data: ref, path: `worlds/${w.id}/${key}`, key: `${w.id}_${key}`, isNew: true });
+          } else if (ref?.startsWith("GDRIVE_IMAGE:")) {
+            const path = ref.replace("GDRIVE_IMAGE:", "");
+            if (!this._hashToDriveId[path] && !this._pathToDriveId[path] && this._pathToBase64[path]) {
+              images.push({ data: this._pathToBase64[path], path, key: `${w.id}_${key}`, isNew: false });
+            }
+          }
+        }
+      }
+    }
+    return images;
+  },
+  
+  async syncUpload(allImages, onProgress) {
+    const folderId = await this.findOrCreateImageFolder();
+    let uploaded = 0, skipped = 0, repaired = 0;
+
+    // ── Phase 1: Batch-verify cached Drive files actually exist ──
+    const cachedHashes = new Set();
+    for (const img of allImages) {
+      const compressed = await ImageUtils.compressBase64(img.data);
+      const hash = await ImageUtils.hashBase64(compressed);
+      if (this._hashToDriveId[hash]) cachedHashes.add(hash);
+    }
+
+    if (cachedHashes.size > 0) {
+      try {
+        const hashesArr = [...cachedHashes];
+        // Check in batches of 30 (Drive query URL length limit)
+        for (let i = 0; i < hashesArr.length; i += 30) {
+          const batch = hashesArr.slice(i, i + 30);
+          const nameQuery = batch.map(h => `name='${h}.jpg'`).join(" or ");
+          const res = await fetch(
+            `https://www.googleapis.com/drive/v3/files?q=(${nameQuery})+and+'${folderId}'+in+parents+and+trashed=false&fields=files(id,name)&pageSize=30`,
+            { headers: { Authorization: `Bearer ${GDrive._token}` } }
+          );
+          if (res.ok) {
+            const data = await res.json();
+            const foundHashes = new Set((data.files || []).map(f => f.name.replace(".jpg", "")));
+            // Remove stale entries — files that don't actually exist on Drive
+            for (const h of batch) {
+              if (!foundHashes.has(h)) {
+                console.warn(`[NovelForge] Stale cache entry removed: ${h}`);
+                delete this._hashToDriveId[h];
+              }
+            }
+          }
+        }
+      } catch (e) {
+        console.warn("[NovelForge] Cache verification failed, proceeding with upload:", e.message);
+        // If verification fails, clear the entire cache so everything re-uploads
+        for (const h of cachedHashes) delete this._hashToDriveId[h];
+      }
+    }
+
+    // ── Phase 2: Upload with fresh/verified cache ──
+    for (const img of allImages) {
+      const compressed = await ImageUtils.compressBase64(img.data);
+      const hash = await ImageUtils.hashBase64(compressed);
+
+      if (this._hashToDriveId[hash]) {
+        this._pathToBase64[img.path] = compressed;
+        this._pathToDriveId[img.path] = this._hashToDriveId[hash];
+        skipped++;
+        continue;
+      }
+
+      try {
+        const blob = ImageUtils.base64ToBlob(compressed);
+        const form = new FormData();
+        form.append("metadata", new Blob([JSON.stringify({
+          name: `${hash}.jpg`,
+          mimeType: blob.type,
+          parents: [folderId],
+        })], { type: "application/json" }));
+        form.append("file", blob);
+        const res = await fetch("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart", {
+          method: "POST",
+          headers: { Authorization: `Bearer ${GDrive._token}` },
+          body: form,
+        });
+        if (res.ok) {
+          const data = await res.json();
+          this._hashToDriveId[hash] = data.id;
+          this._pathToBase64[img.path] = compressed;
+          this._pathToDriveId[img.path] = data.id;
+          uploaded++;
+        } else {
+          const errText = await res.text().catch(() => "");
+          console.error(`[NovelForge] Image upload failed (${res.status}):`, img.path, errText);
+        }
+      } catch (e) {
+        console.error("[NovelForge] Image upload exception:", img.path, e.message);
+      }
+
+      if (onProgress) onProgress(uploaded + skipped + repaired, allImages.length);
+    }
+
+    return { uploaded, skipped, repaired, total: allImages.length };
+  },
+  
+  async downloadImage(driveFileId) {
+    // Cache by Drive ID (avoids re-downloading same file)
+    if (this._driveIdToBase64[driveFileId]) return this._driveIdToBase64[driveFileId];
+    try {
+      const res = await fetch(`https://www.googleapis.com/drive/v3/files/${driveFileId}?alt=media`, {
+        headers: { Authorization: `Bearer ${GDrive._token}` },
+      });
+      if (!res.ok) return null;
+      const blob = await res.blob();
+      const base64 = await ImageUtils.blobToBase64(blob);
+      this._driveIdToBase64[driveFileId] = base64;
+      return base64;
+    } catch { return null; }
+  },
+
+  async syncDownload(imageMap) {
+    if (!imageMap) return;
+    const entries = Object.entries(imageMap);
+    let downloaded = 0;
+    for (const [path, driveId] of entries) {
+      const base64 = await this.downloadImage(driveId);
+      // ── FIX: Store by PATH so resolveImages() can find it ──
+      if (base64) {
+        this._pathToBase64[path] = base64;
+        downloaded++;
+      }
+    }
+    return downloaded;
+  },
+
+  resolveImages(project) {
+    // ── FIX: Look up by PATH, not by drive file ID ──
+    for (const ch of (project.chapters || [])) {
+      if (ch.content) {
+        ch.content = ch.content.replace(/src="GDRIVE_IMAGE:([^"]+)"/g, (match, path) => {
+          const b64 = this._pathToBase64[path];        // ← was _driveIdToBase64
+          return b64 ? `src="${b64}"` : match;
+        });
+      }
+    }
+    for (const c of (project.characters || [])) {
+      if (c.image?.startsWith("GDRIVE_IMAGE:")) {
+        const path = c.image.replace("GDRIVE_IMAGE:", "");
+        c.image = this._pathToBase64[path] || "";      // ← was _driveIdToBase64
+      }
+    }
+    for (const w of (project.worldBuilding || [])) {
+      if (w.referenceImages && typeof w.referenceImages === "object") {
+        for (const key of Object.keys(w.referenceImages)) {
+          if (w.referenceImages[key]?.startsWith("GDRIVE_IMAGE:")) {
+            const path = w.referenceImages[key].replace("GDRIVE_IMAGE:", "");
+            w.referenceImages[key] = this._pathToBase64[path] || "";
+          }
+        }
+      }
+    }
+    return project;
+  },
+
+  markImages(project) {
+    for (const ch of (project.chapters || [])) {
+      if (ch.content) {
+        ch.content = ch.content.replace(/src="(data:image\/[^"]+)"/g, (match, b64) => `src="GDRIVE_IMAGE:chapters/${ch.id}"`);
+      }
+    }
+    for (const c of (project.characters || [])) {
+      if (c.image?.startsWith("data:")) c.image = `GDRIVE_IMAGE:characters/${c.id}`;
+    }
+    for (const w of (project.worldBuilding || [])) {
+      if (w.referenceImages && typeof w.referenceImages === "object") {
+        for (const key of Object.keys(w.referenceImages)) {
+          if (w.referenceImages[key]?.startsWith("data:")) w.referenceImages[key] = `GDRIVE_IMAGE:worlds/${w.id}/${key}`;
+        }
+      }
+    }
+    return project;
+  },
+
+  clear() {
+    this._imageFolderId = null;
+    this._hashToDriveId = {};
+    this._driveIdToBase64 = {};
+    this._pathToBase64 = {};    // ← NEW: clear this too
+	this._pathToDriveId = {};
+  },
+};
 
 // ─── MODE TOOLTIPS ───
 const MODE_TOOLTIPS = {
@@ -1500,25 +1813,251 @@ const createDefaultCharacter = () => ({
   lookAlike: "", // Famous person look-alike for image prompt consistency
 });
 
-// ─── PERSISTENT STORAGE (localStorage + JSON file auto-save) ───
+// ─── IndexedDB STORAGE (replaces localStorage — no 5MB limit) ───
+const _idb = {
+  _db: null,
+  async _getDB() {
+    if (this._db) return this._db;
+    return new Promise((resolve, reject) => {
+      const req = indexedDB.open(IDB_DB_NAME, IDB_VERSION);
+      req.onupgradeneeded = () => {
+        const db = req.result;
+        if (!db.objectStoreNames.contains(IDB_STORE)) db.createObjectStore(IDB_STORE);
+      };
+      req.onsuccess = () => { this._db = req.result; resolve(this._db); };
+      req.onerror = () => reject(req.error);
+    });
+  },
+  async get(key) {
+    const db = await this._getDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(IDB_STORE, "readonly");
+      const req = tx.objectStore(IDB_STORE).get(key);
+      req.onsuccess = () => resolve(req.result ?? null);
+      req.onerror = () => reject(req.error);
+    });
+  },
+  async set(key, val) {
+    const db = await this._getDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(IDB_STORE, "readwrite");
+      const req = tx.objectStore(IDB_STORE).put(val, key);
+      req.onsuccess = () => resolve(true);
+      req.onerror = () => reject(req.error);
+    });
+  },
+};
 
-// File System Access API handle for auto-saving
+// ─── Google Drive API (REST only — no gapi.js needed) ───
+const GDrive = {
+  _token: null,
+  _tokenExpiry: 0,
+  _clientId: "",
+  _folderId: null,
+  
+  _restoreToken() {
+    try {
+      const stored = localStorage.getItem("novelforge:gdrive_token");
+      if (stored) {
+        const { token, expiry } = JSON.parse(stored);
+        if (token && expiry && Date.now() < expiry - 60000) {
+          this._token = token;
+          this._tokenExpiry = expiry;
+          return true;
+        }
+      }
+    } catch {}
+    // Token expired or invalid — clean up
+    localStorage.removeItem("novelforge:gdrive_token");
+    return false;
+  },
+  
+  _saveToken() {
+    try {
+      if (this._token && this._tokenExpiry > Date.now()) {
+        localStorage.setItem("novelforge:gdrive_token", JSON.stringify({
+          token: this._token,
+          expiry: this._tokenExpiry,
+        }));
+      }
+    } catch {}
+  },
+
+  setClientId(id) { this._clientId = id; },
+
+  async authenticate() {
+    if (!this._clientId) throw new Error("Client ID not set");
+    return new Promise((resolve, reject) => {
+      if (typeof google === "undefined" || !google.accounts?.oauth2) {
+        return reject(new Error("Google Identity Services not loaded. Check your <script> tag."));
+      }
+      const tokenClient = google.accounts.oauth2.initTokenClient({
+        client_id: this._clientId,
+        scope: "https://www.googleapis.com/auth/drive.file",
+        callback: (resp) => {
+          if (resp.error) return reject(new Error(resp.error));
+          this._token = resp.access_token;
+          this._tokenExpiry = Date.now() + (resp.expires_in || 3600) * 1000;
+          this._saveToken(); // ← NEW: persist immediately
+          resolve(resp.access_token);
+        },
+      });
+      tokenClient.requestAccessToken({ prompt: "consent" });
+    });
+  },
+
+  async ensureToken() {
+    // If in-memory token is still valid, use it
+    if (this._token && Date.now() < this._tokenExpiry - 60000) return this._token;
+    // Try restoring from localStorage (survives refresh)
+    if (this._restoreToken()) return this._token;
+    // Fall back to full re-authentication
+    return this.authenticate();
+  },
+
+  async findOrCreateFolder(name = "NovelForge Backups") {
+    await this.ensureToken();
+    const res = await fetch(
+      `https://www.googleapis.com/drive/v3/files?q=name='${encodeURIComponent(name)}'+and+mimeType='application/vnd.google-apps.folder'+and+trashed=false&fields=files(id)`,
+      { headers: { Authorization: `Bearer ${this._token}` } }
+    );
+    const data = await res.json();
+    if (data.files?.length > 0) {
+      this._folderId = data.files[0].id;
+      return this._folderId;
+    }
+    const createRes = await fetch("https://www.googleapis.com/drive/v3/files", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${this._token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        name,
+        mimeType: "application/vnd.google-apps.folder",
+      }),
+    });
+    const created = await createRes.json();
+    this._folderId = created.id;
+    return this._folderId;
+  },
+
+  async saveToDrive(data, filename = GDRIVE_FILE_NAME) {
+    await this.ensureToken();
+    const folderId = this._folderId || await this.findOrCreateFolder();
+    const jsonStr = JSON.stringify(data, null, 2);
+    const blob = new Blob([jsonStr], { type: "application/json" });
+
+    // Check if file exists
+    const searchRes = await fetch(
+      `https://www.googleapis.com/drive/v3/files?q=name='${encodeURIComponent(filename)}'+and+'${folderId}'+in+parents+and+trashed=false&fields=files(id)`,
+      { headers: { Authorization: `Bearer ${this._token}` } }
+    );
+    const searchData = await searchRes.json();
+    const metadata = { name: filename, mimeType: "application/json" };
+    const form = new FormData();
+
+    if (searchData.files?.length > 0) {
+      // Update existing
+      form.append("metadata", new Blob([JSON.stringify(metadata)], { type: "application/json" }));
+      form.append("file", blob);
+      return (await fetch(
+        `https://www.googleapis.com/upload/drive/v3/files/${searchData.files[0].id}?uploadType=multipart`,
+        { method: "PATCH", headers: { Authorization: `Bearer ${this._token}` }, body: form }
+      )).ok;
+    } else {
+      // Create new
+      metadata.parents = [folderId];
+      form.append("metadata", new Blob([JSON.stringify(metadata)], { type: "application/json" }));
+      form.append("file", blob);
+      return (await fetch(
+        "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart",
+        { method: "POST", headers: { Authorization: `Bearer ${this._token}` }, body: form }
+      )).ok;
+    }
+  },
+
+  async loadFromDrive(filename = GDRIVE_FILE_NAME) {
+    await this.ensureToken();
+    const folderId = this._folderId || await this.findOrCreateFolder();
+    const searchRes = await fetch(
+      `https://www.googleapis.com/drive/v3/files?q=name='${encodeURIComponent(filename)}'+and+'${folderId}'+in+parents+and+trashed=false&fields=files(id)`,
+      { headers: { Authorization: `Bearer ${this._token}` } }
+    );
+    const searchData = await searchRes.json();
+    if (!searchData.files?.length) return null;
+    const downloadRes = await fetch(
+      `https://www.googleapis.com/drive/v3/files/${searchData.files[0].id}?alt=media`,
+      { headers: { Authorization: `Bearer ${this._token}` } }
+    );
+    const data = await downloadRes.json();
+    return data.projects ? data : null;
+  },
+
+  isConnected() {
+    // Check in-memory first, then try restoring from storage
+    if (this._token && Date.now() < this._tokenExpiry) return true;
+    return this._restoreToken();
+  },
+
+  disconnect() {
+    this._token = null;
+    this._tokenExpiry = 0;
+    this._folderId = null;
+    localStorage.removeItem("novelforge:gdrive_token"); // ← NEW: clear persisted
+  },
+};
+
+// ─── Storage (IndexedDB — handles unlimited data including images) ───
+const Storage = {
+  async loadProjects() {
+    try {
+      const result = await _idb.get(LS_PROJECTS);
+      return result || [];
+    } catch { return []; }
+  },
+  async saveProjects(p) {
+    try {
+      await _idb.set(LS_PROJECTS, p);
+      return true;
+    } catch (e) {
+      console.error("Save failed:", e);
+      return false;
+    }
+  },
+  async loadSettings() {
+    try {
+      const result = await _idb.get(LS_SETTINGS);
+      return result || {};
+    } catch { return {}; }
+  },
+  async saveSettings(s) {
+    try { await _idb.set(LS_SETTINGS, s); return true; } catch { return false; }
+  },
+  async loadTabChats() {
+    try {
+      const result = await _idb.get(LS_TAB_CHATS);
+      return result || {};
+    } catch { return {}; }
+  },
+  async saveTabChats(c) {
+    try { await _idb.set(LS_TAB_CHATS, c); return true; } catch { return false; }
+  },
+};
+
+// ─── PERSISTENT STORAGE (JSON file auto-save) ───
 let _fileHandle = null;
 let _fileWriteQueue = Promise.resolve();
 
 const _writeToFile = async (data) => {
   if (!_fileHandle) return;
-  // Queue writes to avoid concurrent access
   _fileWriteQueue = _fileWriteQueue.then(async () => {
     try {
       const writable = await _fileHandle.createWritable();
       await writable.write(JSON.stringify(data, null, 2));
       await writable.close();
     } catch (e) {
-      // Permission revoked or file moved — clear handle
-      if (e.name === "NotAllowedError" || e.name === "NotFoundError") {
-        _fileHandle = null;
-      }
+      if (e.name === "NotAllowedError" || e.name === "NotFoundError") _fileHandle = null;
       console.warn("[NovelForge] File auto-save failed:", e.message);
     }
   });
@@ -1527,7 +2066,6 @@ const _writeToFile = async (data) => {
 
 const FileStorage = {
   hasFileHandle() { return !!_fileHandle; },
-
   async pickSaveFile() {
     if (!window.showSaveFilePicker) return false;
     try {
@@ -1541,12 +2079,10 @@ const FileStorage = {
       return false;
     }
   },
-
   async saveAll(projects, settings, tabChats) {
     const payload = { _format: "novelforge-autosave", _savedAt: new Date().toISOString(), projects, settings, tabChats };
     await _writeToFile(payload);
   },
-
   async loadFromFile() {
     if (!window.showOpenFilePicker) return null;
     try {
@@ -1556,9 +2092,8 @@ const FileStorage = {
       const file = await handle.getFile();
       const text = await file.text();
       const data = JSON.parse(text);
-      // Validate it's a NovelForge file
       if (data._format === "novelforge-autosave" || data.projects) {
-        _fileHandle = handle; // keep the handle for future saves
+        _fileHandle = handle;
         return data;
       }
       return null;
@@ -1566,56 +2101,6 @@ const FileStorage = {
       if (e.name !== "AbortError") console.warn("[NovelForge] File load error:", e);
       return null;
     }
-  },
-};
-
-const Storage = {
-  async loadProjects() {
-    try {
-      const result = window.localStorage.getItem(LS_PROJECTS);
-      return result ? JSON.parse(result) : [];
-    } catch { return []; }
-  },
-  async saveProjects(p) {
-    try {
-      const json = JSON.stringify(p);
-      // H2: localStorage stores UTF-16 (2 bytes per char), so 5MB = ~2.5M chars
-      const totalChars = json.length + (window.localStorage.getItem(LS_SETTINGS) || "").length + (window.localStorage.getItem(LS_TAB_CHATS) || "").length;
-      const usageMB = ((totalChars * 2) / 1024 / 1024).toFixed(1);
-      if (totalChars > 2.2 * 1024 * 1024) {
-        console.warn("[NovelForge] localStorage nearing 5MB limit:", usageMB + "MB of ~5MB");
-        // FIX 8.2: Return a warning status so the UI can notify the user
-        window.localStorage.setItem(LS_PROJECTS, json);
-        return "warning"; // distinct from true/false
-      }
-      window.localStorage.setItem(LS_PROJECTS, json);
-      return true;
-    } catch(e) {
-      console.error("Save failed:", e);
-      // FIX 8.2: Detect QuotaExceededError specifically
-      if (e.name === "QuotaExceededError" || e.message?.includes("quota")) {
-        return "quota";
-      }
-      return false;
-    }
-  },
-  async loadSettings() {
-    try {
-      const result = window.localStorage.getItem(LS_SETTINGS);
-      return result ? JSON.parse(result) : {};
-    } catch { return {}; }
-  },
-  async saveSettings(s) {
-    try { window.localStorage.setItem(LS_SETTINGS, JSON.stringify(s)); return true; } catch(e) { return false; }
-  },
-  async loadTabChats() {
-    try {
-      const result = window.localStorage.getItem(LS_TAB_CHATS);
-      return result ? JSON.parse(result) : {};
-    } catch { return {}; }
-  },
-  async saveTabChats(c) {
-    try { window.localStorage.setItem(LS_TAB_CHATS, JSON.stringify(c)); return true; } catch(e) { return false; }
   },
 };
 
@@ -2415,7 +2900,11 @@ const generateSceneImagePrompt = (selectedText, project, chapterIdx) => {
   const detectedWorldIds = _detectRelevantWorld(contextText, worlds);
   const detectedWorlds = worlds.filter(w => detectedWorldIds.has(w.id));
   // Pick the most relevant world entry (first detected, or first with images)
-  const primaryWorld = detectedWorlds.find(w => (w.referenceImages || []).some(img => img)) || detectedWorlds[0] || null;
+  const primaryWorld = detectedWorlds.find(w => {
+    const refs = w.referenceImages;
+    if (!refs) return false;
+    return Array.isArray(refs) ? refs.some(img => img) : Object.values(refs).some(img => img);
+  }) || detectedWorlds[0] || null;
 
   // Analyze the SELECTED TEXT for location clues — don't just blindly use a world entry
   const locationClues = [];
@@ -2442,7 +2931,11 @@ const generateSceneImagePrompt = (selectedText, project, chapterIdx) => {
   if (primaryWorld && !isLikelyOutside) {
     // Scene appears to be INSIDE a known location — use world entry + reference images
     backdropSection = primaryWorld.description || primaryWorld.name;
-    const refImgs = (primaryWorld.referenceImages || []).filter(img => img);
+    const refImgs = primaryWorld.referenceImages
+      ? (Array.isArray(primaryWorld.referenceImages)
+          ? primaryWorld.referenceImages.filter(img => img)
+          : Object.values(primaryWorld.referenceImages).filter(img => img))
+      : [];
     if (refImgs.length > 0) {
       backdropSection += `\n\n[Reference images attached for "${primaryWorld.name}" — the generated image MUST match these reference images for the interior/backdrop. Use them as the base environment.]`;
       useWorldImages = true;
@@ -2526,6 +3019,108 @@ Render a photorealistic environment that matches every environmental detail desc
     _sceneType: sceneType,
     _cameraDefaults: cameraDefaults,
   };
+};
+
+// ─── WORLD IMAGE PROMPT GENERATOR ───
+// Generates 4 prompts covering 4 walls of the room from a single spec sheet.
+const generateWorldImagePrompts = async (item, project, callOpenRouter) => {
+  const desc = item.description || "";
+  if (!desc.trim()) return null;
+
+  const projectContext = [
+    `Project: "${project?.title || "Untitled"}"`,
+    project?.genre ? `Genre: ${project.genre}` : "",
+    project?.tone ? `Tone: ${project.tone}` : "",
+  ].filter(Boolean).join("\n");
+
+  const systemPrompt = `You are an architectural visualization specialist. Given a literary description of a location, produce 4 photorealistic image prompts that together cover every wall and surface of the room.
+
+PROCESS:
+1. Build a DETAILED TECHNICAL SPEC SHEET from the description. Invent all missing data:
+   - Room dimensions (cm): length, width, ceiling height
+   - Every surface: HEX color code, material type, finish, wear/age condition
+   - Every object: exact dimensions (L×W×H cm), material, color, precise placement (distance from walls)
+   - Lighting: fixture type, position, wattage, color temperature (Kelvin)
+   - Architectural trim: baseboards, crown molding, door/window hardware, outlets, switches
+
+2. Divide the room into 4 WALL ZONES based on the description. Each prompt shows ONE wall/area:
+   - WALL_A: First wall you see when entering — typically the most prominent feature wall or the far wall
+   - WALL_B: The wall to the RIGHT of the entry point — second most visible area
+   - WALL_C: The wall to the LEFT of the entry point — remaining major area
+   - WALL_D: The wall BEHIND the entry point (the wall you face when you turn around) — door wall, hallway side
+
+   Adapt the zones to the actual room. If the room has an open kitchen on one side, make that its own zone. If there's a bedroom alcove, dedicate a zone to it. The 4 prompts should show EVERY corner of the room when viewed together.
+
+3. Write 4 prompts — one per wall zone. Each prompt:
+   - Camera is positioned in the CENTER of the room, looking at the designated wall
+   - Shows the target wall in detail PLUS glimpses of adjacent walls on either side
+   - States ALL dimensions, colors, materials, lighting inline (image LLM has NO other context)
+   - References the SAME spec sheet (identical room size, colors, object positions across all 4)
+   - Is 250-400 words, copy-paste ready
+
+OUTPUT FORMAT — use exactly these separators:
+
+===SPEC_SHEET===
+[Full technical specification]
+
+===PROMPT_WALL_A===
+[Walking in from the door — what's directly ahead]
+
+===PROMPT_WALL_B===
+[Right wall from entry — what's on the right side]
+
+===PROMPT_WALL_C===
+[Left wall from entry — what's on the left side]
+
+===PROMPT_WALL_D===
+[Behind you when facing into the room — the door wall]
+
+RULES:
+- NEVER say "assign", "derive", "determine" — you have already done the analysis
+- Every prompt must include: room dimensions, wall colors (HEX), floor/ceiling details, ALL visible furniture with dimensions and positions, lighting specs
+- All 4 prompts share identical base specs
+- No people, no text overlays
+- 35mm lens, f/4, eye-level (150cm), moderate depth of field`;
+
+  const userMessage = `LOCATION: ${item.name || "Unnamed"}
+${item.category ? `TYPE: ${item.category}` : ""}
+
+${projectContext}
+
+DESCRIPTION:
+${desc}`;
+
+  const response = await callOpenRouter([
+    { role: "system", content: systemPrompt },
+    { role: "user", content: userMessage },
+  ], { maxTokens: 4000, temperature: 0.4 });
+
+  if (!response) return null;
+
+  // Parse into 4 wall prompts
+  const result = { wall_a: "", wall_b: "", wall_c: "", wall_d: "" };
+  const keys = ["PROMPT_WALL_A", "PROMPT_WALL_B", "PROMPT_WALL_C", "PROMPT_WALL_D"];
+  const resultKeys = ["wall_a", "wall_b", "wall_c", "wall_d"];
+
+  const parts = response.split(/===(PROMPT_WALL_[A-D])===/);
+  for (let i = 1; i < parts.length; i += 2) {
+    const tag = parts[i].trim();
+    const idx = keys.indexOf(tag);
+    if (idx >= 0) result[resultKeys[idx]] = (parts[i + 1] || "").trim();
+  }
+
+  // Fallback: split by ## headers
+  if (!result.wall_a && !result.wall_b) {
+    const sections = response.split(/(?:^|\n)#{1,3}\s*(?:Prompt|Wall|Angle|Zone)\s*[A-D]/i);
+    if (sections.length >= 5) {
+      result.wall_a = sections[1]?.trim() || "";
+      result.wall_b = sections[2]?.trim() || "";
+      result.wall_c = sections[3]?.trim() || "";
+      result.wall_d = sections[4]?.trim() || "";
+    }
+  }
+
+  return result;
 };
 
 // ─── FIELD COMPONENT ───
@@ -3040,6 +3635,15 @@ export default function NovelForge() {
   const [cleanView, setCleanView] = useState(false); // Full-screen reader mode
   const [pdfExportMode, setPdfExportMode] = useState(null);
   const [imagePromptData, setImagePromptData] = useState(null); // { prompt, mentionedChars, primaryWorld, worldRefImages }
+  
+  // ─── GOOGLE DRIVE STATE ───
+  const [gdriveClientId, setGdriveClientId] = useState("");
+  const [gdriveConnected, setGdriveConnected] = useState(false);
+  const [gdriveSyncing, setGdriveSyncing] = useState(false);
+  const [gdriveLastSync, setGdriveLastSync] = useState(null);
+  const [gdriveAutoSync, setGdriveAutoSync] = useState(false);
+  const [gdriveSyncInterval, setGdriveSyncInterval] = useState(5);
+  const gdriveSyncTimerRef = useRef(null);
 
   const chatEndRef = useRef(null);
   const editorRef = useRef(null);
@@ -3063,8 +3667,18 @@ export default function NovelForge() {
   // ─── LOAD ───
   useEffect(() => {
     (async () => {
+      // ── NEW: Restore Google Drive connection from persisted token ──
+      if (GDrive.isConnected()) {
+        setGdriveConnected(true);
+        setGdriveLastSync(new Date()); // approximate — token survived a refresh
+      }
+
       try {
-        const [p, s, tc] = await Promise.all([Storage.loadProjects(), Storage.loadSettings(), Storage.loadTabChats()]);
+        const [p, s, tc] = await Promise.all([
+          Storage.loadProjects(),
+          Storage.loadSettings(),
+          Storage.loadTabChats(),
+        ]);
         if (p.length) {
           // H4: Data migration — ensure all characters have fields from newer schema versions
           const migrated = p.map(proj => {
@@ -3111,8 +3725,24 @@ export default function NovelForge() {
               relationships,
               plotOutline,
               worldBuilding: (proj.worldBuilding || []).map(w => ({
-                keywords: "", introducedInChapter: 0,
+                keywords: "",
+                introducedInChapter: 0,
+                // Migrate imagePrompts from array to object
+                imagePrompts: Array.isArray(w.imagePrompts)
+                  ? { wall_a: w.imagePrompts[0] || "", wall_b: w.imagePrompts[1] || "", wall_c: w.imagePrompts[2] || "", wall_d: w.imagePrompts[3] || "" }
+                  : (w.imagePrompts || {}),
+                // Migrate referenceImages from array to object
+                referenceImages: Array.isArray(w.referenceImages)
+                  ? { wall_a: w.referenceImages[0] || "", wall_b: w.referenceImages[1] || "", wall_c: w.referenceImages[2] || "", wall_d: w.referenceImages[3] || "" }
+                  : (w.referenceImages || {}),
                 ...w,
+                // Re-apply after spread to ensure migration wins
+                imagePrompts: Array.isArray(w.imagePrompts)
+                  ? { wall_a: w.imagePrompts[0] || "", wall_b: w.imagePrompts[1] || "", wall_c: w.imagePrompts[2] || "", wall_d: w.imagePrompts[3] || "" }
+                  : (w.imagePrompts || {}),
+                referenceImages: Array.isArray(w.referenceImages)
+                  ? { wall_a: w.referenceImages[0] || "", wall_b: w.referenceImages[1] || "", wall_c: w.referenceImages[2] || "", wall_d: w.referenceImages[3] || "" }
+                  : (w.referenceImages || {}),
               })),
               continuityNotes: proj.continuityNotes || "",
               wordGoal: proj.wordGoal || 0,
@@ -3129,8 +3759,15 @@ export default function NovelForge() {
         }
         if (s?.theme) setTheme(s.theme);
         if (tc) setTabChatHistories(tc);
-      } catch(e) { console.error("Load:", e); }
-      setIsLoaded(true);
+      // Load cached image hash map so we don't re-upload same images
+      try {
+        const cachedHash = await _idb.get("novelforge:imageHash");
+        if (cachedHash) GDriveImages._hashToDriveId = cachedHash;
+        const cachedPathMap = await _idb.get("novelforge:pathToDriveId");
+        if (cachedPathMap) GDriveImages._pathToDriveId = cachedPathMap;
+      } catch {}
+    } catch(e) { console.error("Load:", e); }
+    setIsLoaded(true);
     })();
     // FIX 8.3: Multi-tab detection — warn user visibly when data changes in another tab
     const handleStorage = (e) => {
@@ -3194,25 +3831,22 @@ export default function NovelForge() {
 
   useEffect(() => {
     const handler = () => {
-      // FIX 8.4: Cancel all pending debounced saves FIRST to prevent them from firing after our sync save
       debouncedSaveProjects.cancel();
       debouncedSaveSettings.cancel();
       debouncedSaveTabChats.cancel();
-      // Flush editor DOM content directly to localStorage
+      // Sync editor content to state before closing
       const el = editorRef.current;
       if (el) {
         try {
-          const currentProjects = JSON.parse(window.localStorage.getItem(LS_PROJECTS) || "[]");
+          const currentProjects = [...projectsRef.current];
           const pIdx = currentProjects.findIndex(p => p.id === activeProjectId);
           if (pIdx !== -1 && currentProjects[pIdx].chapters?.[activeChapterIdx]) {
             currentProjects[pIdx].chapters[activeChapterIdx].content = el.innerHTML;
-            window.localStorage.setItem(LS_PROJECTS, JSON.stringify(currentProjects));
           }
+          Storage.saveProjects(currentProjects);
         } catch {}
       }
-      // Synchronous fallback save of full state
-      try { Storage.saveProjects(projectsRef.current); } catch {}
-      try { Storage.saveSettings({ ...settingsRef.current, theme: themeRef.current }); } catch {}
+      Storage.saveSettings({ ...settingsRef.current, theme: themeRef.current });
     };
     window.addEventListener("beforeunload", handler);
     return () => window.removeEventListener("beforeunload", handler);
@@ -3426,9 +4060,10 @@ export default function NovelForge() {
         if (text.length > 0) {
           setSelectedText(text);
           try { setSelectionRange({ sel: sel.getRangeAt(0).cloneRange() }); } catch { setSelectionRange(null); }
-        } else {
-          setSelectedText(""); setSelectionRange(null);
         }
+        // Don't clear selectedText on empty selection — it may be temporarily
+        // empty during re-renders triggered by onBlur/syncEditorContent.
+        // Only clear it explicitly: on chapter switch, mode switch, or new selection.
       }
     }, 150);
   }, []);
@@ -4447,6 +5082,243 @@ Only suggest changes backed by events in the chapter. If no relationship changes
     URL.revokeObjectURL(url); showToast("Exported .txt", "success");
   }, [project, showToast]);
 
+    // ─── GOOGLE DRIVE HANDLERS ───
+  const handleGdriveConnect = useCallback(async () => {
+    if (!gdriveClientId) { showToast("Enter your Google Client ID first", "error"); return; }
+    try {
+      showToast("Connecting to Google Drive...", "info");
+      GDrive.setClientId(gdriveClientId);
+      await GDrive.authenticate();
+      setGdriveConnected(true);
+      setSettings(prev => ({ ...prev, googleClientId: gdriveClientId }));
+      showToast("Connected to Google Drive!", "success");
+
+      // ── NEW: Auto-load existing backup if one exists ──
+      try {
+        const data = await GDrive.loadFromDrive();
+        if (data && data.projects?.length > 0) {
+          // Check if Drive backup is newer or has more data than local
+          const localProjectCount = projects.length;
+          const driveProjectCount = data.projects.length;
+          const driveSavedAt = data._savedAt ? new Date(data._savedAt) : null;
+
+          // Auto-load if:
+          // 1. Local has no projects, OR
+          // 2. Drive has more projects than local, OR
+          // 3. Drive has a recent save timestamp
+          const shouldAutoLoad = localProjectCount === 0
+            || driveProjectCount > localProjectCount
+            || (driveSavedAt && driveSavedAt > new Date(Date.now() - 86400000)); // within 24h
+
+          if (shouldAutoLoad) {
+            showToast("Loading backup from Google Drive...", "info");
+
+            // Download associated images
+            if (data._imageMap) {
+              GDriveImages._hashToDriveId = data._imageMap;
+              await GDriveImages.syncDownload(data._imageMap);
+              await _idb.set("novelforge:imageHash", GDriveImages._hashToDriveId);
+			  await _idb.set("novelforge:pathToBase64", GDriveImages._pathToBase64);
+            }
+
+            // Resolve image references back to base64
+            const restoredProjects = (data.projects || []).map(p =>
+              GDriveImages.resolveImages(JSON.parse(JSON.stringify(p)))
+            );
+
+            setProjects(restoredProjects);
+            setActiveProjectId(restoredProjects[0]?.id || null);
+            setActiveChapterIdx(0);
+            if (data.settings) setSettings(prev => ({ ...prev, ...data.settings }));
+            if (data.tabChats) setTabChatHistories(data.tabChats);
+
+            await Storage.saveProjects(restoredProjects);
+            setGdriveLastSync(new Date());
+            showToast(`Loaded ${restoredProjects.length} project(s) from Drive backup`, "success");
+          } else {
+            // Drive has backup but local seems current — offer manual load
+            showToast(`Drive backup found (${driveProjectCount} projects) — use "Load from Drive" to restore`, "info");
+          }
+        }
+      } catch (loadErr) {
+        // Non-fatal — connection succeeded, auto-load failed
+        console.warn("[NovelForge] Auto-load failed:", loadErr.message);
+        showToast("Connected — couldn't check for backup (use 'Load from Drive' manually)", "info");
+      }
+    } catch (e) {
+      showToast(`Drive connect failed: ${e.message}`, "error");
+    }
+  }, [gdriveClientId, showToast, projects.length, setProjects, setActiveProjectId, setSettings, setTabChatHistories, setGdriveConnected, setGdriveLastSync]);
+
+  const handleGdriveDisconnect = useCallback(() => {
+    GDrive.disconnect();
+    GDriveImages.clear();
+    setGdriveConnected(false);
+    setGdriveLastSync(null);
+    if (gdriveSyncTimerRef.current) clearInterval(gdriveSyncTimerRef.current);
+    showToast("Disconnected from Google Drive", "info");
+  }, [showToast]);
+
+  const handleGenerateImagePrompts = useCallback(async (itemId) => {
+    if (!settings.apiKey) { showToast("Set your OpenRouter API key in Settings first", "error"); return; }
+    const item = project?.worldBuilding?.find(w => w.id === itemId);
+    if (!item?.description) { showToast("Add a description first", "error"); return; }
+
+    const items = project.worldBuilding;
+    updateProject({
+      worldBuilding: items.map(w =>
+        w.id === itemId ? { ...w, _generatingPrompts: true } : w
+      ),
+    });
+    showToast(`Generating 4 wall prompts for "${item.name}"...`, "info");
+
+    try {
+      const prompts = await generateWorldImagePrompts(item, project, callOpenRouter);
+      if (prompts && Object.values(prompts).some(p => p)) {
+        updateProject({
+          worldBuilding: items.map(w =>
+            w.id === itemId
+              ? { ...w, imagePrompts: prompts, _generatingPrompts: false }
+              : w
+          ),
+        });
+        showToast(`4 wall prompts generated for "${item.name}"`, "success");
+      } else {
+        updateProject({
+          worldBuilding: items.map(w =>
+            w.id === itemId ? { ...w, _generatingPrompts: false } : w
+          ),
+        });
+        showToast("AI returned empty — try again", "error");
+      }
+    } catch (e) {
+      updateProject({
+        worldBuilding: items.map(w =>
+          w.id === itemId ? { ...w, _generatingPrompts: false } : w
+        ),
+      });
+      showToast(`Generation failed: ${e.message}`, "error");
+    }
+  }, [project, settings.apiKey, callOpenRouter, updateProject, showToast]);
+
+  const handleGdriveSync = useCallback(async () => {
+    if (!GDrive.isConnected()) { showToast("Connect to Google Drive first", "error"); return; }
+    setGdriveSyncing(true);
+    try {
+      // Step 1: Collect all images across all projects
+      showToast("Collecting images...", "info");
+      const allImages = [];
+      for (const proj of projects) {
+        const imgs = await GDriveImages.collectAllImages(proj);
+        allImages.push(...imgs);
+      }
+      if (allImages.length > 0) {
+        showToast(`Uploading ${allImages.length} images...`, "info");
+        const { uploaded, skipped } = await GDriveImages.syncUpload(allImages, (done, total) => {
+          if (done % 5 === 0 || done === total) showToast(`Images: ${done}/${total}...`, "info");
+        });
+        if (uploaded > 0 || skipped > 0) {
+          showToast(`Images: ${uploaded} uploaded, ${skipped} cached`, "success");
+        }
+      }
+
+      // Step 2: Save JSON — DEEP COPY before markImages so local state keeps base64
+      const projectsForDrive = JSON.parse(JSON.stringify(projects));
+      GDriveImages.markImages(projectsForDrive);
+
+      await GDrive.saveToDrive({
+        projects: projectsForDrive,
+        settings,
+        tabChats: tabChatHistories,
+        _imageMap: GDriveImages._hashToDriveId,
+        _pathToDriveId: GDriveImages._pathToDriveId,
+      });
+
+      // Persist mappings for cross-session dedup
+      await _idb.set("novelforge:imageHash", GDriveImages._hashToDriveId);
+      await _idb.set("novelforge:pathToDriveId", GDriveImages._pathToDriveId);
+
+      setGdriveLastSync(new Date());
+      showToast("Synced to Google Drive", "success");
+    } catch (e) {
+      showToast(`Sync failed: ${e.message}`, "error");
+      console.error("[NovelForge] Sync failed:", e);
+    }
+    setGdriveSyncing(false);
+  }, [projects, settings, tabChatHistories, showToast]);
+  
+  const handleGdriveLoad = useCallback(async () => {
+    if (!GDrive.isConnected()) { showToast("Connect to Google Drive first", "error"); return; }
+    setGdriveSyncing(true);
+    try {
+      const data = await GDrive.loadFromDrive();
+      if (!data) { showToast("No backup found on Google Drive", "info"); setGdriveSyncing(false); return; }
+
+      setConfirmDialog({
+        message: `Load ${data.projects?.length || 0} projects from Google Drive? This replaces current data.`,
+        confirmLabel: "Load from Drive",
+        onConfirm: async () => {
+          setConfirmDialog(null);
+          try {
+            // Restore BOTH mapping files
+            if (data._imageMap) GDriveImages._hashToDriveId = data._imageMap;
+            if (data._pathToDriveId) GDriveImages._pathToDriveId = data._pathToDriveId;
+
+            // Download images using path→driveId mapping
+            if (data._pathToDriveId && Object.keys(data._pathToDriveId).length > 0) {
+              showToast("Downloading images from Drive...", "info");
+              await GDriveImages.syncDownload(data._pathToDriveId);
+            }
+
+            // Resolve GDRIVE_IMAGE markers → base64
+            const restoredProjects = (data.projects || []).map(p =>
+              GDriveImages.resolveImages(JSON.parse(JSON.stringify(p)))
+            );
+
+            setProjects(restoredProjects);
+            setActiveProjectId(restoredProjects[0]?.id || null);
+            if (data.settings) setSettings(prev => ({ ...prev, ...data.settings }));
+            if (data.tabChats) setTabChatHistories(data.tabChats);
+
+            await Storage.saveProjects(restoredProjects);
+            await _idb.set("novelforge:imageHash", GDriveImages._hashToDriveId);
+            await _idb.set("novelforge:pathToDriveId", GDriveImages._pathToDriveId);
+
+            setGdriveLastSync(new Date());
+            showToast(`Loaded ${restoredProjects.length} projects from Drive`, "success");
+          } catch (e) { showToast(`Load failed: ${e.message}`, "error"); }
+        },
+        onCancel: () => setConfirmDialog(null),
+      });
+    } catch (e) { showToast(`Load failed: ${e.message}`, "error"); }
+    setGdriveSyncing(false);
+  }, [showToast]);
+  
+
+  // Auto-sync timer
+  useEffect(() => {
+    if (gdriveAutoSync && gdriveConnected && gdriveSyncInterval > 0) {
+      gdriveSyncTimerRef.current = setInterval(async () => {
+        if (!GDrive.isConnected() || projects.length === 0) return;
+        try {
+          const allImages = [];
+          for (const proj of projects) allImages.push(...(await GDriveImages.collectAllImages(proj)));
+          if (allImages.length > 0) await GDriveImages.syncUpload(allImages);
+          const projectsForDrive = projects.map(p => GDriveImages.markImages(JSON.parse(JSON.stringify(p))));
+          await GDrive.saveToDrive({ projects: projectsForDrive, settings, tabChats: tabChatHistories, _imageMap: GDriveImages._hashToDriveId });
+          setGdriveLastSync(new Date());
+        } catch (e) { console.warn("[NovelForge] Auto-sync failed:", e.message); }
+      }, gdriveSyncInterval * 60 * 1000);
+      return () => clearInterval(gdriveSyncTimerRef.current);
+    }
+  }, [gdriveAutoSync, gdriveConnected, gdriveSyncInterval, projects, settings, tabChatHistories]);
+
+  useEffect(() => {
+    if (settings.googleClientId) { setGdriveClientId(settings.googleClientId); GDrive.setClientId(settings.googleClientId); }
+  }, [settings.googleClientId]);
+
+  useEffect(() => () => { if (gdriveSyncTimerRef.current) clearInterval(gdriveSyncTimerRef.current); }, []);
+
   const handleExportJson = useCallback(() => {
     if (!project) return;
     const blob = new Blob([JSON.stringify(project, null, 2)], { type: "application/json" });
@@ -4900,23 +5772,36 @@ Only suggest changes backed by events in the chapter. If no relationship changes
             "{selectedText.slice(0, 100)}{selectedText.length > 100 ? "…" : ""}"
           </div>
           <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginTop: 5 }}>
-            {genMode !== "rewrite" && (
-              <button onClick={() => setGenMode("rewrite")} className="nf-btn-micro">
+              {genMode !== "rewrite" && (
+              <button onClick={() => {
+                setGenMode("rewrite");
+                // Execute rewrite immediately
+                const domSel = (window.getSelection()?.toString() || "").trim();
+                const effectiveText = domSel || selectedText;
+                if (!effectiveText) { showToast("Select text first", "error"); return; }
+                // Temporarily set selectedText so handleGenerate sees it
+                setSelectedText(effectiveText);
+                setTimeout(() => handleGenerate(), 0);
+              }} className="nf-btn-micro">
                 <Icons.Replace /> Rewrite
               </button>
             )}
             <button onClick={handlePerspectiveFlip} className="nf-btn-micro" disabled={!settings.apiKey} title="Rewrite from another character's perspective">
               <Icons.Eye /> Flip POV
             </button>
-            <button onClick={async () => {
+            <button onClick={() => {
               if (!settings.apiKey) { showToast("Set API key first", "error"); return; }
-              // Gather context data
-              const contextData = generateSceneImagePrompt(selectedText, project, activeChapterIdx);
-              // Show modal immediately in loading state
-              setImagePromptData({ ...contextData, isGenerating: true, prompt: "", desensitizedPrompt: null });
+              const domSel = (window.getSelection()?.toString() || "").trim();
+              const effectiveText = domSel || selectedText;
+              if (!effectiveText) { showToast("Select text first", "error"); return; }
+              const contextData = generateSceneImagePrompt(effectiveText, project, activeChapterIdx);
+              const modalData = { ...contextData, isGenerating: true, prompt: "", desensitizedPrompt: null };
+              setImagePromptData(modalData);
               showToast("Generating image prompt...", "info");
-              try {
-                const aiPrompt = await callOpenRouter([
+              // Force React to flush the modal render BEFORE starting the async call
+              setTimeout(async () => {
+                try {
+                  const aiPrompt = await callOpenRouter([
                   { role: "system", content: `You are a professional photography director creating exact image generation prompts. You will receive a scene from a novel, character profiles with look-alike references, and location details. You must output a COMPLETE, SELF-CONTAINED image generation prompt with ZERO ambiguity — every detail fully resolved. The output will be pasted directly into an image AI with NO other context.
 
 YOUR OUTPUT FORMAT (follow this EXACTLY):
@@ -4944,7 +5829,7 @@ CRITICAL RULES:
 - Use look-alike names for face references (e.g. "whose face closely resembles [name]")
 - If world reference images exist, add "[Reference image attached]" and describe what the image shows
 - Be extremely specific about spatial relationships and body positioning` },
-                  { role: "user", content: `SCENE TEXT:\n${selectedText}\n\nCHARACTER PROFILES:\n${contextData.mentionedChars.map(c => `${c.name} (${c.role}, ${c.age || "?"} ${c.gender || ""}): Look-alike: ${c.lookAlike || "NOT SET"}. Appearance: ${c.appearance || "none"}. Personality: ${c.personality || "none"}`).join("\n\n")}\n\nLOCATION:\n${contextData._backdropRaw || "No pre-built location. Derive entirely from scene text."}\n${contextData.worldRefImages.length > 0 ? `[${contextData.worldRefImages.length} reference image(s) attached for this location]` : ""}\n\nSCENE TYPE: ${contextData._sceneType || "narrative"}\nTIME CONTEXT: ${contextData._timeRaw || "Determine from scene"}\nCAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
+                  { role: "user", content: `SCENE TEXT:\n${effectiveText}\n\nCHARACTER PROFILES:\n${contextData.mentionedChars.map(c => `${c.name} (${c.role}, ${c.age || "?"} ${c.gender || ""}): Look-alike: ${c.lookAlike || "NOT SET"}. Appearance: ${c.appearance || "none"}. Personality: ${c.personality || "none"}`).join("\n\n")}\n\nLOCATION:\n${contextData._backdropRaw || "No pre-built location. Derive entirely from scene text."}\n${contextData.worldRefImages.length > 0 ? `[${contextData.worldRefImages.length} reference image(s) attached for this location]` : ""}\n\nSCENE TYPE: ${contextData._sceneType || "narrative"}\nTIME CONTEXT: ${contextData._timeRaw || "Determine from scene"}\nCAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                 ], { maxTokens: 2500, temperature: 0.4 });
                 setImagePromptData(prev => ({ ...prev, prompt: aiPrompt || "(AI returned empty)", isGenerating: false }));
 
@@ -4969,10 +5854,11 @@ CRITICAL RULES:
                   ], { maxTokens: 2500, temperature: 0.3 });
                   setImagePromptData(prev => ({ ...prev, desensitizedPrompt: desensitized || null }));
                 }
-              } catch (e) {
-                showToast(`Image prompt failed: ${e.message}`, "error");
-                setImagePromptData(prev => ({ ...prev, isGenerating: false, prompt: `Error: ${e.message}` }));
-              }
+                } catch (e) {
+                  showToast(`Image prompt failed: ${e.message}`, "error");
+                  setImagePromptData(prev => prev ? { ...prev, isGenerating: false, prompt: `Error: ${e.message}` } : null);
+                }
+              }, 0);
             }} className="nf-btn-micro" disabled={!settings.apiKey} title="Generate image prompt for this scene selection" style={{ borderColor: "var(--nf-accent)" }}>
               <Icons.Wand /> Image Prompt
             </button>
@@ -5554,7 +6440,7 @@ CRITICAL RULES:
               )}
               <button onClick={() => {
                 const newId = uid();
-                updateProject({ worldBuilding: [...items, { id: newId, name: "", category: "", description: "", keywords: "", introducedInChapter: 0, referenceImages: ["", "", "", ""] }] });
+                updateProject({ worldBuilding: [...items, { id: newId, name: "", category: "", description: "", keywords: "", introducedInChapter: 0, referenceImages: {}, imagePrompts: {} }] });
                 setExpandedWorldIds(prev => new Set([...prev, newId]));
               }} className="nf-btn-icon-sm"><Icons.Plus /> Add</button>
             </div>
@@ -5597,159 +6483,182 @@ CRITICAL RULES:
                         </div>
                         <Field label="Description" value={item.description} onChange={v => updateProject({ worldBuilding: items.map(it => it.id === item.id ? { ...it, description: v } : it) })} multiline placeholder="Detailed description..." />
                         <Field label="Keywords (for AI detection)" value={item.keywords || ""} onChange={v => updateProject({ worldBuilding: items.map(it => it.id === item.id ? { ...it, keywords: v } : it) })} placeholder="Comma-separated: court, vampires, shadows, ruling council" small />
-
-                        {/* Reference Images — 4 slots for visual consistency */}
+						
+                        {/* Image Prompts — 4 walls of the room */}
                         <div style={{ marginTop: 12 }}>
-                          <div style={{ fontSize: 9, fontWeight: 500, textTransform: "uppercase", letterSpacing: "0.12em", color: "var(--nf-text-muted)", marginBottom: 8, fontFamily: "var(--nf-font-body)" }}>Reference Images (for scene prompts)</div>
-                          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 8 }}>
-                            {[0, 1, 2, 3].map(slotIdx => {
-                              const angles = ["wide establishing shot", "medium interior shot", "close-up detail shot", "atmospheric mood shot"];
-                              const imgs = item.referenceImages || ["", "", "", ""];
-                              const hasImg = !!imgs[slotIdx];
-                              // Auto-generate architecture-grade prompt for each angle
-                              // Detect what specs exist in the description
-                              const desc = item.description || "";
-                              const hasHex = /#[0-9A-Fa-f]{6}/.test(desc);
-                              const hasDimensions = /\d+\s*(cm|mm|m\b|ft|feet|inch|"|')\b/i.test(desc);
-                              const hasTemperature = /\d{4}K|\bkelvin\b/i.test(desc);
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                            <div style={{ fontSize: 9, fontWeight: 500, textTransform: "uppercase", letterSpacing: "0.12em", color: "var(--nf-text-muted)", fontFamily: "var(--nf-font-body)" }}>
+                              Room Views (4 walls — upload images or copy prompts)
+                            </div>
+                            <button
+                              onClick={() => handleGenerateImagePrompts(item.id)}
+                              disabled={!settings.apiKey || !item.description || item._generatingPrompts}
+                              className="nf-btn-micro"
+                              style={{ borderColor: "var(--nf-accent)", color: "var(--nf-accent)", fontSize: 9 }}>
+                              {item._generatingPrompts
+                                ? <><Spinner /> Generating...</>
+                                : <><Icons.Wand /> {Object.values(item.imagePrompts || {}).some(p => p) ? "Regenerate" : "Generate 4 Prompts"}</>}
+                            </button>
+                          </div>
+                          {!item.description && (
+                            <div style={{ fontSize: 10, color: "var(--nf-accent)", fontStyle: "italic", padding: "8px 0" }}>
+                              Add a description above first, then click Generate.
+                            </div>
+                          )}
+                          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                            {(() => {
+                              const WALL_KEYS = ["wall_a", "wall_b", "wall_c", "wall_d"];
+                              const WALL_LABELS = ["Wall A — Entry View", "Wall B — Right", "Wall C — Left", "Wall D — Behind Entry"];
+                              const refs = item.referenceImages || {};
+                              const prompts = item.imagePrompts || {};
 
-                              // Adaptive spec instructions based on what the description provides
-                              const colorInstr = hasHex
-                                ? "All color values must match the HEX codes specified in the description exactly — no artistic reinterpretation."
-                                : "No HEX color codes were provided. YOU must assign realistic, architecturally appropriate HEX color values for every surface: walls, floor, ceiling, furniture, fixtures, trim. Choose a cohesive palette that matches the described mood and era. State each assigned color.";
-                              const dimInstr = hasDimensions
-                                ? "All dimensions are specified — render every measurement with exact fidelity. Maintain precise proportional relationships."
-                                : "No exact dimensions were provided. YOU must assign realistic architectural dimensions (in cm) for: room length, width, ceiling height, every piece of furniture (L×W×H), door sizes, window sizes, distances between objects, and wall thicknesses. Base these on the described room type and era. State each assigned dimension.";
-                              const lightInstr = hasTemperature
-                                ? "Match the described light sources and color temperatures exactly."
-                                : "No color temperatures specified. Assign appropriate lighting: specify fixture types, wattage, color temperature (in Kelvin), and placement for every light source in the space.";
+                              return WALL_KEYS.map((wallKey, idx) => {
+                                const hasImg = !!refs[wallKey];
+                                const hasPrompt = !!prompts[wallKey];
 
-                              const specPreamble = `${!hasHex || !hasDimensions ? `\nIMPORTANT — FILL IN MISSING SPECIFICATIONS:\nThe description below is narrative/literary. Before rendering, you MUST first derive and state the missing technical specifications:\n${!hasDimensions ? "- Assign exact dimensions (cm) for the room and every object\n" : ""}${!hasHex ? "- Assign exact HEX color codes for every surface and material\n" : ""}${!hasTemperature ? "- Assign light source types, positions, and color temperatures (Kelvin)\n" : ""}- Assign material specifications: wood species, leather type, metal finish, fabric weave, stone type\n- Assign wall/floor/ceiling finish details: paint sheen, tile pattern, plank width, grout color\n\nState all assigned specifications before describing the render.\n` : ""}`;
-
-                              const anglePrompts = [
-                                // Wide establishing shot
-                                `You are an architectural visualization specialist creating a photorealistic 3D render. Render a wide establishing shot capturing the FULL spatial layout of this location.
-
-LOCATION: ${item.name || "Unnamed"}
-${specPreamble}
-DESCRIPTION (render every detail with exact fidelity):
-${desc}
-
-RENDERING REQUIREMENTS:
-- Camera: Ultra-wide 14mm lens, f/8, positioned at the room's entry point or dominant corner to capture maximum spatial coverage
-- Show ALL walls, floor, ceiling, and every described fixture/furniture piece in correct proportion and placement
-- ${dimInstr}
-- ${colorInstr}
-- ${lightInstr}
-- Render exact material finishes: wood grain direction and species, stone veining pattern, leather grain texture and aging, metal patina and finish type, fabric weave pattern
-- Include baseboards (specify height and profile), crown molding, door hardware (knob/lever style and finish), outlet covers, switch plates, window trim profiles
-- Floor patterns (herringbone plank width, parquet module size, tile dimensions and grout width) must follow correct geometric repetition
-- Furniture must show construction details: visible joinery, cushion compression, fabric pull, wood wear patterns
-- No people, no staging props beyond what is described
-- Output: 8K resolution, photorealistic architectural visualization quality, RAW-grade color accuracy`,
-
-                                // Medium interior shot
-                                `You are an interior design photographer creating a portfolio-grade medium shot of this space.
-
-LOCATION: ${item.name || "Unnamed"}
-${specPreamble}
-DESCRIPTION (every element must appear):
-${desc}
-
-RENDERING REQUIREMENTS:
-- Camera: 35mm lens, f/4, eye-level (150cm height), positioned to capture the primary seating/focal area with 2-3 walls visible
-- ${dimInstr}
-- ${colorInstr}
-- ${lightInstr}
-- All surfaces must show physically accurate material properties: leather grain with subtle sheen variation, wood with species-appropriate grain pattern and end-grain at cuts, metal with correct reflectivity and patina
-- Show spatial relationships: exact distance between furniture pieces, clearance around pathways, height of fixtures relative to ceiling
-- Include small architectural details: switch plates (style and finish), door hinges (type and finish), shelf bracket styles, rug pile texture and edge binding, glass clarity and edge color
-- No people. Photorealistic, 8K, architectural interior photography quality`,
-
-                                // Close-up detail shot
-                                `You are a materials photographer documenting surface finishes and craftsmanship details for an architecture portfolio.
-
-LOCATION: ${item.name || "Unnamed"}
-${specPreamble}
-MATERIAL SPECIFICATION:
-${desc}
-
-RENDERING REQUIREMENTS:
-- Camera: 85mm macro lens, f/2.8, extremely close focus on the most texturally rich surface or object cluster
-- ${colorInstr}
-- Choose the most detailed area: show material transitions where 2-3 different finishes meet
-- Render at near-macro level: individual leather pores and stitch spacing, wood fiber direction and annual ring pattern, stone crystal structure and vein direction, metal brush pattern and grain
-- Show construction details: edge profiles (bullnose, chamfer, square), transition strips, shadow gaps (specify gap width), reveal joints, caulk lines
-- Include hardware at full detail: hinge pin diameter, screw head type, handle mounting plate, LED strip channel profile
-- Depth of field should isolate the primary surface while showing secondary materials in soft bokeh
-- No people. 8K resolution, material sample photography quality`,
-
-                                // Atmospheric mood shot
-                                `You are a cinematographer establishing the emotional atmosphere of this space for a film production.
-
-LOCATION: ${item.name || "Unnamed"}
-${specPreamble}
-ENVIRONMENT SPECIFICATION:
-${desc}
-
-RENDERING REQUIREMENTS:
-- Camera: 50mm lens, f/1.8, positioned to capture the most atmospheric angle — prioritize light interaction with surfaces
-- ${lightInstr}
-- This shot is about MOOD: how each light source interacts with every material surface
-- Show light falloff: bright pools under downlights (specify lux at surface), warm glow on wood (show how grain catches light), soft reflection on leather (show highlight shape), deep shadows in corners (show shadow edge softness)
-- Render atmospheric haze if the space is intimate/enclosed — subtle volumetric light diffusion
-- Every reflective surface must show accurate reflection: smoked mirrors (show reflection reduction percentage), glass (show edge color tint), polished stone (show soft vs sharp reflections), metal fixtures (show specular highlights)
-- ${colorInstr}
-- Include ambient details: glow halos around light sources, shadow patterns from any slatted/perforated elements, light seeping under doors (show color temperature difference)
-- No people. 8K resolution, cinematic still photography quality, shallow depth of field for atmospheric compression`,
-                              ];
-                              const autoPrompt = item.description
-                                ? anglePrompts[slotIdx]
-                                : `Add a description first to generate a prompt for ${angles[slotIdx]}`;
-                              return (
-                                <div key={slotIdx} style={{ background: "var(--nf-bg-deep)", border: "1px solid var(--nf-border)", borderRadius: 2, overflow: "hidden" }}>
-                                  {hasImg ? (
-                                    <div style={{ position: "relative" }}>
-                                      <img src={imgs[slotIdx]} alt={`${item.name} ${angles[slotIdx]}`} style={{ width: "100%", aspectRatio: "4/3", objectFit: "cover", display: "block" }} />
-                                      <button onClick={() => {
-                                        const updated = [...imgs]; updated[slotIdx] = "";
-                                        updateProject({ worldBuilding: items.map(it => it.id === item.id ? { ...it, referenceImages: updated } : it) });
-                                      }} className="nf-btn-icon" style={{ position: "absolute", top: 2, right: 2, background: "rgba(0,0,0,0.6)", borderRadius: 2, padding: 2 }} aria-label="Remove">
-                                        <Icons.X />
-                                      </button>
+                                // Image uploaded → show image, hide prompt
+                                if (hasImg) {
+                                  return (
+                                    <div key={wallKey} style={{
+                                      background: "var(--nf-bg-deep)",
+                                      border: "1px solid var(--nf-border)",
+                                      borderRadius: 2,
+                                      overflow: "hidden",
+                                    }}>
+                                      <div style={{ position: "relative" }}>
+                                        <img src={refs[wallKey]} alt={WALL_LABELS[idx]}
+                                          style={{ width: "100%", aspectRatio: "4/3", objectFit: "cover", display: "block" }} />
+                                        <div style={{
+                                          position: "absolute", bottom: 0, left: 0, right: 0,
+                                          background: "linear-gradient(transparent, rgba(0,0,0,0.7))",
+                                          padding: "12px 8px 6px",
+                                          fontSize: 9, color: "#fff", fontWeight: 600,
+                                          letterSpacing: "0.06em",
+                                        }}>
+                                          ✓ {WALL_LABELS[idx]}
+                                        </div>
+                                        <button onClick={() => {
+                                          const updated = { ...(item.referenceImages || {}) };
+                                          delete updated[wallKey];
+                                          updateProject({
+                                            worldBuilding: (project.worldBuilding || []).map(w =>
+                                              w.id === item.id ? { ...w, referenceImages: updated } : w
+                                            ),
+                                          });
+                                        }} className="nf-btn-icon" style={{
+                                          position: "absolute", top: 2, right: 2,
+                                          background: "rgba(0,0,0,0.6)", borderRadius: 2, padding: 2,
+                                        }}><Icons.X /></button>
+                                      </div>
+                                      {/* Reveal prompt underneath */}
+                                      <details style={{ padding: "4px 6px" }}>
+                                        <summary style={{
+                                          fontSize: 8, color: "var(--nf-text-muted)", cursor: "pointer",
+                                          userSelect: "none",
+                                        }}>Show prompt</summary>
+                                        {hasPrompt && (
+                                          <textarea readOnly value={prompts[wallKey]} onClick={e => e.target.select()}
+                                            style={{
+                                              width: "100%", minHeight: 60, maxHeight: 120, padding: 6,
+                                              marginTop: 4, border: "1px solid var(--nf-border)", borderRadius: 2,
+                                              background: "var(--nf-bg-surface)", color: "var(--nf-text-dim)",
+                                              fontSize: 9, lineHeight: 1.4, fontFamily: "var(--nf-font-mono)",
+                                              resize: "vertical", outline: "none",
+                                            }} />
+                                        )}
+                                      </details>
                                     </div>
-                                  ) : (
-                                    <div style={{ aspectRatio: "4/3", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 6 }}>
-                                      <div style={{ fontSize: 8, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--nf-accent)", marginBottom: 4, fontWeight: 600, textAlign: "center" }}>{angles[slotIdx]}</div>
-                                    </div>
-                                  )}
-                                  <div style={{ padding: 4 }}>
-                                    {!hasImg && (
-                                      <>
-                                        <button onClick={() => { navigator.clipboard.writeText(autoPrompt); showToast("Prompt copied!", "success"); }}
-                                          className="nf-btn-micro" style={{ width: "100%", justifyContent: "center", fontSize: 8, marginBottom: 3 }}>
-                                          <Icons.Copy /> Copy Prompt
+                                  );
+                                }
+
+                                // No image → show prompt box with upload button
+                                return (
+                                  <div key={wallKey} style={{
+                                    background: "var(--nf-bg-deep)",
+                                    border: `1px solid ${hasPrompt ? "var(--nf-accent-2)" : "var(--nf-border)"}`,
+                                    borderRadius: 2,
+                                    overflow: "hidden",
+                                    display: "flex",
+                                    flexDirection: "column",
+                                  }}>
+                                    <div style={{
+                                      padding: "6px 8px",
+                                      background: hasPrompt ? "var(--nf-accent-glow-2)" : "var(--nf-bg-surface)",
+                                      borderBottom: "1px solid var(--nf-border)",
+                                      display: "flex",
+                                      justifyContent: "space-between",
+                                      alignItems: "center",
+                                    }}>
+                                      <span style={{
+                                        fontSize: 9, fontWeight: 600,
+                                        color: hasPrompt ? "var(--nf-accent-2)" : "var(--nf-text-muted)",
+                                        textTransform: "uppercase", letterSpacing: "0.06em",
+                                      }}>
+                                        {WALL_LABELS[idx]}
+                                      </span>
+                                      {hasPrompt && (
+                                        <button onClick={() => {
+                                          navigator.clipboard.writeText(prompts[wallKey]);
+                                          showToast("Prompt copied!", "success");
+                                        }} className="nf-btn-micro" style={{ fontSize: 8, padding: "2px 6px" }}>
+                                          <Icons.Copy /> Copy
                                         </button>
-                                      </>
+                                      )}
+                                    </div>
+                                    {hasPrompt ? (
+                                      <textarea
+                                        readOnly
+                                        value={prompts[wallKey]}
+                                        onClick={e => e.target.select()}
+                                        style={{
+                                          flex: 1, minHeight: 120, maxHeight: 200,
+                                          padding: 8, border: "none", background: "transparent",
+                                          color: "var(--nf-text-dim)", fontSize: 10, lineHeight: 1.5,
+                                          fontFamily: "var(--nf-font-mono)", resize: "vertical", outline: "none",
+                                        }}
+                                      />
+                                    ) : (
+                                      <div style={{
+                                        flex: 1, aspectRatio: "4/3",
+                                        display: "flex", alignItems: "center", justifyContent: "center", padding: 8,
+                                      }}>
+                                        <div style={{ fontSize: 9, color: "var(--nf-text-muted)", textAlign: "center", fontStyle: "italic" }}>
+                                          {item._generatingPrompts ? <><Spinner /><br/>Generating...</> : "Generate prompts first"}
+                                        </div>
+                                      </div>
                                     )}
-                                    <label className="nf-btn-micro" style={{ width: "100%", justifyContent: "center", cursor: "pointer", fontSize: 8 }}>
-                                      <Icons.Export /> {hasImg ? "Replace" : "Upload"}
-                                      <input type="file" accept="image/*" style={{ display: "none" }} onChange={e => {
-                                        const file = e.target.files?.[0]; if (!file) return;
-                                        if (file.size > 2 * 1024 * 1024) { showToast("Max 2MB", "error"); return; }
-                                        const reader = new FileReader();
-                                        reader.onload = ev => {
-                                          const updated = [...(item.referenceImages || ["", "", "", ""])]; updated[slotIdx] = ev.target.result;
-                                          updateProject({ worldBuilding: items.map(it => it.id === item.id ? { ...it, referenceImages: updated } : it) });
-                                          showToast("Image uploaded", "success");
-                                        };
-                                        reader.readAsDataURL(file); e.target.value = "";
-                                      }} />
-                                    </label>
+                                    {/* Upload button — always visible */}
+                                    <div style={{ padding: "4px 6px", borderTop: "1px solid var(--nf-border)" }}>
+                                      <label className="nf-btn-micro" style={{
+                                        width: "100%", justifyContent: "center", cursor: "pointer", fontSize: 8,
+                                      }}>
+                                        <Icons.Export /> {hasPrompt ? "Upload Image" : "Upload Image (no prompt needed)"}
+                                        <input type="file" accept="image/*" style={{ display: "none" }}
+                                          onChange={e => {
+                                            const file = e.target.files?.[0];
+                                            if (!file) return;
+                                            if (file.size > 2 * 1024 * 1024) { showToast("Max 2MB", "error"); return; }
+                                            const reader = new FileReader();
+                                            reader.onload = ev => {
+                                              const updatedRefs = { ...(item.referenceImages || {}) };
+                                              updatedRefs[wallKey] = ev.target.result;
+                                              updateProject({
+                                                worldBuilding: (project.worldBuilding || []).map(w =>
+                                                  w.id === item.id ? { ...w, referenceImages: updatedRefs } : w
+                                                ),
+                                              });
+                                              showToast("Image uploaded", "success");
+                                            };
+                                            reader.readAsDataURL(file);
+                                            e.target.value = "";
+                                          }}
+                                        />
+                                      </label>
+                                    </div>
                                   </div>
-                                </div>
-                              );
-                            })}
+                                );
+                              });
+                            })()}
                           </div>
                         </div>
                       </div>
@@ -6377,7 +7286,76 @@ RENDERING REQUIREMENTS:
         </div>
       </div>
 
+            {/* Google Drive Sync */}
       <div className="nf-card">
+        <h3 className="nf-card-title">☁ Google Drive Sync</h3>
+        <p style={{ fontSize: 12, color: "var(--nf-text-muted)", marginBottom: 12, lineHeight: 1.6 }}>
+          Auto-sync projects AND images to Google Drive for full cloud backup and cross-device access.
+          Images are compressed before upload to keep syncs fast.
+        </p>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+          <div style={{ width: 8, height: 8, borderRadius: 4, background: gdriveConnected ? "var(--nf-success)" : "var(--nf-text-muted)" }} />
+          <span style={{ fontSize: 11, color: "var(--nf-text-dim)", fontWeight: 500 }}>
+            {gdriveConnected ? "Connected" : "Not connected"}
+            {gdriveLastSync && <span style={{ color: "var(--nf-text-muted)", fontWeight: 400, marginLeft: 8 }}>· Last sync: {gdriveLastSync.toLocaleTimeString()}</span>}
+          </span>
+        </div>
+        {!gdriveConnected && (
+          <div className="nf-field">
+            <label className="nf-label">Google OAuth Client ID</label>
+            <input value={gdriveClientId} onChange={e => setGdriveClientId(e.target.value)}
+              placeholder="xxxxx.apps.googleusercontent.com" className="nf-input" style={{ fontSize: 12 }} />
+            <div style={{ fontSize: 10, color: "var(--nf-text-muted)", marginTop: 4, lineHeight: 1.5 }}>
+              Get one at <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noopener" style={{ color: "var(--nf-accent)", textDecoration: "underline" }}>Google Cloud Console</a> → Create OAuth 2.0 Client ID (Web application) → Add <code style={{ background: "var(--nf-bg-surface)", padding: "0 4px", borderRadius: 2 }}>{window.location.origin}</code> as an authorized JavaScript origin.
+            </div>
+          </div>
+        )}
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          {!gdriveConnected ? (
+            <button onClick={handleGdriveConnect} disabled={!gdriveClientId} className="nf-btn nf-btn-primary">☁ Connect</button>
+          ) : (
+            <>
+              <button onClick={handleGdriveSync} disabled={gdriveSyncing} className="nf-btn nf-btn-primary">
+                {gdriveSyncing ? <><Spinner /> Syncing...</> : <><Icons.Cloud /> Sync Now</>}
+              </button>
+              <button onClick={handleGdriveLoad} disabled={gdriveSyncing} className="nf-btn nf-btn-ghost"><Icons.Export /> Load from Drive</button>
+              <button onClick={handleGdriveDisconnect} className="nf-btn nf-btn-ghost" style={{ color: "var(--nf-accent)" }}>Disconnect</button>
+            </>
+          )}
+        </div>
+        {gdriveConnected && (
+          <div style={{ marginTop: 14, padding: "10px 14px", background: "var(--nf-bg-surface)", border: "1px solid var(--nf-border)", borderRadius: 6 }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: gdriveAutoSync ? 10 : 0 }}>
+              <div>
+                <div style={{ fontSize: 12, fontWeight: 600, color: "var(--nf-text)" }}>Auto-Sync</div>
+                <div style={{ fontSize: 10, color: "var(--nf-text-muted)" }}>Periodically save to Google Drive</div>
+              </div>
+              <button onClick={() => setGdriveAutoSync(!gdriveAutoSync)} style={{
+                width: 40, height: 22, borderRadius: 11, border: "none", cursor: "pointer",
+                background: gdriveAutoSync ? "var(--nf-accent)" : "var(--nf-border)",
+                position: "relative", transition: "background 0.2s",
+              }} role="switch" aria-checked={gdriveAutoSync}>
+                <div style={{
+                  width: 16, height: 16, borderRadius: 8, background: "#fff",
+                  position: "absolute", top: 3, transition: "left 0.2s",
+                  left: gdriveAutoSync ? 21 : 3, boxShadow: "0 1px 3px rgba(0,0,0,0.2)",
+                }} />
+              </button>
+            </div>
+            {gdriveAutoSync && (
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <label style={{ fontSize: 11, color: "var(--nf-text-dim)" }}>Every</label>
+                <select value={gdriveSyncInterval} onChange={e => setGdriveSyncInterval(parseInt(e.target.value))}
+                  className="nf-select" style={{ width: 80, padding: "4px 8px", fontSize: 11 }}>
+                  <option value={1}>1 min</option><option value={2}>2 min</option><option value={5}>5 min</option>
+                  <option value={10}>10 min</option><option value={15}>15 min</option><option value={30}>30 min</option>
+                </select>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+	  <div className="nf-card">
         <h3 className="nf-card-title">Auto-Save to File</h3>
         <p style={{ fontSize: 12, color: "var(--nf-text-muted)", marginBottom: 12, lineHeight: 1.6 }}>
           Link a JSON file on your computer. All changes auto-save to this file continuously — no more relying only on browser storage.
