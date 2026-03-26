@@ -2871,6 +2871,118 @@ const generatePdfHtml = (project, mode, chapterIdx) => {
   return html;
 };
 
+// Generate compact caption from scene text
+const _sceneCaption = (text, chapterIdx, chapterTitle) => {
+  if (!text && chapterIdx != null) return chapterTitle ? `${chapterTitle}` : `Ch${chapterIdx + 1}`;
+  const t = (text || "").replace(/\n+/g, " ").trim();
+  if (!t) return chapterTitle ? `${chapterTitle}` : `Ch${(chapterIdx || 0) + 1}`;
+  const sentence = t.match(/^[^.!?]*[.!?]/);
+  const raw = sentence ? sentence[0].slice(0, -1) : t.slice(0, 50);
+  const trimmed = raw.length > 50 ? raw.slice(0, 47).replace(/\s+\S*$/, "") + "…" : raw.trim();
+  return trimmed || (chapterTitle || `Ch${(chapterIdx || 0) + 1}`);
+};
+
+// Attach drag and delete handlers to an image wrapper element
+const _attachImageEvents = (fig, editorEl) => {
+  if (!fig) return;
+
+  // Delete button
+  const delBtn = fig.querySelector('.nf-img-del');
+  if (delBtn) {
+    delBtn.addEventListener('click', (e) => {
+      e.preventDefault(); e.stopPropagation();
+      fig.remove();
+      // Trigger content change
+      editorEl.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+  }
+
+  // Drag to reposition — grab handle or image
+  const handle = fig.querySelector('.nf-img-handle');
+  const img = fig.querySelector('img');
+  const dragSource = handle || img;
+  if (!dragSource) return;
+
+  let isDragging = false;
+  let clone = null;
+  let placeholder = null;
+
+  const onMouseDown = (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    isDragging = true;
+    fig.classList.add('dragging');
+
+    // Create floating clone
+    clone = fig.cloneNode(true);
+    clone.style.cssText = 'position:fixed;pointer-events:none;z-index:10000;opacity:0.8;width:' + fig.offsetWidth + 'px;transition:none;';
+    document.body.appendChild(clone);
+
+    // Create placeholder
+    placeholder = document.createElement('div');
+    placeholder.style.cssText = 'height:2px;background:var(--nf-accent);margin:8px 0;border-radius:1px;';
+    fig.parentNode.insertBefore(placeholder, fig.nextSibling);
+
+    // Hide original
+    fig.style.display = 'none';
+
+    moveClone(e);
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mouseup', onMouseUp);
+  };
+
+  const moveClone = (e) => {
+    if (clone) {
+      clone.style.left = (e.clientX - fig.offsetWidth / 2) + 'px';
+      clone.style.top = (e.clientY - 20) + 'px';
+    }
+  };
+
+  const onMouseMove = (e) => {
+    if (!isDragging) return;
+    moveClone(e);
+
+    // Find drop target
+    const target = document.caretRangeFromPoint
+      ? document.caretRangeFromPoint(e.clientX, e.clientY)
+      : null;
+
+    if (target && editorEl.contains(target.startContainer) && target.startContainer !== fig) {
+      if (placeholder.parentNode !== editorEl || !isAfter(placeholder, target)) {
+        placeholder.remove();
+        target.insertNode(placeholder);
+      }
+    }
+  };
+
+  const isAfter = (el, range) => {
+    const elRect = el.getBoundingClientRect();
+    return range.startContainer.compareDocumentPosition
+      ? !!(el.compareDocumentPosition(range.startContainer) & Node.DOCUMENT_POSITION_FOLLOWING)
+      : true;
+  };
+
+  const onMouseUp = (e) => {
+    isDragging = false;
+    document.removeEventListener('mousemove', onMouseMove);
+    document.removeEventListener('mouseup', onMouseUp);
+
+    if (clone) { clone.remove(); clone = null; }
+    if (placeholder && placeholder.parentNode) {
+      placeholder.parentNode.insertBefore(fig, placeholder);
+      placeholder.remove();
+    }
+    placeholder = null;
+    fig.style.display = '';
+    fig.classList.remove('dragging');
+
+    // Trigger content save
+    editorEl.dispatchEvent(new Event('input', { bubbles: true }));
+  };
+
+  dragSource.addEventListener('mousedown', onMouseDown);
+};
+
 // ─── VISUAL NOVEL IMAGE PROMPT GENERATOR ───
 // Follows the 7-section structure: Character → Clothing → (skip) → Activity → Backdrop → Time → Camera
 // Plus hardcoded suffix for candid realism
@@ -4131,7 +4243,10 @@ export default function NovelForge() {
     if (needsRepopulate) {
       lastSyncedChapterRef.current = key;
       lastSyncedContentRef.current = content;
-      // B3: Better HTML detection — check for actual HTML tags, not just angle brackets
+      setTimeout(() => {
+        el.querySelectorAll('figure.nf-img-wrapper').forEach(fig => _attachImageEvents(fig, el));
+      }, 100);
+	  // B3: Better HTML detection — check for actual HTML tags, not just angle brackets
       const looksLikeHtml = /<\/?(?:p|div|br|h[1-6]|ul|ol|li|strong|em|span|hr|blockquote|pre|code)\b/i.test(content);
       if (looksLikeHtml) {
         el.innerHTML = content;
@@ -6553,6 +6668,33 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                 else if (mod && e.shiftKey && e.key === 'x') { e.preventDefault(); document.execCommand('strikeThrough'); syncEditorContent(); }
               }}
               onPaste={(e) => {
+                // Check for image data in clipboard
+                const items = e.clipboardData?.items;
+                if (items) {
+                  for (const item of items) {
+                    if (item.type.startsWith('image/')) {
+                      e.preventDefault();
+                      const file = item.getAsFile();
+                      if (!file) continue;
+                      const reader = new FileReader();
+                      reader.onload = (ev) => {
+                        const caption = _sceneCaption(selectedText, activeChapterIdx, activeChapter?.title);
+                        const imgHtml = `<figure class="nf-img-wrapper" contenteditable="false" style="text-align:center;margin:20px 0;position:relative;display:inline-block;max-width:100%"><span class="nf-img-handle">⠿ drag</span><span class="nf-img-actions"><button class="nf-img-del" title="Delete image">✕</button></span><img src="${ev.target.result}" style="max-width:100%;border-radius:2px;box-shadow:0 2px 12px rgba(0,0,0,0.15)" alt="${caption.replace(/"/g, "&quot;")}" draggable="false" /><figcaption class="nf-img-caption" style="font-size:10px;color:var(--nf-text-muted);font-style:italic;margin-top:4px;padding-top:4px;border-top:1px solid var(--nf-border);text-align:center">${caption}</figcaption></figure>`;
+                        document.execCommand('insertHTML', false, imgHtml);
+                        syncEditorContent();
+                        // Attach event handlers to the newly inserted image
+                        const el = editorRef.current;
+                        if (el) {
+                          const newFig = el.querySelector('figure.nf-img-wrapper:last-of-type');
+                          if (newFig) _attachImageEvents(newFig, el);
+                        }
+                      };
+                      reader.readAsDataURL(file);
+                      return;
+                    }
+                  }
+                }
+                // No image — fall through to text/HTML paste
                 e.preventDefault();
                 const html = e.clipboardData.getData('text/html');
                 const plain = e.clipboardData.getData('text/plain');
@@ -6563,7 +6705,35 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                 }
                 syncEditorContent();
               }}
-              data-placeholder="Begin writing your chapter..." />
+              data-placeholder="Begin writing your chapter..."
+              onDragOver={(e) => {
+                if (e.dataTransfer?.types?.includes('Files')) {
+                  e.preventDefault();
+                  e.dataTransfer.dropEffect = 'copy';
+                }
+              }}
+              onDrop={(e) => {
+                const files = e.dataTransfer?.files;
+                if (!files?.length) return;
+                const imageFiles = Array.from(files).filter(f => f.type.startsWith('image/'));
+                if (imageFiles.length === 0) return;
+                e.preventDefault();
+                const el = editorRef.current;
+                if (!el) return;
+                imageFiles.forEach(file => {
+                  const reader = new FileReader();
+                  reader.onload = (ev) => {
+                    const caption = _sceneCaption(selectedText, activeChapterIdx, activeChapter?.title);
+                    const imgHtml = `<figure class="nf-img-wrapper" contenteditable="false" style="text-align:center;margin:20px 0;position:relative;display:inline-block;max-width:100%"><span class="nf-img-handle">⠿ drag</span><span class="nf-img-actions"><button class="nf-img-del" title="Delete image">✕</button></span><img src="${ev.target.result}" style="max-width:100%;border-radius:2px;box-shadow:0 2px 12px rgba(0,0,0,0.15)" alt="${caption.replace(/"/g, "&quot;")}" draggable="false" /><figcaption class="nf-img-caption" style="font-size:10px;color:var(--nf-text-muted);font-style:italic;margin-top:4px;padding-top:4px;border-top:1px solid var(--nf-border);text-align:center">${caption}</figcaption></figure>`;
+                    el.focus();
+                    document.execCommand('insertHTML', false, imgHtml);
+                    syncEditorContent();
+                    const newFig = el.querySelector('figure.nf-img-wrapper:last-of-type');
+                    if (newFig) _attachImageEvents(newFig, el);
+                  };
+                  reader.readAsDataURL(file);
+                });
+              }} />
           </div>
           {!isMobile && !focusMode && renderAiPanel()}
         </div>
@@ -8148,6 +8318,49 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
               color: #000 !important; background: #fff !important;
             }
           }
+		            /* Image wrapper in editor — draggable scene illustrations */
+          .nf-editor-contenteditable figure.nf-img-wrapper {
+            cursor: default;
+            user-select: contain;
+          }
+          .nf-editor-contenteditable figure.nf-img-wrapper:hover {
+            outline: 2px solid var(--nf-accent-2);
+            outline-offset: 4px;
+          }
+          .nf-editor-contenteditable figure.nf-img-wrapper img {
+            cursor: grab;
+          }
+          .nf-editor-contenteditable figure.nf-img-wrapper.dragging {
+            opacity: 0.5;
+            outline: 2px dashed var(--nf-accent);
+          }
+          .nf-editor-contenteditable .nf-img-handle {
+            display: none;
+            position: absolute; top: 4px; right: 4px; z-index: 5;
+            background: rgba(0,0,0,0.65); color: #fff; border: none;
+            border-radius: 3px; padding: 2px 8px; font-size: 10px;
+            cursor: grab; font-family: var(--nf-font-body);
+            letter-spacing: 0.05em; line-height: 1;
+          }
+          .nf-editor-contenteditable figure.nf-img-wrapper:hover .nf-img-handle {
+            display: block;
+          }
+          .nf-editor-contenteditable .nf-img-actions {
+            display: none;
+            position: absolute; top: 4px; left: 4px; z-index: 5;
+            gap: 3px;
+          }
+          .nf-editor-contenteditable figure.nf-img-wrapper:hover .nf-img-actions {
+            display: flex;
+          }
+          .nf-editor-contenteditable .nf-img-actions button {
+            background: rgba(0,0,0,0.65); color: #fff; border: none;
+            border-radius: 3px; padding: 3px 7px; font-size: 10px;
+            cursor: pointer; font-family: var(--nf-font-body);
+          }
+          .nf-editor-contenteditable .nf-img-actions button:hover {
+            background: rgba(0,0,0,0.85);
+          }
         `}</style>
 
         {renderProjectList()}
@@ -8381,17 +8594,29 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                         if (file.size > 5 * 1024 * 1024) { showToast("Max 5MB for chapter images", "error"); return; }
                         const reader = new FileReader();
                         reader.onload = ev => {
-                          const imgHtml = `<div style="text-align:center;margin:24px 0"><img src="${ev.target.result}" style="max-width:100%;border-radius:2px;box-shadow:0 2px 12px rgba(0,0,0,0.15)" alt="Ch${activeChapterIdx + 1} scene — ${imagePromptData.mentionedChars.map(c => c.name).join(", ") || "illustration"}" /><div style="font-size:11px;color:#888;margin-top:6px;font-style:italic">Ch${activeChapterIdx + 1}: ${activeChapter?.title || "Scene"}</div></div>`;
+                          const caption = _sceneCaption(selectedText, activeChapterIdx, activeChapter?.title);
+                          const imgHtml = `<figure class="nf-img-wrapper" contenteditable="false" style="text-align:center;margin:20px 0;position:relative;display:inline-block;max-width:100%"><span class="nf-img-handle">⠿ drag</span><span class="nf-img-actions"><button class="nf-img-del" title="Delete image">✕</button></span><img src="${ev.target.result}" style="max-width:100%;border-radius:2px;box-shadow:0 2px 12px rgba(0,0,0,0.15)" alt="${caption.replace(/"/g, '&quot;')}" draggable="false" /><figcaption class="nf-img-caption" style="font-size:10px;color:var(--nf-text-muted);font-style:italic;margin-top:4px;padding-top:4px;border-top:1px solid var(--nf-border);text-align:center">${caption}</figcaption></figure>`;
                           const el = editorRef.current;
                           if (el) {
-                            const sel = window.getSelection();
-                            if (sel.rangeCount > 0 && el.contains(sel.getRangeAt(0).startContainer)) {
-                              document.execCommand("insertHTML", false, imgHtml);
-                            } else {
-                              el.innerHTML += imgHtml;
+                            el.focus();
+                            // Move cursor out of the image if it's inside one
+                            const curSel = window.getSelection();
+                            if (curSel.rangeCount > 0) {
+                              const node = curSel.anchorNode;
+                              if (node && node.closest && node.closest('.nf-img-wrapper')) {
+                                const afterFig = node.closest('.nf-img-wrapper').nextSibling;
+                                if (afterFig) {
+                                  const r = document.createRange();
+                                  r.setStartBefore(afterFig);
+                                  curSel.removeAllRanges();
+                                  curSel.addRange(r);
+                                }
+                              }
                             }
+                            document.execCommand("insertHTML", false, "<br/>" + imgHtml + "<br/>");
                             syncEditorContent();
                             lastSyncedContentRef.current = el.innerHTML;
+                            _attachImageEvents(el.querySelector('figure.nf-img-wrapper:last-of-type'), el);
                           }
                           showToast("Image inserted into chapter", "success");
                           setImagePromptData(null);
@@ -8404,10 +8629,16 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                       onKeyDown={e => {
                         if (e.key === "Enter" && e.target.value.trim()) {
                           const url = e.target.value.trim();
-                          const imgHtml = `<div style="text-align:center;margin:24px 0"><img src="${url}" style="max-width:100%;border-radius:2px;box-shadow:0 2px 12px rgba(0,0,0,0.15)" alt="Scene illustration" /><div style="font-size:11px;color:#888;margin-top:6px;font-style:italic">Scene illustration</div></div>`;
+                          const caption = _sceneCaption(selectedText, activeChapterIdx, activeChapter?.title);
+                          const imgHtml = `<figure class="nf-img-wrapper" contenteditable="false" style="text-align:center;margin:20px 0;position:relative;display:inline-block;max-width:100%"><span class="nf-img-handle">⠿ drag</span><span class="nf-img-actions"><button class="nf-img-del" title="Delete image">✕</button></span><img src="${ev.target.result}" style="max-width:100%;border-radius:2px;box-shadow:0 2px 12px rgba(0,0,0,0.15)" alt="${caption.replace(/"/g, "&quot;")}" draggable="false" /><figcaption class="nf-img-caption" style="font-size:10px;color:var(--nf-text-muted);font-style:italic;margin-top:4px;padding-top:4px;border-top:1px solid var(--nf-border);text-align:center">${caption}</figcaption></figure>`;
                           const el = editorRef.current;
                           if (el) { el.innerHTML += imgHtml; syncEditorContent(); lastSyncedContentRef.current = el.innerHTML; }
                           showToast("Image inserted into chapter", "success");
+                          // Attach image event handlers
+                          if (el) {
+                            const newFig = el.querySelector('figure.nf-img-wrapper:last-of-type');
+                            if (newFig) _attachImageEvents(newFig, el);
+                          }
                           setImagePromptData(null);
                         }
                       }} />
