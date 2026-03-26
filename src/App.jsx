@@ -5371,40 +5371,55 @@ If no relationship changes, respond "No relationship updates needed."` },
 
     try {
       const response = await callOpenRouter([
-        { role: "system", content: `You are a visual continuity tracker for a novel being adapted into visual novel images. You produce a scene-by-scene visual world view that image generation AIs will use to maintain PERFECT visual consistency across all scenes.
+        { role: "system", content: `You are a visual continuity tracker for a novel being adapted into visual novel images. You produce a detailed scene-by-scene visual world view that image generation AIs will use to maintain PERFECT visual consistency.
 
-For each scene in the chapter, track EXACTLY:
-- Character CLOTHING with ALL details: exact colors (hex if possible), fabric type, fit, condition (pristine, wrinkled, stained, wet, torn, etc.), layers (jacket open/closed, sleeves rolled up, etc.)
-- Character APPEARANCE STATE: hairstyle (up, down, messy, wet), accessories, makeup state, any physical changes (new cuts, bruises, tired eyes, flushed cheeks)
-- Character POSITIONING: where they are in the location, what they're doing with their body, what they're holding/interacting with
-- ENVIRONMENT: what's visible, what changed from the previous scene, lighting conditions
-- MOOD/VIBE: emotional temperature, tension level
+For each scene, do the following:
 
-FORMAT RULES:
-- Use PLAIN TEXT only — no markdown, no bold, no italics
-- Use [SCENE: description] markers to separate scenes
-- Under each scene, list characters with their visual state
-- Be SPECIFIC and CONCRETE — "white cotton button-down shirt, top two buttons undone, sleeves rolled to elbows" not "casual clothes"
-- Reference the PREVIOUS chapter's world view for continuity — what were characters last seen wearing? Did they change clothes?
-- If a location has uploaded reference images, note which angle images are available` },
-        { role: "user", content: `PREVIOUS CHAPTER WORLD VIEW (for visual continuity):
+CLOTHING RULES:
+- If the text EXPLICITLY describes what a character is wearing → enhance it: add exact hex colors, fabric type, fit details, condition (wet, wrinkled, stained, etc.), how layers sit. Make it richer than the source text.
+- If the text does NOT describe what a character is wearing → INFER appropriate clothing based on context: the setting, weather, time of day, the character's personality, their socioeconomic status, what they're doing. Be specific — "a worn olive-drab cotton henley, untucked over dark straight-leg jeans and scuffed brown Timberland boots" not "casual clothes".
+- Unless the text shows a character changing clothes, their outfit CARRIES OVER from the previous scene. Note "same as previous scene" with a one-line reminder of what that was.
+
+APPEARANCE:
+- If described in text → enhance with specific details (exact colors in hex, textures, states)
+- If not described → infer based on context (rain = wet hair plastered to forehead, cold = reddened cheeks, etc.)
+
+POSITIONING: Where each character is, what they're doing, body language — be specific about spatial relationships.
+
+ENVIRONMENT: Location, weather, objects, lighting, surfaces — enhance with detail.
+
+MOOD/VIBE: Emotional temperature of the scene.
+
+FORMATTING RULES:
+- PLAIN TEXT ONLY — no markdown, no bold (**), no asterisks (*), no headers (#), no italics
+- Use [SCENE: short description] to separate scenes
+- Use hyphens (-) for bullet points
+- Be specific and concrete
+- Reference the previous chapter's world view for continuity` },
+        { role: "user", content: `PREVIOUS CHAPTER WORLD VIEW (for visual continuity — what were characters last wearing?):
 ${prevWorldView || "This is the first chapter or no previous world view was generated."}
 
 CURRENT CHAPTER (Ch${currentChNum}: "${ch.title || "Untitled"}"):
-${plain.length > 15000 ? plain.slice(0, 7000) + "\n[... middle omitted ...]\n" + plain.slice(-7000) : plain}
+${plain.length > 18000 ? plain.slice(0, 9000) + "\n[... middle omitted ...]\n" + plain.slice(-9000) : plain}
 
 CHARACTERS:
 ${charContext}
 
-WORLD ENTRIES (locations with reference images):
+WORLD ENTRIES (locations — note which have uploaded reference images):
 ${worldContext}
 
 ${plotContext}
 
 ${sceneNotes ? `SCENE DIRECTION: ${sceneNotes}` : ""}
 
-Produce the scene-by-scene visual world view now. Use [SCENE: description] markers. List each character's clothing, appearance state, and position under each scene.` },
-      ], { maxTokens: 4000, temperature: 0.3 });
+Produce the scene-by-scene visual world view. For each scene:
+1. Separate with [SCENE: description]
+2. List environment details
+3. List each character: clothing (enhance described clothing or INFER if not described), appearance (enhance or infer), positioning
+4. Note clothing continuity — if no change is described, carry forward the outfit from the previous scene with a brief reminder
+
+INFER clothing when not described. ENHANCE clothing when described. Never say "not described" — always provide specific, detailed outfit information.` },
+      ], { maxTokens: 15000, temperature: 0.3 });
 
       updateChapter(activeChapterIdx, { worldView: response || "" });
       showToast("Chapter world view generated", "success");
@@ -6124,7 +6139,7 @@ YOUR OUTPUT FORMAT (follow this EXACTLY):
 
 (1) CHARACTER APPEARANCE: For each character, describe their EXACT physical appearance using their look-alike as the face reference. Include: build, height, skin tone, hair, facial features, expression in THIS scene. Write it as if describing a real person to a photographer.
 
-(2) CLOTHING: Describe EXACTLY what each character is wearing in this scene. Analyze the scene text for every clothing detail — fabric, color, fit, condition (wet, rumpled, torn, etc). If clothing isn't explicitly described, infer appropriate clothing from the context.
+(2) CLOTHING: USE THE CLOTHING FROM THE WORLD VIEW — the world view tracks what characters are wearing scene-by-scene. Find the matching scene and use those exact clothing details. Do NOT invent new outfits. Describe EXACTLY what each character is wearing in this scene. Analyze the scene text for every clothing detail — fabric, color, fit, condition (wet, rumpled, torn, etc). If clothing isn't explicitly described, infer appropriate clothing from the context.
 
 (3) Skip to (4)
 
@@ -6145,63 +6160,46 @@ CRITICAL RULES:
 - Use look-alike names for face references (e.g. "whose face closely resembles [name]")
 - If world reference images exist, add "[Reference image attached]" and describe what the image shows
 - Be extremely specific about spatial relationships and body positioning` },
-                  { role: "user", content: `SCENE TEXT:
+                  { role: "user", content: `SCENE TEXT (this is the EXACT passage — build the prompt from THIS):
 ${effectiveText}
 ${(() => {
-  // World view context — clothing, position, location angle
   const worldView = activeChapter?.worldView || "";
-  let extraContext = "";
+  let extra = "";
 
   if (worldView) {
-    // 1. Extract character clothing/appearance from the world view's scene blocks
-    const charClothingLines = [];
-    const sceneBlocks = worldView.split(/\[SCENE:[^\]]*\]/i);
-    for (const block of sceneBlocks) {
-      for (const char of contextData.mentionedChars) {
-        const namePattern = new RegExp(`${char.name.split(/\s+/)[0]}[^\\n]*`, 'gi');
-        const matches = block.match(namePattern);
-        if (matches) charClothingLines.push(...matches);
+    // Pass the ENTIRE world view — the AI matches the scene itself
+    extra += `\n\nCHAPTER WORLD VIEW (scene-by-scene clothing and environment log — find the scene block that matches the selected text above and use THAT scene's details):\n${worldView}`;
+  }
+
+  // Location angle from world entry images
+  const primaryWorld = contextData.primaryWorld;
+  if (primaryWorld) {
+    const refs = primaryWorld.referenceImages || {};
+    const availableAngles = Object.entries(refs).filter(([, v]) => v);
+    if (availableAngles.length > 0) {
+      const sceneType = contextData._sceneType || "narrative";
+      const anglePriority = {
+        action: ["wall_a", "wall_b"], dialogue: ["wall_a", "wall_c"],
+        intimate: ["wall_c", "wall_d"], emotional: ["wall_a", "wall_c"],
+      };
+      const priorities = anglePriority[sceneType] || ["wall_a", "wall_b", "wall_c", "wall_d"];
+      const selectedAngle = priorities.find(a => refs[a]) || availableAngles[0][0];
+      const wallLabels = { wall_a: "Entry View (facing into room from door)", wall_b: "Right Wall", wall_c: "Left Wall", wall_d: "Behind Entry (door wall)" };
+      const anglePrompt = (primaryWorld.imagePrompts || {})[selectedAngle] || "";
+
+      extra += `\n\nLOCATION: "${primaryWorld.name}" — using ${wallLabels[selectedAngle] || selectedAngle} angle.`;
+      if (anglePrompt) {
+        extra += `\nAngle-specific prompt for this view:\n${anglePrompt}`;
       }
-    }
-    if (charClothingLines.length > 0) {
-      extraContext += "\n\nCHAPTER WORLD VIEW — CHARACTER APPEARANCE:\n" + charClothingLines.join("\n");
-    }
-
-    // 2. Location angle matching from world entry images
-    const primaryWorld = contextData.primaryWorld;
-    if (primaryWorld) {
-      const refs = primaryWorld.referenceImages || {};
-      const availableAngles = Object.entries(refs).filter(([, v]) => v);
-      if (availableAngles.length > 0) {
-        // Select best angle based on scene type
-        const sceneType = contextData._sceneType || "narrative";
-        const anglePriority = {
-          action: ["wall_a", "wall_b"], dialogue: ["wall_a", "wall_c"],
-          intimate: ["wall_c", "wall_d"], emotional: ["wall_a", "wall_c"],
-        };
-        const priorities = anglePriority[sceneType] || ["wall_a", "wall_b", "wall_c", "wall_d"];
-        const selectedAngle = priorities.find(a => refs[a]) || availableAngles[0][0];
-        const selectedImage = refs[selectedAngle];
-        const wallLabels = { wall_a: "Entry View (facing into room from door)", wall_b: "Right Wall", wall_c: "Left Wall", wall_d: "Behind Entry (door wall)" };
-
-        const anglePrompt = (primaryWorld.imagePrompts || {})[selectedAngle] || "";
-
-        extraContext += '\n\nLOCATION: "' + primaryWorld.name + '" — using ' + (wallLabels[selectedAngle] || selectedAngle) + ' angle.';
-		if (anglePrompt) {
-		  extraContext += '\nAngle-specific prompt for this view:\n' + anglePrompt;
-		}
-        // AFTER (fixed)
-		extraContext += "\n\n[Reference image ATTACHED — use this EXACT image as the backdrop/background. Insert the character(s) INTO this environment. The generated image must show this precise location with the character(s) added. Do not generate a new background — use this one.]";
-      }
+      extra += `\n\n[Reference image ATTACHED — use this EXACT image as the backdrop/background. Insert the character(s) INTO this environment.]`;
     }
   }
 
-  return extraContext;
+  return extra;
 })()}
-CHARACTER PROFILES:
+CHARACTER PROFILES (appearance, personality, look-alike for face reference):
 ${contextData.mentionedChars.map(c => {
-  let charInfo = `${c.name} (${c.role}, ${c.age || "?"} ${c.gender || ""}): Look-alike: ${c.lookAlike || "NOT SET"}. Appearance: ${c.appearance || "none"}. Personality: ${c.personality || "none"}`;
-  return charInfo;
+  return `${c.name} (${c.role}, ${c.age || "?"} ${c.gender || ""}): Look-alike: ${c.lookAlike || "NOT SET"}. Appearance: ${c.appearance || "none"}. Personality: ${c.personality || "none"}`;
 }).join("\n\n")}
 
 LOCATION:
