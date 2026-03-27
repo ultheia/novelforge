@@ -2734,9 +2734,14 @@ const CleanViewModal = memo(({ project, startChapter, onClose }) => {
   const contentHtml = ch?.content || "";
   return (
     <div style={{
-      position: "fixed", inset: 0, zIndex: 9996, background: "var(--nf-bg-deep)",
-      display: "flex", flexDirection: "column", animation: "nf-fadeIn 0.2s ease-out",
-    }}>
+	  position: "fixed", inset: 0, zIndex: 9996, background: "var(--nf-bg-deep)",
+	  display: "flex", flexDirection: "column", animation: "nf-fadeIn 0.2s ease-out",
+	}}>
+	  <style>{`
+		.nf-img-handle { display: none !important; }
+		.nf-img-actions { display: none !important; }
+	  `}</style>
+  {/* Minimal header */}
       {/* Minimal header */}
       <div style={{ padding: "10px 24px", borderBottom: "1px solid var(--nf-border)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
@@ -5498,24 +5503,30 @@ If no relationship changes, respond "No relationship updates needed."` },
       const response = await callOpenRouter([
         { role: "system", content: `You are a visual continuity tracker for a novel being adapted into visual novel images. You produce a detailed scene-by-scene visual world view that image generation AIs will use to maintain PERFECT visual consistency.
 
-For each scene, do the following:
+ABSOLUTE RULE #1 — ONE SCENE, ONE PHYSICAL LOCATION:
+Every [SCENE] block must describe EXACTLY ONE place. If a character walks from the apartment to the stairwell to the street, that is THREE separate scenes, not one. Never describe the apartment AND the stairwell in the same block. Never describe "Same apartment now..." followed by stairwell or outdoor details. The scene ends where the character physically leaves the space.
 
-CLOTHING RULES:
-- If the text EXPLICITLY describes what a character is wearing → enhance it: add exact hex colors, fabric type, fit details, condition (wet, wrinkled, stained, etc.), how layers sit. Make it richer than the source text.
-- If the text does NOT describe what a character is wearing → INFER appropriate clothing based on context: the setting, weather, time of day, the character's personality, their socioeconomic status, what they're doing. Be specific — "a worn olive-drab cotton henley, untucked over dark straight-leg jeans and scuffed brown Timberland boots" not "casual clothes".
-- Unless the text shows a character changing clothes, their outfit CARRIES OVER from the previous scene. Note "same as previous scene" with a one-line reminder of what that was.
+ABSOLUTE RULE #2 — VISUALS ONLY. NEVER include:
+- Sound: clink, rustle, groan, hum, buzz, patter, drip, hiss, splash, tap, moan, crunch, snap, ring, roar, shout, whisper
+- Smell: stink, scent, aroma, cologne, mildew, exhaust, brine, tang, reek, odor, musk
+- Taste: bitter, sweet, sour, metallic, cotton-dry mouth
+- Touch/feeling: chafe, chafe, chafing, throbbing, ache, pain, cool, warm, humid, damp, wet, slick, sticky, coarse, smooth, rough, soft, hard
+- Sensation: burn, sting, prickle, tingle, numb, heavy, light, tight, loose, pressure
+- Time/abstract: "quiet Sunday", "morning", "evening", "city hum", "distant traffic", ambient, filtering, any non-visible atmospheric
+- Inferred states: "commando inferred from haste", "unseen", "beneath clothing", internal body states
 
-APPEARANCE:
-- If described in text → enhance with specific details (exact colors in hex, textures, states)
-- If not described → infer based on context (rain = wet hair plastered to forehead, cold = reddened cheeks, etc.)
+If you CANNOT SEE IT in a photograph, DO NOT WRITE IT. Write ONLY what a camera would capture: shapes, colors, positions, expressions, surfaces, light.
 
-POSITIONING: Where each character is, what they're doing, body language — be specific about spatial relationships.
+ABSOLUTE RULE #3 — CHARACTER CONTINUITY WITH STRICT ATTIRE TRACKING:
+- If the text does NOT describe what a character is wearing → INFER appropriate clothing based on context and carry forward the outfit from the previous scene
+- If the text DOES describe a clothing change → enhance it with exact hex colors, fabric type, fit, condition
+- Do NOT carry forward a complete character description from a previous scene if the text shows them in a DIFFERENT physical space — they may have changed
+- Clothing must be described with VISUAL terms only: color (hex), fabric type, fit, length. Never describe what's "beneath" clothing or make inferences about what's not visible
 
-ENVIRONMENT: Location, weather, objects, lighting, surfaces — enhance with detail.
+ABSOLUTE RULE #4 — ENVIRONMENT ISOLATION:
+The environment section describes ONLY what exists in THIS scene's physical space. If the scene is inside the apartment, describe the apartment. If the scene is in the stairwell, describe the stairwell. If the scene is on the street, describe the street. NEVER list items from multiple locations in one block. NEVER write "Same apartment" followed by stairwell or outdoor items.
 
-MOOD/VIBE: Emotional temperature of the scene.
-
-FORMATTING RULES:
+FORMATTING:
 - PLAIN TEXT ONLY — no markdown, no bold (**), no asterisks (*), no headers (#), no italics
 - Use [SCENE: short description] to separate scenes
 - Use hyphens (-) for bullet points
@@ -5537,13 +5548,17 @@ ${plotContext}
 
 ${sceneNotes ? `SCENE DIRECTION: ${sceneNotes}` : ""}
 
-Produce the scene-by-scene visual world view. For each scene:
-1. Separate with [SCENE: description]
-2. List environment details
-3. List each character: clothing (enhance described clothing or INFER if not described), appearance (enhance or infer), positioning
-4. Note clothing continuity — if no change is described, carry forward the outfit from the previous scene with a brief reminder
+Produce the scene-by-scene visual world view. Follow these rules EXACTLY:
 
-INFER clothing when not described. ENHANCE clothing when described. Never say "not described" — always provide specific, detailed outfit information.` },
+SCENE BOUNDARY RULE: A new [SCENE] block starts whenever a character PHYSICALLY MOVES to a different space (apartment → stairwell → street). Each block describes ONLY the space the character occupies in that scene. If Ryker goes from the apartment kitchen into the bedroom alcove and comes back, that's still the SAME apartment scene — the alcove is part of the apartment. But if Ryker walks out the door into the stairwell, that's a NEW scene.
+
+For each scene:
+1. [SCENE: description] — state the EXACT physical location (apartment, stairwell, street, park, etc.)
+2. Environment — describe ONLY what exists in THIS location. Visual details only. No sounds, smells, or non-visual sensations.
+3. Each character: Clothing (enhance described clothing or INFER if not described), appearance (enhance or infer), positioning — all VISUAL ONLY
+4. Clothing continuity — if no change is described, carry forward the outfit from the previous scene
+
+CRITICAL: Every sentence must describe something visible. If a detail cannot be seen in a photograph, remove it. Write for an image renderer that is completely blind to sound, smell, touch, and taste` },
       ], { maxTokens: 40000, temperature: 0.3 });
 
       updateChapter(activeChapterIdx, { worldView: response || "" });
@@ -6274,21 +6289,49 @@ INFER clothing when not described. ENHANCE clothing when described. Never say "n
 				imagePromptAbortRef.current = abortController;
 				try {
 				  const aiPrompt = await callOpenRouter([
-                  { role: "system", content: `You are a professional photography director creating exact image generation prompts. You will receive a scene from a novel, character profiles with look-alike references, and location details. You must output a COMPLETE, SELF-CONTAINED image generation prompt with ZERO ambiguity — every detail fully resolved. The output will be pasted directly into an image AI with NO other context.
+                  { role: "system", content: `You are a professional photography director creating exact image generation prompts. You will receive a scene from a novel, character profiles with look-alike references, location details, and a chapter world view. You must output a COMPLETE, SELF-CONTAINED image generation prompt with ZERO ambiguity — every detail fully resolved. The output will be pasted directly into an image AI with NO other context.
+
+ABSOLUTE RULE #1 — VISUALS ONLY. NEVER include:
+- Sound: clink, rustle, groan, hum, buzz, patter, drip, hiss, tap, moan, crunch, splash
+- Smell: stink, scent, aroma, cologne, mildew, exhaust, brine, tang, reek, odor, musk, bay rum
+- Taste: bitter, sweet, sour, metallic, cotton-dry mouth, dry
+- Touch/feeling: chafe, chafing, throbbing, ache, burn, sting, cool, warm, humid, damp, wet, slick, sticky, coarse, smooth, rough, soft, hard, pressure, heavy
+- Sensation: tingle, numb, pain, pulse ticking, veins pulsing
+- Inferred states: "commando inferred", "beneath clothing", "unseen", internal body states
+- Abstract/non-visible: "city hum", "distant traffic", "quiet Sunday", ambient, filtering, "mildew", environmental mood words that describe what you'd HEAR or FEEL, not SEE
+
+If a camera cannot capture it, DO NOT WRITE IT. Write ONLY what a camera would capture: shapes, colors, positions, expressions, surfaces, light.
+
+ABSOLUTE RULE #2 — ONE LOCATION. The prompt describes EXACTLY ONE physical space. If the scene is inside an apartment, describe the apartment. If the scene is on the street, describe the street. Never mix items from different locations (no apartment furniture in a stairwell, no outdoor light on an indoor wall). The BACKDROP must be a single coherent space, not a mashup.
+
+ABSOLUTE RULE #3 — CLOTHING IS VISUAL. Describe clothing with: color (hex), fabric type, fit, length, condition (wet, rumpled, stained). Never describe what's underneath clothing or make inferences about hidden items. Never say "chafing", "inferred", "beneath", or describe skin contact with fabric.
+
+ABSOLUTE RULE #4 — MATCH SCENE TO SELECTED TEXT BY PHYSICAL SPACE:
+You receive a chapter world view containing MULTIPLE scenes. You must find the ONE scene that matches where the characters physically are in the selected text. To identify the correct scene:
+- Read the selected text. Determine: WHERE are the characters right now? What room/space are they standing in?
+- Find the world view scene whose Environment describes that same room/space.
+- If the selected text shows a character in an apartment bedroom alcove, the correct scene is the apartment scene — a bedroom alcove is a room INSIDE the apartment.
+- If the selected text shows a character emerging from a room into a hallway, they're still inside the apartment/building — find the scene that describes the interior they're in.
+- If the selected text shows a character walking out a door onto a street, THEN the correct scene is the outdoor scene.
+- NEVER pick a scene whose environment contains locations/items not mentioned or implied in the selected text. If the selected text has no stairs, no stairwell, no outdoor elements — do NOT pick the stairwell or outdoor scene.
+
+ABSOLUTE RULE #5 — "EMERGING" DOES NOT MEAN "LEAVING":
+When the selected text says a character "emerged from" a bedroom, alcove, bathroom, or any room — this means they stepped back into the room they were previously in (the apartment, the house, etc.). It does NOT mean they left the building. The backdrop stays the same space as before they went into the room. Only describe a location change if the text explicitly shows them going through an exterior door, down stairs, outside, etc.
+
+ABSOLUTE RULE #6 — PROPS DON'T TRAVEL AFTER BEING PUT DOWN:
+If the selected text shows a character putting down an object (setting down a mug, dropping a plate, leaving a bag), that object stays where it was put down. It does not appear in the character's hand in the next moment or in a different room. Track object state: if Ryker "set it down with a clink," the mug is on the counter in the apartment — it is NOT in his hand when he's getting dressed, and it is NOT in the stairwell.
 
 YOUR OUTPUT FORMAT (follow this EXACTLY):
 
-(1) CHARACTER APPEARANCE: For each character, describe their EXACT physical appearance using their look-alike as the face reference. Include: build, height, skin tone, hair, facial features, expression in THIS scene. Write it as if describing a real person to a photographer.
+(1) CHARACTER APPEARANCE: For each character, describe their EXACT physical appearance using their look-alike as the face reference. Include: build, height, skin tone, hair, facial features, expression in THIS scene. Write it as if describing a real person to a photographer. You must always mention the look-alike names for each character. VISUAL ONLY — no sound, no smell, no sensation.
 
-(2) CLOTHING: USE THE CLOTHING FROM THE WORLD VIEW — the world view tracks what characters are wearing scene-by-scene. Find the matching scene and use those exact clothing details. Do NOT invent new outfits. Describe EXACTLY what each character is wearing in this scene. Analyze the scene text for every clothing detail — fabric, color, fit, condition (wet, rumpled, torn, etc). If clothing isn't explicitly described, infer appropriate clothing from the context.
+(2) CLOTHING: USE THE CLOTHING FROM THE WORLD VIEW — the world view tracks what characters are wearing scene-by-scene. Find the matching scene and use those exact clothing details. Do NOT invent new outfits. Every detail must be something a camera can see: color, fabric, fit, condition. Never describe what's under the clothing.
 
-(3) Skip to (4)
+(4) ACTIVITY / POSE: Describe the EXACT physical positions, poses, gestures, and interactions. Who is where, doing what, touching what, looking where. Be specific about body angles, hand positions, weight distribution, and spatial relationships between characters. VISUAL ONLY — describe positions, not sensations.
 
-(4) ACTIVITY / POSE: Describe the EXACT physical positions, poses, gestures, and interactions. Who is where, doing what, touching what, looking where. Be specific about body angles, hand positions, weight distribution, and spatial relationships between characters.
+(5) BACKDROP / LOCATION: Describe the EXACT environment. ONE physical space only. If a detailed location spec is provided, use it verbatim. If the scene is outside or in an unregistered location, create a detailed environment description from context clues. Keep to what's physically present — objects, surfaces, light sources, colors, textures. No sounds, no smells, no weather sensations unless visible (rain droplets on surfaces are visible; "pattering" rain is not).
 
-(5) BACKDROP / LOCATION: Describe the EXACT environment. If a detailed location spec is provided, use it verbatim. If the scene is outside or in an unregistered location, create a detailed environment description from context clues (building exterior style, street details, weather, lighting fixtures, ground surface, surrounding objects).
-
-(6) TIME OF DAY: State the specific time and its lighting effects — sun angle, shadow direction, artificial light sources, color temperature, ambient light quality.
+(6) TIME OF DAY: State the specific time and its LIGHTING effects — sun angle, shadow direction, artificial light sources, color temperature of light, ambient light quality. Describe light, not weather sensations.
 
 (7) CAMERA SETTINGS: Specify lens, aperture, distance, framing, aspect ratio, and whether characters are cropped or full-body.
 
@@ -6298,46 +6341,42 @@ End with this EXACT paragraph:
 CRITICAL RULES:
 - NEVER say "analyze", "determine", "infer from context" — YOU must have already done the analysis
 - EVERY detail must be explicitly stated — the image AI is BLIND to your source material
-- Use look-alike names for face references (e.g. "whose face closely resembles [name]")
+- Must use look-alike names for face references (e.g. "whose face closely resembles [name]") and each character mentioned must have face references.
 - If world reference images exist, add "[Reference image attached]" and describe what the image shows
-- Be extremely specific about spatial relationships and body positioning` },
+- Be extremely specific about spatial relationships and body positioning
+- EVERY SENTENCE must describe something VISIBLE. If you catch yourself writing a sound, smell, or touch detail, DELETE IT and replace with a visual detail only.` },
                   { role: "user", content: `SCENE TEXT (this is the EXACT passage — build the prompt from THIS):
 ${effectiveText.slice(0, 12000)}
+${activeChapter?.worldView ? `\n\nCHAPTER WORLD VIEW (all scenes for this chapter — you must find the ONE scene that matches the selected text):
+${activeChapter.worldView}
+
+CRITICAL MATCHING RULE: Look at the SELECTED TEXT above. Identify exactly WHERE the characters physically are in that passage (apartment, stairwell, street, park, etc.). Find the ONE [SCENE] block in the world view that describes that same physical space. Use ONLY that block for clothing and environment details. Ignore all other blocks.` : ""}
 ${(() => {
-  const worldView = activeChapter?.worldView || "";
-  let extra = "";
-
-  if (worldView) {
-    // Pass the ENTIRE world view — the AI matches the scene itself
-    extra += `\n\nCHAPTER WORLD VIEW (scene-by-scene clothing and environment log — find the scene block that matches the selected text above and use THAT scene's details):\n${worldView}`;
-  }
-
-  // Location angle from world entry images
   const primaryWorld = contextData.primaryWorld;
-  if (primaryWorld) {
-    const refs = primaryWorld.referenceImages || {};
-    const availableAngles = Object.entries(refs).filter(([, v]) => v);
-    if (availableAngles.length > 0) {
-      const sceneType = contextData._sceneType || "narrative";
-      const anglePriority = {
-        action: ["wall_a", "wall_b"], dialogue: ["wall_a", "wall_c"],
-        intimate: ["wall_c", "wall_d"], emotional: ["wall_a", "wall_c"],
-      };
-      const priorities = anglePriority[sceneType] || ["wall_a", "wall_b", "wall_c", "wall_d"];
-      const selectedAngle = priorities.find(a => refs[a]) || availableAngles[0][0];
-      const wallLabels = { wall_a: "Entry View (facing into room from door)", wall_b: "Right Wall", wall_c: "Left Wall", wall_d: "Behind Entry (door wall)" };
-      const anglePrompt = (primaryWorld.imagePrompts || {})[selectedAngle] || "";
-
-      extra += `\n\nLOCATION: "${primaryWorld.name}" — using ${wallLabels[selectedAngle] || selectedAngle} angle.`;
-      if (anglePrompt) {
-        extra += `\nAngle-specific prompt for this view:\n${anglePrompt}`;
-      }
-      extra += `\n\n[Reference image ATTACHED — use this EXACT image as the backdrop/background. Insert the character(s) INTO this environment.]`;
-    }
-  }
-
-  return extra;
+  if (!primaryWorld) return "";
+  const refs = primaryWorld.referenceImages || {};
+  const availableAngles = Object.entries(refs).filter(([, v]) => v);
+  if (availableAngles.length === 0) return "";
+  const sceneType = contextData._sceneType || "narrative";
+  const anglePriority = {
+    action: ["wall_a", "wall_b"], dialogue: ["wall_a", "wall_c"],
+    intimate: ["wall_c", "wall_d"], emotional: ["wall_a", "wall_c"],
+  };
+  const priorities = anglePriority[sceneType] || ["wall_a", "wall_b", "wall_c", "wall_d"];
+  const selectedAngle = priorities.find(a => refs[a]) || availableAngles[0][0];
+  const wallLabels = { wall_a: "Entry View (facing into room from door)", wall_b: "Right Wall", wall_c: "Left Wall", wall_d: "Behind Entry (door wall)" };
+  const anglePrompt = (primaryWorld.imagePrompts || {})[selectedAngle] || "";
+  let loc = `\n\nLOCATION: "${primaryWorld.name}" — using ${wallLabels[selectedAngle] || selectedAngle} angle.`;
+  if (anglePrompt) loc += `\nAngle-specific prompt for this view:\n${anglePrompt}`;
+  loc += `\n\n[Reference image ATTACHED — use this EXACT image as the backdrop/background. Insert the character(s) INTO this environment.]`;
+  return loc;
 })()}
+
+WHERE IS THE SCENE? Read the selected text below and answer: What room or physical space are the characters standing in right now? Is it an apartment? A stairwell? A street? The answer determines which world view scene to use and what the backdrop must be.
+
+SCENE TEXT:
+${effectiveText.slice(0, 12000)}
+
 CHARACTER PROFILES (appearance, personality, look-alike for face reference):
 ${contextData.mentionedChars.map(c => {
   return `${c.name} (${c.role}, ${c.age || "?"} ${c.gender || ""}): Look-alike: ${c.lookAlike || "NOT SET"}. Appearance: ${c.appearance || "none"}. Personality: ${c.personality || "none"}`;
@@ -6514,10 +6553,28 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
             placeholder="Where is this scene going? Emotional goal? Who initiates?"
             className="nf-scene-textarea" aria-label="Scene direction notes" />
 		  {activeChapter?.worldView && (
-            <div style={{ marginTop: 4, fontSize: 9, color: "var(--nf-success)", display: "flex", alignItems: "center", gap: 4 }}>
-              <Icons.Check /> World view active — image prompts will include chapter context
-            </div>
-          )}
+		    <div style={{ marginTop: 6, padding: "8px 10px", background: "var(--nf-bg-deep)", border: "1px solid var(--nf-border)", borderRadius: 2 }}>
+			  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+			    <label style={{ fontSize: 9, fontWeight: 500, textTransform: "uppercase", letterSpacing: "0.1em", color: "var(--nf-success)" }}>
+				  Chapter World View
+			    </label>
+			    <span style={{ fontSize: 9, color: "var(--nf-text-muted)", fontFamily: "var(--nf-font-mono)" }}>
+				  {(activeChapter.worldView || "").length.toLocaleString()} chars
+			    </span>
+			  </div>
+			  <textarea
+			    value={activeChapter.worldView || ""}
+			    onChange={e => updateChapter(activeChapterIdx, { worldView: e.target.value })}
+			    placeholder="Chapter world view..."
+			    className="nf-textarea nf-textarea-sm"
+			    style={{
+				  minHeight: 80, maxHeight: 200, fontSize: 10, lineHeight: 1.5,
+				  fontFamily: "var(--nf-font-mono)", background: "var(--nf-bg-surface)",
+				  resize: "vertical",
+			    }}
+			  />
+		    </div>
+		  )}
         </div>
         <div style={{ display: "flex", gap: 8 }}>
           <textarea value={chatInput} onChange={e => setChatInput(e.target.value)}
