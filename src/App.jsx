@@ -183,17 +183,10 @@ const ImageUtils = {
   },
 
   async hashBase64(str) {
-    try {
-      const clean = str.split(",")[1] || str;
-      const bytes = Uint8Array.from(atob(clean), c => c.charCodeAt(0));
-      const hash = await crypto.subtle.digest("SHA-256", bytes);
-      return Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2, "0")).join("");
-    } catch {
-      // Fallback: simple string hash for malformed base64
-      let h = 0;
-      for (let i = 0; i < Math.min(str.length, 1000); i++) { h = ((h << 5) - h + str.charCodeAt(i)) | 0; }
-      return Math.abs(h).toString(16).padStart(8, "0");
-    }
+    const clean = str.split(",")[1] || str;
+    const bytes = Uint8Array.from(atob(clean), c => c.charCodeAt(0));
+    const hash = await crypto.subtle.digest("SHA-256", bytes);
+    return Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2, "0")).join("");
   },
 
   base64ToBlob(base64) {
@@ -462,8 +455,8 @@ const GDriveImages = {
     this._imageFolderId = null;
     this._hashToDriveId = {};
     this._driveIdToBase64 = {};
-    this._pathToBase64 = {};
-    this._pathToDriveId = {};
+    this._pathToBase64 = {};    // ← NEW: clear this too
+	this._pathToDriveId = {};
   },
 };
 
@@ -673,26 +666,19 @@ const renderMarkdown = (text) => {
   html = html.replace(/\n/g, '<br/>');
   // Restore code blocks
   codeBlocks.forEach((block, i) => { html = html.replace(`%%CODEBLOCK_${i}%%`, block); });
-  // Sanitize: strip any raw HTML-like patterns that survived escaping (e.g., from markdown edge cases)
-  // Since we escaped < and > at the start, this is defense-in-depth
   return html;
 };
 
 // H1: Memoization cache for rendered markdown
 const _mdCache = new Map();
-const _MD_CACHE_MAX = 200; // Increased from 100 for long sessions
+const _MD_CACHE_MAX = 100;
 const renderMarkdownCached = (text) => {
   if (!text) return "";
   if (_mdCache.has(text)) return _mdCache.get(text);
   const result = renderMarkdown(text);
   if (_mdCache.size >= _MD_CACHE_MAX) {
-    // Delete oldest entries (first 20% to avoid frequent evictions)
-    const deleteCount = Math.ceil(_MD_CACHE_MAX * 0.2);
-    const iter = _mdCache.keys();
-    for (let i = 0; i < deleteCount; i++) {
-      const key = iter.next().value;
-      if (key !== undefined) _mdCache.delete(key);
-    }
+    const firstKey = _mdCache.keys().next().value;
+    _mdCache.delete(firstKey);
   }
   _mdCache.set(text, result);
   return result;
@@ -1411,14 +1397,11 @@ const ContextEngine = {
         const isNearby = Math.abs(chNum - currentChNum) <= 2;
         // D4: For distant future chapters (>3 ahead), only show titles (no summaries/beats)
         const isFarFuture = chNum > currentChNum + 3;
-        // Show current and nearby chapters fully; skip distant future entirely
-        if (isFarFuture) return;
-        let prefix = isCurrent ? "[CURRENT] " : "  ";
+		if (chNum > currentChNum) return;
+        let prefix = isCurrent ? "[CURRENT] " : isNearby ? "  " : "  ";
         let line = `${prefix}Ch${chNum}: ${pl.title || "Untitled"}`;
         if (pl.pov) line += ` (POV: ${pl.pov})`;
-        // Show full details for current and nearby, titles only for future
-        const isNearFuture = chNum > currentChNum && chNum <= currentChNum + 3;
-        if (isCurrent || isNearby || !isNearFuture) {
+        if (!isFarFuture) {
           if (pl.summary) line += ` — ${pl.summary}`;
           // D1: Include beats for recent past chapters too (not just current/future)
           if (pl.beats && (isCurrent || isNearby)) {
@@ -1482,6 +1465,7 @@ const ContextEngine = {
       const chNum = this._chapterNum(project, i);
       const distance = currentChNum - chNum;
       const isRecent = distance <= lookbackWindow;
+	  console.log(`[MEMORY] Ch${i+1}: distance=${distance} isRecent=${isRecent} summary=${!!ch.summary}(${ch.summary?.length||0}) content=${!!ch.content}(${ch.content?.length||0})`);
 
       if (ch.summary) {
         if (!hasHistory) { parts.push(`\n<chapter_history>`); hasHistory = true; }
@@ -1838,8 +1822,8 @@ const ContextEngine = {
         // B9/B16: Include full relationship details — FIX 1.21/6.6: gate by meetsInChapter
         if (project.relationships?.length) {
           const chars = project.characters || [];
-          const tabCurrentChNum = this._chapterNum(project, chapterIdx);
-          const visibleRels = project.relationships.filter(r => !(r.meetsInChapter > 0 && tabCurrentChNum < r.meetsInChapter));
+          const currentChNum = this._chapterNum(project, chapterIdx)
+          const visibleRels = project.relationships.filter(r => !(r.meetsInChapter > 0 && currentChNum < r.meetsInChapter));
           if (visibleRels.length) {
             parts.push(`\n<existing_relationships>`);
             visibleRels.forEach(r => {
@@ -2089,10 +2073,6 @@ const Storage = {
       return true;
     } catch (e) {
       console.error("Save failed:", e);
-      // Detect quota exceeded errors from IDB
-      if (e?.name === "QuotaExceededError" || e?.message?.includes("quota")) {
-        return "quota";
-      }
       return false;
     }
   },
@@ -2952,7 +2932,7 @@ const RelationshipWebModal = memo(({ characters, relationships, onClose, povChar
   const onRelEnter = useCallback(rid => { clearTimeout(hoverTimer.current); setHoveredRel(rid); setHoveredNode(null); }, []);
   const onRelLeave = useCallback(() => { hoverTimer.current = setTimeout(() => setHoveredRel(null), 80); }, []);
   useEffect(() => () => clearTimeout(hoverTimer.current), []);
-  const procRels = useMemo(() => { const seen = {}; return (rels || []).filter(r => true).map(r => { const key = [r.char1, r.char2].sort().join("::"); if (!seen[key]) seen[key] = 0; seen[key]++; return { ...r, curveIdx: seen[key] - 1 }; }); }, [rels]);
+  const procRels = useMemo(() => { const seen = {}; return (rels || []).filter(r => !(r.meetsInChapter > 0 && r.meetsInChapter > 999)).map(r => { const key = [r.char1, r.char2].sort().join("::"); if (!seen[key]) seen[key] = 0; seen[key]++; return { ...r, curveIdx: seen[key] - 1 }; }); }, [rels]);
   const curvePath = (x1, y1, x2, y2, ci) => { if (ci === 0) return `M${x1},${y1}L${x2},${y2}`; const mx = (x1 + x2) / 2, my = (y1 + y2) / 2; const d = Math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2) || 1; const nx = -(y2 - y1) / d, ny = (x2 - x1) / d; const off = d * 0.12 * (ci % 2 === 0 ? 1 : -1) * Math.ceil((ci + 1) / 2); return `M${x1},${y1}Q${mx + nx * off},${my + ny * off},${x2},${y2}`; };
   const resetView = useCallback(() => { setNodes(computeWebLayout(chars, rels)); setPan({ x: 0, y: 0 }); setZoom(1); zoomRef.current = 1; setSelectedNode(null); setHoveredNode(null); setHoveredRel(null); }, [chars, rels]);
   if (!chars.length) return (<div style={{ position: "fixed", inset: 0, zIndex: 9997, background: "rgba(0,0,0,0.6)", backdropFilter: "blur(8px)", display: "flex", alignItems: "center", justifyContent: "center" }} onClick={onClose}><div onClick={e => e.stopPropagation()} style={{ background: "var(--nf-dialog-bg)", border: "1px solid var(--nf-dialog-border)", borderRadius: 3, padding: 40, textAlign: "center", color: "var(--nf-text-muted)", fontFamily: "var(--nf-font-display)", fontStyle: "italic" }}>Add characters first to see their connections</div></div>);
@@ -3192,8 +3172,7 @@ const _sceneCaption = (text, chapterIdx, chapterTitle) => {
 
 // Attach drag and delete handlers to an image wrapper element
 const _attachImageEvents = (fig, editorEl) => {
-  if (!fig || fig._nfEventsAttached) return;
-  fig._nfEventsAttached = true;
+  if (!fig) return;
 
   // Delete button
   const delBtn = fig.querySelector('.nf-img-del');
@@ -3252,17 +3231,9 @@ const _attachImageEvents = (fig, editorEl) => {
     moveClone(e);
 
     // Find drop target
-    let target;
-    if (document.caretRangeFromPoint) {
-      target = document.caretRangeFromPoint(e.clientX, e.clientY);
-    } else if (document.caretPositionFromPoint) {
-      const pos = document.caretPositionFromPoint(e.clientX, e.clientY);
-      if (pos) {
-        target = document.createRange();
-        target.setStart(pos.offsetNode, pos.offset);
-        target.collapse(true);
-      }
-    }
+    const target = document.caretRangeFromPoint
+      ? document.caretRangeFromPoint(e.clientX, e.clientY)
+      : null;
 
     if (target && editorEl.contains(target.startContainer) && target.startContainer !== fig) {
       if (placeholder.parentNode !== editorEl || !isAfter(placeholder, target)) {
@@ -3301,8 +3272,7 @@ const _attachImageEvents = (fig, editorEl) => {
 };
 
 const _attachBeatDragEvents = (markerEl, editorEl) => {
-  if (!markerEl || markerEl._nfDragAttached) return;
-  markerEl._nfDragAttached = true;
+  if (!markerEl) return;
   const label = markerEl.querySelector('.nf-beat-title-el');
   const handle = label || markerEl;
   let isDragging = false;
@@ -3340,18 +3310,7 @@ const _attachBeatDragEvents = (markerEl, editorEl) => {
       markerEl.classList.remove('dragging');
 
       // Find caret position at drop point
-      let range;
-      if (document.caretRangeFromPoint) {
-        range = document.caretRangeFromPoint(ev.clientX, ev.clientY);
-      } else if (document.caretPositionFromPoint) {
-        // Firefox fallback
-        const pos = document.caretPositionFromPoint(ev.clientX, ev.clientY);
-        if (pos) {
-          range = document.createRange();
-          range.setStart(pos.offsetNode, pos.offset);
-          range.collapse(true);
-        }
-      }
+      const range = document.caretRangeFromPoint(ev.clientX, ev.clientY);
       if (!range || !editorEl.contains(range.startContainer)) return;
 
       // Don't drop inside another marker
@@ -3372,6 +3331,7 @@ const _attachBeatDragEvents = (markerEl, editorEl) => {
 };
 
 // Detect which beat the cursor/caret is currently inside
+// Detect which beat the cursor/caret is currently inside
 const detectCursorBeat = (el) => {
   if (!el) return null;
   const markers = el.querySelectorAll('.nf-beat-marker');
@@ -3386,9 +3346,15 @@ const detectCursorBeat = (el) => {
   let activeBeatId = null;
   for (let i = markers.length - 1; i >= 0; i--) {
     const marker = markers[i];
-    // compareDocumentPosition: if cursorNode is AFTER marker, marker has DOCUMENT_POSITION_FOLLOWING
+    // Check if cursor is AT or AFTER this marker
     const pos = marker.compareDocumentPosition(cursorNode);
-    if (pos & Node.DOCUMENT_POSITION_FOLLOWING || pos & Node.DOCUMENT_POSITION_CONTAINED_BY) {
+    if (pos & Node.DOCUMENT_POSITION_FOLLOWING) {
+      activeBeatId = marker.getAttribute('data-beat-id');
+      break;
+    }
+    // Also handle: cursor is inside a sibling element that comes after the marker
+    // Check if the marker is an ancestor or if they share a common ancestor where marker comes first
+    if (pos === 0 || (pos & Node.DOCUMENT_POSITION_CONTAINED_BY)) {
       activeBeatId = marker.getAttribute('data-beat-id');
       break;
     }
@@ -3696,7 +3662,7 @@ const ModelSelector = memo(({ apiKey, value, onChange }) => {
 
   useEffect(() => {
     if (!open) return;
-    const handler = (e) => { if (dropdownRef.current && !dropdownRef.current.contains(e.target)) { setOpen(false); setSearch(""); } };
+    const handler = (e) => { if (dropdownRef.current && !dropdownRef.current.contains(e.target)) setOpen(false); };
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
   }, [open]);
@@ -4253,7 +4219,6 @@ export default function NovelForge() {
   const abortRef = useRef(null);
   const streamingContentRef = useRef("");
   const pendingSelectionRef = useRef("");
-  const chatMessagesRef = useRef([]);
   const _lastChapterPerProject = useRef({}); // C12: Remember last chapter per project
   const [undoState, undoDispatch] = useReducer(undoReducer, { past: [], future: [] });
 
@@ -4402,7 +4367,7 @@ export default function NovelForge() {
 
           const aligned = fixPlotAlignment(migrated); 
 		  setProjects(aligned);
-          setActiveProjectId(aligned[0]?.id || null);
+          setActiveProjectId(migrated[0].id);
         }
         if (s && typeof s === "object") {
           const knownKeys = ["apiKey", "model", "maxTokens", "temperature", "systemPrompt", "frequencyPenalty", "presencePenalty", "modelContextWindow"];
@@ -4422,20 +4387,15 @@ export default function NovelForge() {
     } catch(e) { console.error("Load:", e); }
     setIsLoaded(true);
     })();
-    // FIX: Multi-tab detection via BroadcastChannel (works with IDB unlike storage events)
-    // Use a single instance — BroadcastChannel only delivers to OTHER contexts using the same channel name
-    let bc;
-    try {
-      bc = new BroadcastChannel("novelforge-sync");
-      bc.onmessage = (e) => {
-        if (e.data === "data-changed") {
-          setToast({ message: "Data changed in another browser tab — reload this tab to avoid conflicts.", type: "error", key: Date.now() });
-        }
-      };
-      // Store on window so the save function can reuse the SAME instance
-      window._nfSyncChannel = bc;
-    } catch {}
-    return () => { try { bc?.close(); window._nfSyncChannel = null; } catch {} };
+    // FIX 8.3: Multi-tab detection — warn user visibly when data changes in another tab
+    const handleStorage = (e) => {
+      if (e.key === LS_PROJECTS && e.newValue !== null) {
+        // Another tab saved — show a persistent warning
+        setToast({ message: "Data changed in another browser tab — reload this tab to avoid conflicts.", type: "error", key: Date.now() });
+      }
+    };
+    window.addEventListener("storage", handleStorage);
+    return () => window.removeEventListener("storage", handleStorage);
   }, []);
 
   // ─── DEBOUNCED SAVE ───
@@ -4444,15 +4404,18 @@ export default function NovelForge() {
     const result = await Storage.saveProjects(p);
     if (result === "quota") {
       setSaveStatus("error");
+      // FIX 8.2: Critical — data was NOT saved. Notify user loudly.
       showToast("Storage full! Export your project as JSON immediately to avoid data loss.", "error");
+    } else if (result === "warning") {
+      setSaveStatus("saved");
+      // FIX 8.2: Data was saved but running low. Warn user.
+      showToast("Storage nearly full — link a JSON file in Settings to prevent data loss.", "error");
+      setTimeout(() => setSaveStatus(prev => prev === "saved" ? "idle" : prev), 4000);
     } else if (result) {
       setSaveStatus("saved");
-      // Notify other tabs of data change (same instance = won't self-notify)
-      try { window._nfSyncChannel?.postMessage("data-changed"); } catch {}
       setTimeout(() => setSaveStatus(prev => prev === "saved" ? "idle" : prev), 2000);
     } else {
       setSaveStatus("error");
-      showToast("Save failed — export your data as JSON to prevent loss.", "error");
     }
   }, SAVE_DEBOUNCE_MS), [showToast]);
 
@@ -4483,7 +4446,6 @@ export default function NovelForge() {
   useEffect(() => { settingsRef.current = settings; }, [settings]);
   useEffect(() => { themeRef.current = theme; }, [theme]);
   useEffect(() => { tabChatHistoriesRef.current = tabChatHistories; }, [tabChatHistories]);
-  useEffect(() => { chatMessagesRef.current = chatMessages; }, [chatMessages]);
 
   useEffect(() => {
     const handler = (e) => {
@@ -4598,7 +4560,7 @@ export default function NovelForge() {
     };
 
     return { fullPayload: contextPayload, tokenEstimate: totalTokenEstimate, sectionBreakdown, selectedMode: previewMode };
-  }, [project, activeChapterIdx, genMode, chatMessages, settings.modelContextWindow, activeBeatId]);
+  }, [project, activeChapterIdx, genMode, chatMessages]);
 
   // C5/C6: Bounds-check activeChapterIdx — only depends on length, not content
   useEffect(() => {
@@ -4654,20 +4616,15 @@ export default function NovelForge() {
     const [moved] = chs.splice(fromIdx, 1);
     chs.splice(toIdx, 0, moved);
     updateProject({ chapters: chs });
-    // I6: Correct index tracking after chapter reorder
+    // I6: Correct index tracking — track where the active chapter ended up after the splice
     if (activeChapterIdx === fromIdx) {
-      // The moved chapter goes to toIdx, but if moving forward, the removal
-      // shifts the target position left by 1
-      setActiveChapterIdx(fromIdx < toIdx ? toIdx - 1 : toIdx);
+      setActiveChapterIdx(toIdx);
     } else {
       let newIdx = activeChapterIdx;
-      if (fromIdx < toIdx) {
-        // Moving forward: items between (from, to] shift left by 1
-        if (activeChapterIdx > fromIdx && activeChapterIdx <= toIdx - 1) newIdx--;
-      } else {
-        // Moving backward: items between [to, from) shift right by 1
-        if (activeChapterIdx >= toIdx && activeChapterIdx < fromIdx) newIdx++;
-      }
+      // If active was after from, the splice shifted it left
+      if (activeChapterIdx > fromIdx) newIdx--;
+      // If active is at or after the insertion point, the insert shifted it right
+      if (newIdx >= toIdx) newIdx++;
       setActiveChapterIdx(newIdx);
     }
     lastSyncedChapterRef.current = null;
@@ -4678,11 +4635,8 @@ export default function NovelForge() {
   const lastContentRef = useRef(null);
   const lastContentChapterRef = useRef(null);
   
+    // ─── EDITOR CONTENT SYNC ───
   // B10: Debounce sync on input to avoid per-keystroke state updates
-  // FIX: Use ref for chapter index to avoid stale closure when debounce fires after chapter switch
-  const activeChapterIdxRef = useRef(activeChapterIdx);
-  useEffect(() => { activeChapterIdxRef.current = activeChapterIdx; }, [activeChapterIdx]);
-  
   const debouncedSyncEditor = useMemo(() => debounce(() => {
     const el = editorRef.current;
     if (!el) return;
@@ -4690,8 +4644,8 @@ export default function NovelForge() {
     // FIX 3: Update the sync ref BEFORE updating state, so the re-populate effect
     // doesn't see it as an external change and reset the cursor
     lastSyncedContentRef.current = html;
-    updateChapter(activeChapterIdxRef.current, { content: html });
-  }, 300), [updateChapter]);
+    updateChapter(activeChapterIdx, { content: html });
+  }, 300), [activeChapterIdx, updateChapter]);
   
   
   const pushUndo = useCallback(() => {
@@ -4714,7 +4668,7 @@ export default function NovelForge() {
     if (!undoState.past.length) return;
     const snap = undoState.past[undoState.past.length - 1];
     if (snap.chapterIdx !== activeChapterIdx) {
-      showToast("Undo is for a different chapter — switch to it first", "info");
+      showToast("Undo targets a different chapter", "error");
       return;
     }
     undoDispatch({ type: "undo", current: { chapterIdx: activeChapterIdx, content: activeChapter?.content || "" } });
@@ -4728,7 +4682,7 @@ export default function NovelForge() {
     if (!undoState.future.length) return;
     const snap = undoState.future[0];
     if (snap.chapterIdx !== activeChapterIdx) {
-      showToast("Redo is for a different chapter — switch to it first", "info");
+      showToast("Redo targets a different chapter", "error");
       return;
     }
     undoDispatch({ type: "redo", current: { chapterIdx: activeChapterIdx, content: activeChapter?.content || "" } });
@@ -4808,11 +4762,11 @@ export default function NovelForge() {
     if (!el) return;
     const html = el.innerHTML;
     lastSyncedContentRef.current = html;
-    updateChapter(activeChapterIdxRef.current, { content: html });
+    updateChapter(activeChapterIdx, { content: html });
     // Track which beat the cursor is in
     const beatId = detectCursorBeat(el);
     if (beatId) setActiveBeatId(beatId);
-  }, [updateChapter, debouncedSyncEditor]);
+  }, [activeChapterIdx, updateChapter, debouncedSyncEditor]);
 
   // Cleanup debounced sync on unmount
   useEffect(() => () => debouncedSyncEditor.cancel(), [debouncedSyncEditor]);
@@ -4837,17 +4791,16 @@ export default function NovelForge() {
     if (needsRepopulate) {
       lastSyncedChapterRef.current = key;
       lastSyncedContentRef.current = content;
+      setTimeout(() => {
+        el.querySelectorAll('figure.nf-img-wrapper').forEach(fig => _attachImageEvents(fig, el));
+		el.querySelectorAll('.nf-beat-marker').forEach(m => _attachBeatDragEvents(m, el));
+      }, 100);
       const looksLikeHtml = /<\/?(?:p|div|br|h[1-6]|ul|ol|li|strong|em|span|hr|blockquote|pre|code)\b/i.test(content);
       if (looksLikeHtml) {
         el.innerHTML = content;
       } else {
         el.innerHTML = content ? content.split("\n\n").map(p => `<p>${p.replace(/\n/g, "<br/>")}</p>`).join("") : "";
       }
-      // Attach event handlers after DOM is updated (use rAF for reliable timing)
-      requestAnimationFrame(() => {
-        el.querySelectorAll('figure.nf-img-wrapper').forEach(fig => _attachImageEvents(fig, el));
-        el.querySelectorAll('.nf-beat-marker').forEach(m => _attachBeatDragEvents(m, el));
-      });
     } else {
       lastSyncedContentRef.current = content;
     }
@@ -4856,11 +4809,10 @@ export default function NovelForge() {
   // ─── API CALLS ───
   const callOpenRouterStream = useCallback(async (messages, opts = {}) => {
     if (!settings.apiKey) throw new Error("Set your OpenRouter API key in Settings first.");
-    // E4: Abort any existing streaming request before starting new one
-    const existingController = abortRef.current;
+    // E4: Abort any existing request before starting new one
+    if (abortRef.current) { try { abortRef.current.abort(); } catch {} }
     const controller = new AbortController();
     abortRef.current = controller;
-    if (existingController) { try { existingController.abort(); } catch {} }
     // E8: Wrap in retryable fetch
     const res = await _retryableFetch(async () => {
       const r = await fetch("https://openrouter.ai/api/v1/chat/completions", {
@@ -4887,6 +4839,8 @@ export default function NovelForge() {
   const callOpenRouter = useCallback(async (messages, opts = {}) => {
     if (!settings.apiKey) throw new Error("Set your OpenRouter API key in Settings first.");
     const controller = new AbortController();
+    // Store in a local ref so callers can abort if needed
+    const abortableResult = { controller };
     // E8: Wrap in retryable fetch
     const data = await _retryableFetch(async () => {
       const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
@@ -4983,7 +4937,7 @@ ${craftFocus}
 
     // F10: User directives sandwiched between context (high position) and actual content
     return `${directives}\n\n${novelContext}${customDirectives}`;
-  }, [project, activeChapterIdx, settings.systemPrompt, settings.modelContextWindow, genMode]);
+  }, [project, activeChapterIdx, settings.systemPrompt, settings.modelContextWindow]);
 
   // F2/F7/F14: Mode prompts now adapt to scene type and give clearer instructions
   const getModePrompt = useCallback((mode) => {
@@ -5025,7 +4979,7 @@ Then 2-3 sentences describing the specific scene idea, character actions, and em
       default:
         return "";
     }
-  }, [project?.plotOutline, project?.chapters, activeChapterIdx]);
+  }, [project?.plotOutline, activeChapterIdx]);
 
   // Keep backward-compatible modePrompts object for UI tooltips and default messages
   const modePrompts = useMemo(() => ({
@@ -5104,11 +5058,7 @@ Then 2-3 sentences describing the specific scene idea, character actions, and em
     if (editorRef.current) { debouncedSyncEditor.cancel(); syncEditorContent(); }
     setIsGenerating(true); setStreamingContent(""); streamingContentRef.current = "";
     const userMsgObj = { id: uid(), role: "user", content: userMsg, mode: genMode, chapterIdx: activeChapterIdx };
-    setChatMessages(prev => {
-      const updated = [...prev.slice(-(CHAT_HISTORY_LIMIT - 1)), userMsgObj];
-      chatMessagesRef.current = updated;
-      return updated;
-    });
+    setChatMessages(prev => [...prev.slice(-(CHAT_HISTORY_LIMIT - 1)), userMsgObj]);
     setChatInput("");
 
     try {
@@ -5136,11 +5086,10 @@ Then 2-3 sentences describing the specific scene idea, character actions, and em
         contextualUserMsg = `<author_direction priority="highest">\n${userMsg}\n</author_direction>\n\n${contextualUserMsg}`;
       }
 
-      // FIX 2.6: Use ref to get latest messages to avoid stale closure
-      const latestMessages = chatMessagesRef.current;
-      const currentChapterMsgs = latestMessages.filter(m => !m.isError && m.chapterIdx === activeChapterIdx);
+      // FIX 2.6: Include current chapter messages + recent cross-chapter brainstorm/arc messages
+      const currentChapterMsgs = chatMessages.filter(m => !m.isError && m.chapterIdx === activeChapterIdx);
       // Also include recent brainstorm/summarize messages from adjacent chapters (story-level context)
-      const crossChapterMsgs = latestMessages.filter(m =>
+      const crossChapterMsgs = chatMessages.filter(m =>
         !m.isError && m.chapterIdx !== activeChapterIdx &&
         (m.mode === "brainstorm" || m.mode === "summarize") &&
         m.role === "assistant"
@@ -5196,14 +5145,8 @@ Then 2-3 sentences describing the specific scene idea, character actions, and em
       if (err.name === "AbortError") {
         const partial = stripThinkingTokens(streamingContentRef.current);
         if (partial) {
-          // Find last complete sentence in partial content
-          const sentenceEndRegex = /[.!?]["'»)]*\s*/g;
-          let lastSentenceEnd = -1;
-          let match;
-          while ((match = sentenceEndRegex.exec(partial)) !== null) {
-            lastSentenceEnd = match.index + match[0].length;
-          }
-          const cleanPartial = lastSentenceEnd > partial.length * 0.3 ? partial.slice(0, lastSentenceEnd) : partial;
+          const sentenceEnd = partial.search(/[.!?]["'»)]*\s*$/);
+          const cleanPartial = sentenceEnd > partial.length * 0.3 ? partial.slice(0, sentenceEnd + 1) : partial;
           if (cleanPartial.trim()) {
             setChatMessages(prev => [...prev, { id: uid(), role: "assistant", content: cleanPartial.trim() + "\n\n*[generation stopped]*", mode: genMode, chapterIdx: activeChapterIdx, isPartial: true }]);
           }
@@ -5215,7 +5158,7 @@ Then 2-3 sentences describing the specific scene idea, character actions, and em
     }
     setStreamingContent(""); streamingContentRef.current = "";
     abortRef.current = null; setIsGenerating(false);
-  }, [isGenerating, chatInput, genMode, getModePrompt, buildSystemPrompt, callOpenRouterStream, processStream, selectedText, showToast, syncEditorContent, activeChapterIdx, updateChapter, debouncedSyncEditor, settings.apiKey]);
+  }, [isGenerating, chatInput, genMode, getModePrompt, buildSystemPrompt, chatMessages, callOpenRouterStream, processStream, selectedText, showToast, syncEditorContent, activeChapterIdx, updateChapter]);
 
   // ─── KEYBOARD SHORTCUTS ───
   useEffect(() => {
@@ -5278,10 +5221,7 @@ const insertBeatMarker = useCallback((beatId, beatTitle, beatDescription) => {
   const desc = (beatDescription || "").slice(0, 200).replace(/"/g, '&quot;').replace(/</g, '&lt;');
   const title = (beatTitle || "Beat").replace(/"/g, '&quot;');
   const marker = `<div class="nf-beat-marker" contenteditable="false" data-beat-id="${beatId}" data-beat-title="${title}" data-beat-desc="${desc}"></div>`;
-  el.insertAdjacentHTML('beforeend', marker);
-  // Attach drag events to the newly inserted marker
-  const newMarker = el.querySelector(`.nf-beat-marker[data-beat-id="${beatId}"]`);
-  if (newMarker) _attachBeatDragEvents(newMarker, el);
+  el.innerHTML += marker;
   lastSyncedContentRef.current = el.innerHTML;
   updateChapter(activeChapterIdx, { content: el.innerHTML });
 }, [activeChapterIdx, updateChapter]);
@@ -5291,17 +5231,18 @@ const appendToChapter = useCallback((text) => {
   pushUndo();
   const el = editorRef.current;
   if (el) {
-    const htmlToInsert = "<br/><br/>" + _markdownToEditorHtml(text);
     // If there's an active beat, insert after the active beat marker
     if (activeBeatId) {
       const activeMarker = el.querySelector(`.nf-beat-marker[data-beat-id="${activeBeatId}"]`);
       if (activeMarker) {
-        activeMarker.insertAdjacentHTML('afterend', htmlToInsert);
+        const contentNode = document.createElement('div');
+        contentNode.innerHTML = "<br/><br/>" + _markdownToEditorHtml(text);
+        activeMarker.after(contentNode);
       } else {
-        el.insertAdjacentHTML('beforeend', htmlToInsert);
+        el.innerHTML += "<br/><br/>" + _markdownToEditorHtml(text);
       }
     } else {
-      el.insertAdjacentHTML('beforeend', htmlToInsert);
+      el.innerHTML += "<br/><br/>" + _markdownToEditorHtml(text);
     }
     syncEditorContent();
     lastSyncedContentRef.current = el.innerHTML;
@@ -5374,7 +5315,7 @@ const appendToChapter = useCallback((text) => {
         onInsertAtCursor: () => { insertAtCursor(content); setDiffReview(null); },
       });
     }
-  }, [selectedText, replaceSelection, appendToChapter, insertAtCursor, activeChapterIdx, updateChapter, showToast]);
+  }, [selectedText, replaceSelection, appendToChapter, insertAtCursor]);
 
   // ─── CHARACTER SUGGESTION HANDLERS ───
   const handleAcceptSuggestion = useCallback((suggestionId) => {
@@ -5424,37 +5365,13 @@ const appendToChapter = useCallback((text) => {
     const pending = charSuggestions.items.filter(s => s.status === "pending");
     const directReplaceFields = new Set(["status", "statusChangedChapter"]);
 
-    // FIX: Batch all updates into a single setProjects call to avoid reading stale state
-    setProjects(prev => prev.map(p => {
-      if (p.id !== activeProjectId) return p;
-      const characters = p.characters.map(c => {
-        const charUpdates = pending.filter(s => s.charId === c.id);
-        if (charUpdates.length === 0) return c;
-        const updated = { ...c };
-        for (const s of charUpdates) {
-          const currentValue = updated[s.field] || "";
-          if (directReplaceFields.has(s.field) || !currentValue.trim()) {
-            updated[s.field] = s.suggested;
-          } else {
-            const currentNorm = currentValue.trim().toLowerCase();
-            const suggestedNorm = s.suggested.trim().toLowerCase();
-            if (!suggestedNorm.includes(currentNorm.slice(0, Math.min(50, currentNorm.length)))) {
-              updated[s.field] = `${currentValue.trim()}\n[Ch${(charSuggestions.chapterIdx || 0) + 1}]: ${s.suggested.trim()}`;
-            } else {
-              updated[s.field] = s.suggested;
-            }
-          }
-        }
-        return updated;
-      });
-      return { ...p, characters };
-    }));
-
-    // Build applied items for status tracking
-    const appliedItems = pending.map(s => {
+    // FIX: Process in order, re-reading current value each time (earlier accepts may have changed it)
+    const appliedItems = [];
+    for (const s of pending) {
       const char = project?.characters?.find(c => c.id === s.charId);
       const currentValue = char ? (char[s.field] || "") : "";
       let finalValue = s.suggested;
+
       if (!directReplaceFields.has(s.field) && currentValue.trim()) {
         const currentNorm = currentValue.trim().toLowerCase();
         const suggestedNorm = s.suggested.trim().toLowerCase();
@@ -5462,8 +5379,10 @@ const appendToChapter = useCallback((text) => {
           finalValue = `${currentValue.trim()}\n[Ch${(charSuggestions.chapterIdx || 0) + 1}]: ${s.suggested.trim()}`;
         }
       }
-      return { ...s, applied: finalValue };
-    });
+
+      updateCharById(s.charId, s.field, finalValue);
+      appliedItems.push({ ...s, applied: finalValue });
+    }
 
     setCharSuggestions(prev => prev ? {
       ...prev,
@@ -5473,7 +5392,7 @@ const appendToChapter = useCallback((text) => {
       }),
     } : null);
     showToast(`Applied ${pending.length} character update${pending.length !== 1 ? "s" : ""}`, "success");
-  }, [charSuggestions, activeProjectId, showToast, project?.characters]);
+  }, [charSuggestions, updateCharById, showToast, project?.characters]);
 
   const handleRejectAllSuggestions = useCallback(() => {
     setCharSuggestions(prev => prev ? {
@@ -5625,14 +5544,15 @@ const appendToChapter = useCallback((text) => {
   }, [selectedText, settings.apiKey, project?.characters, callOpenRouter, showToast, replaceSelection]);
 
   const autoSummarizeChapter = useCallback(async (idx) => {
-    const ch = project?.chapters?.[idx];
     const chNum = (() => {
-      if (ch?.linkedPlotId) {
-        const plot = (project?.plotOutline || []).find(pl => pl.id === ch.linkedPlotId);
-        if (plot?.chapter) return plot.chapter;
-      }
-      return idx + 1;
-    })();
+	 const ch = project?.chapters?.[idx];
+	 if (ch?.linkedPlotId) {
+		 const plot = (project?.plotOutline || []).find(pl => pl.id === ch.linkedPlotId);
+		 if (plot?.chapter) return plot.chapter;
+	 }
+	 return idx + 1;
+	 })();
+	const ch = project?.chapters?.[idx];
     if (!ch?.content || wordCount(ch.content) < 50) { showToast("Chapter too short", "error"); return; }
     setIsSummarizing(true);
     try {
@@ -5995,7 +5915,7 @@ If no relationship changes, respond "No relationship updates needed."` },
         const data = await GDrive.loadFromDrive();
         if (data && data.projects?.length > 0) {
           // Check if Drive backup is newer or has more data than local
-          const localProjectCount = projectsRef.current.length;
+          const localProjectCount = projects.length;
           const driveProjectCount = data.projects.length;
           const driveSavedAt = data._savedAt ? new Date(data._savedAt) : null;
 
@@ -6045,7 +5965,7 @@ If no relationship changes, respond "No relationship updates needed."` },
     } catch (e) {
       showToast(`Drive connect failed: ${e.message}`, "error");
     }
-  }, [gdriveClientId, showToast, setProjects, setActiveProjectId, setSettings, setTabChatHistories, setGdriveConnected, setGdriveLastSync]);
+  }, [gdriveClientId, showToast, projects.length, setProjects, setActiveProjectId, setSettings, setTabChatHistories, setGdriveConnected, setGdriveLastSync]);
 
   const handleFlushAll = useCallback(async () => {
     // 1. Save unsaved editor content to state before flushing
@@ -6070,14 +5990,11 @@ If no relationship changes, respond "No relationship updates needed."` },
         const req = indexedDB.deleteDatabase(IDB_DB_NAME);
         req.onsuccess = () => resolve();
         req.onerror = () => reject(req.error);
-        req.onblocked = () => {
-          // Force close any open connections
-          if (_idb._db) { _idb._db.close(); _idb._db = null; }
-          resolve();
-        };
+        req.onblocked = () => resolve(); // Proceed even if blocked
       });
-      // Reset IDB singleton so it reopens fresh
-      _idb._db = null;
+      localStorage.removeItem(LS_PROJECTS);
+      localStorage.removeItem(LS_SETTINGS);
+      localStorage.removeItem(LS_TAB_CHATS);
     } catch (e) { console.error("Flush failed:", e); }
 
     // 3. Disconnect Google Drive and clear image caches
@@ -6139,7 +6056,7 @@ If no relationship changes, respond "No relationship updates needed."` },
     if (!ch?.content || wordCount(ch.content) < 20) { showToast("Write some content first", "error"); return; }
 
     const plain = _htmlToPlain(ch.content);
-    const currentChNum = ContextEngine._chapterNum(project, activeChapterIdx);
+    const currentChNum = this._chapterNum(project, chapterIdx);
 
     // Previous chapter's world view for consistency
     let prevWorldView = "";
@@ -6305,7 +6222,6 @@ CRITICAL: Every sentence must describe something visible. If a detail cannot be 
       pov: ch.pov || "",
       notes: "",
       worldView: "",
-      linkedPlotId: ch.linkedPlotId || "",
     };
     updateProject({ chapters, drafts });
     lastSyncedChapterRef.current = null;
@@ -6339,7 +6255,6 @@ CRITICAL: Every sentence must describe something visible. If a detail cannot be 
     const chapters = [...(project?.chapters || [])];
     chapters[targetIdx] = {
       id: chapters[targetIdx]?.id || uid(),
-      linkedPlotId: chapters[targetIdx]?.linkedPlotId || "",
       title: draft.title,
       content: draft.content,
       summary: draft.summary || "",
@@ -6357,23 +6272,9 @@ CRITICAL: Every sentence must describe something visible. If a detail cannot be 
 
   const handleDeleteDraft = useCallback((draftId) => {
     const d = (project?.drafts || []).find(x => x.id === draftId);
-    const draftTitle = d?.title || "Untitled";
-    setConfirmDialog({
-      message: `Delete draft "${draftTitle}"? This cannot be undone.`,
-      confirmLabel: "Delete Draft",
-      onConfirm: () => {
-        updateProject({ drafts: (project?.drafts || []).filter(x => x.id !== draftId) });
-        if (viewingDraftId === draftId) {
-          setViewingDraftId(null);
-          lastSyncedChapterRef.current = null;
-          lastSyncedContentRef.current = null;
-        }
-        showToast(`Deleted draft of "${draftTitle}"`, "success");
-        setConfirmDialog(null);
-      },
-      onCancel: () => setConfirmDialog(null),
-    });
-  }, [project, updateProject, showToast, viewingDraftId]);
+    updateProject({ drafts: (project?.drafts || []).filter(x => x.id !== draftId) });
+    showToast(d ? `Deleted draft of "${d.title}"` : "Draft deleted", "success");
+  }, [project, updateProject, showToast]);
   
   const handleViewDraft = useCallback((draftId) => {
     const draft = (project?.drafts || []).find(d => d.id === draftId);
@@ -6581,20 +6482,19 @@ CRITICAL: Every sentence must describe something visible. If a detail cannot be 
   useEffect(() => {
     if (gdriveAutoSync && gdriveConnected && gdriveSyncInterval > 0) {
       gdriveSyncTimerRef.current = setInterval(async () => {
-        if (!GDrive.isConnected() || projectsRef.current.length === 0) return;
+        if (!GDrive.isConnected() || projects.length === 0) return;
         try {
-          const currentProjects = projectsRef.current;
           const allImages = [];
-          for (const proj of currentProjects) allImages.push(...(await GDriveImages.collectAllImages(proj)));
+          for (const proj of projects) allImages.push(...(await GDriveImages.collectAllImages(proj)));
           if (allImages.length > 0) await GDriveImages.syncUpload(allImages);
 
-          const projectsForDrive = currentProjects.map(p => GDriveImages.markImages(JSON.parse(JSON.stringify(p))));
+          const projectsForDrive = projects.map(p => GDriveImages.markImages(JSON.parse(JSON.stringify(p))));
 
-          // Use refs to get latest data
+          // ✅ Use the SAME keys as the manual sync handler
           await GDrive.saveToDrive({
             projects: projectsForDrive,
-            settings: settingsRef.current,
-            tabChats: tabChatHistoriesRef.current,
+            settings,
+            tabChats: tabChatHistories,
             _hashToDriveId: GDriveImages._hashToDriveId,
             _pathToDriveId: GDriveImages._pathToDriveId,
             _format: "novelforge-backup-v2",
@@ -6611,7 +6511,7 @@ CRITICAL: Every sentence must describe something visible. If a detail cannot be 
       }, gdriveSyncInterval * 60 * 1000);
       return () => clearInterval(gdriveSyncTimerRef.current);
     }
-  }, [gdriveAutoSync, gdriveConnected, gdriveSyncInterval]);
+  }, [gdriveAutoSync, gdriveConnected, gdriveSyncInterval, projects, settings, tabChatHistories]);
  
   useEffect(() => {
     if (settings.googleClientId) { setGdriveClientId(settings.googleClientId); GDrive.setClientId(settings.googleClientId); }
@@ -7174,7 +7074,7 @@ YOUR OUTPUT FORMAT (follow this EXACTLY):
 
 (1) CHARACTER APPEARANCE: For each character, describe their EXACT physical appearance using their look-alike as the face reference. Include: build, height, skin tone, hair, facial features, expression in THIS scene. Write it as if describing a real person to a photographer. You must always mention the look-alike names for each character. VISUAL ONLY — no sound, no smell, no sensation.
 
-(2) CLOTHING: USE THE CLOTHING FROM THE WORLD VIEW — the world view tracks what characters are wearing scene-by-scene. Find the matching scene and use those exact clothing details. Do NOT invent new outfits. Every detail must be something a camera can see: color, fabric, fit, condition. Never describe what's under the clothing.
+(2) CLOTHING: USE THE CLOTHING FROM THE WORLD VIEW — the world view tracks what characters are wearing scene-by-scene. Find the matching scene and use those exact clothing details. Do NOT invent new outfits. Every detail must be something a camera can see: color, fabric, fit, condition. Never describe what's under the clothing. Treats nudity like this: add a foreground blurred item(s) that blocks that specific sensitive body part without mentioning those body part(s).
 
 (4) ACTIVITY / POSE: Describe the EXACT physical positions, poses, gestures, and interactions. Who is where, doing what, touching what, looking where. Be specific about body angles, hand positions, weight distribution, and spatial relationships between characters. VISUAL ONLY — describe positions, not sensations.
 
@@ -7273,7 +7173,7 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
 - Add legitimate reasons: "magazine photoshoot", "sports competition prep", "film production still" - and/or anything safe or safer or funny (massage is not safe)
 - Reframe relationships: "coach", "trainer", "brother", "team member" - and/or anything safer
 - Replace revealing clothing with athletic equivalents: "competition-standard athletic wear"
-- Change nudity into this specific clothing: mesh wrestling briefs — made from nylon-spandex mesh with reinforced pouch, high-rise (1cm outseam), slim fit, color: #ffdbac. Do not mention they do not wear anything else or other suggestive additions.
+- Treats nudity like this -> use this specific clothing: mesh wrestling briefs — made from nylon-spandex mesh with reinforced pouch, high-rise (1cm outseam), slim fit, color same with his/her arm's melanin, and then add a foreground blurred item that blocks that specific sensitive body part without mentioning the body part(s). Do not mention they do not wear anything else or other suggestive additions.
 - Reframe all the explicit or NSFW actions to safe activities that yield similar physical positioning and double it with safe or funny intent (if kissing, then say that the other one is his wife/husband. if being tied, then say the tied guy has agreed to be punished if he is late, and he is actually late, etc)
 - If anal with fingering, then maybe we can try scratching (you know when your butthole is itchy?) but frame it funnily.
 - Strictly no genital or sensitive body language, say other normal body parts in latin language or referencing normal location (e.g. nipple should be changed to center of upper chest) -- you must not make the reader realize there are body parts mentioned
@@ -7375,13 +7275,13 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                 {msg.isError && (
                   <div className="nf-chat-actions">
                     <button onClick={() => {
-                      // FIX: Find the last user message and re-send directly
+                      // FIX 2.10: Find the last user message and re-inject its content into chatInput, then generate
                       const lastUser = [...chatMessages].reverse().find(m => m.role === "user");
                       if (lastUser) {
-                        // Remove error message, then re-send the last user message content
                         setChatMessages(prev => prev.filter(m => m.id !== msg.id));
-                        // Set input and let user click send (avoids stale closure timing issues)
                         setChatInput(lastUser.content);
+                        // Trigger generate on next tick after state updates
+                        setTimeout(() => handleGenerate(), 50);
                       }
                     }} className="nf-btn-micro" style={{ borderColor: "var(--nf-accent)" }}>↻ Retry</button>
                     <button onClick={() => setChatMessages(prev => prev.filter(m => m.id !== msg.id))} className="nf-btn-micro"><Icons.X /> Dismiss</button>
@@ -7509,7 +7409,7 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
             {project?.chapters?.map((ch, i) => (
               <div key={ch.id || i}>
                 <div onClick={() => {
-                  if (viewingDraftId) { handleCloseDraft(); setSelectedText(""); setSelectionRange(null); }
+                  if (viewingDraftId) { handleCloseDraft(); }
                   if (i !== activeChapterIdx) { pushUndo(); syncEditorContent(); setActiveChapterIdx(i); lastSyncedChapterRef.current = null; setSelectedText(""); setSelectionRange(null); }
                 }}
                   draggable
@@ -8019,7 +7919,7 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                     : `Inserted ${newBeats.length} beat markers`,
                   "success"
                 );
-              }} className="nf-btn-icon-sm" disabled={!ContextEngine._plotEntryForChapter(project, activeChapterIdx)?.beats?.length}>
+              }} className="nf-btn-icon-sm" disabled={!project?.plotOutline?.some(pl => (pl.chapter || 0) === activeChapterIdx + 1 && Array.isArray(pl.beats) && pl.beats.length > 0)}>
                 <Icons.List /> Beats
               </button>
             </Tooltip>
@@ -8037,19 +7937,9 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
               <button onClick={() => setConfirmDialog({
                 message: `Delete "${activeChapter?.title}"?`,
                 onConfirm: () => {
-                  const deletedIdx = activeChapterIdx;
-                  const chs = project.chapters.filter((_, i) => i !== deletedIdx);
-                  // Fix draft originalIndex references after deletion
-                  const fixedDrafts = (project.drafts || []).map(d => {
-                    if (d.originalIndex === deletedIdx) return { ...d, originalIndex: -1 }; // orphan it
-                    if (d.originalIndex > deletedIdx) return { ...d, originalIndex: d.originalIndex - 1 };
-                    return d;
-                  });
-                  updateProject({
-                    chapters: chs.length ? chs : [{ id: uid(), title: "Chapter 1", content: "", summary: "", notes: "", sceneNotes: "", pov: "", summaryGeneratedAt: "", worldView: "", linkedPlotId: "" }],
-                    drafts: fixedDrafts,
-                  });
-                  setActiveChapterIdx(Math.min(deletedIdx, Math.max(0, chs.length - 1)));
+                  const chs = project.chapters.filter((_, i) => i !== activeChapterIdx);
+                  updateProject({ chapters: chs.length ? chs : [{ id: uid(), title: "Chapter 1", content: "", summary: "", notes: "", sceneNotes: "", pov: "", summaryGeneratedAt: "" }] });
+                  setActiveChapterIdx(Math.min(activeChapterIdx, Math.max(0, chs.length - 1)));
                   lastSyncedChapterRef.current = null; setConfirmDialog(null); showToast("Deleted", "success");
                 },
               })} className="nf-btn-icon-sm nf-btn-icon-danger" aria-label="Delete chapter"><Icons.Trash /></button>
@@ -8106,10 +7996,6 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                 if (mod && e.key === 'b') { e.preventDefault(); document.execCommand('bold'); syncEditorContent(); }
                 else if (mod && e.key === 'i') { e.preventDefault(); document.execCommand('italic'); syncEditorContent(); }
                 else if (mod && e.shiftKey && e.key === 'x') { e.preventDefault(); document.execCommand('strikeThrough'); syncEditorContent(); }
-                // Intercept Ctrl+Z/Ctrl+Shift+Z to use our undo system instead of browser's
-                else if (mod && !e.shiftKey && e.key === 'z') { e.preventDefault(); handleUndo(); }
-                else if (mod && e.shiftKey && e.key === 'z') { e.preventDefault(); handleRedo(); }
-                else if (mod && e.key === 'y') { e.preventDefault(); handleRedo(); }
               }}
               onPaste={(e) => {
                 // Check for image data in clipboard
@@ -8125,14 +8011,14 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                       reader.onload = (ev) => {
                         const caption = _sceneCaption(selectedText, activeChapterIdx, activeChapter?.title);
 						const imgHtml = `<figure class="nf-img-wrapper" contenteditable="false" style="text-align:center;margin:20px 0;position:relative;display:inline-block;max-width:100%"><span class="nf-img-handle">⠿ drag</span><span class="nf-img-actions"><button class="nf-img-del" title="Delete image">✕</button></span><img src="${ev.target.result}" style="max-width:100%;border-radius:2px;box-shadow:0 2px 12px rgba(0,0,0,0.15)" alt="${caption.replace(/"/g, "&quot;")}" draggable="false" /><figcaption class="nf-img-caption" style="font-size:10px;color:var(--nf-text-muted);font-style:italic;margin-top:4px;padding-top:4px;border-top:1px solid var(--nf-border);text-align:center">${caption}</figcaption></figure>`;
-						const editorNode = editorRef.current;
-						if (editorNode) {
-						  editorNode.focus();
-						  document.execCommand('insertHTML', false, `<p>${imgHtml}</p>`);
-                          syncEditorContent();
-                          // Attach event handlers to the newly inserted image
-                          const newFig = editorNode.querySelector('figure.nf-img-wrapper:last-of-type');
-                          if (newFig) _attachImageEvents(newFig, editorNode);
+						el.focus();
+						document.execCommand('insertHTML', false, `<p>${imgHtml}</p>`);
+                        syncEditorContent();
+                        // Attach event handlers to the newly inserted image
+                        const el = editorRef.current;
+                        if (el) {
+                          const newFig = el.querySelector('figure.nf-img-wrapper:last-of-type');
+                          if (newFig) _attachImageEvents(newFig, el);
                         }
                       };
                       reader.readAsDataURL(file);
@@ -8157,6 +8043,7 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                 }
                 syncEditorContent();
               }}
+              data-placeholder="Begin writing your chapter..."
               onDragOver={(e) => {
                 if (e.dataTransfer?.types?.includes('Files')) {
                   e.preventDefault();
@@ -10200,9 +10087,7 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                             // Move cursor out of the image if it's inside one
                             const curSel = window.getSelection();
                             if (curSel.rangeCount > 0) {
-                              let node = curSel.anchorNode;
-                              // Walk up to element node since text nodes don't have .closest
-                              if (node && node.nodeType === Node.TEXT_NODE) node = node.parentElement;
+                              const node = curSel.anchorNode;
                               if (node && node.closest && node.closest('.nf-img-wrapper')) {
                                 const afterFig = node.closest('.nf-img-wrapper').nextSibling;
                                 if (afterFig) {
@@ -10229,21 +10114,10 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                       onKeyDown={e => {
                         if (e.key === "Enter" && e.target.value.trim()) {
                           const url = e.target.value.trim();
-                          // Validate URL to prevent HTML injection
-                          try {
-                            const parsed = new URL(url);
-                            if (!['http:', 'https:'].includes(parsed.protocol)) {
-                              showToast("Only HTTP/HTTPS URLs are supported", "error");
-                              return;
-                            }
-                          } catch {
-                            showToast("Invalid URL format", "error");
-                            return;
-                          }
                           const caption = _sceneCaption(selectedText, activeChapterIdx, activeChapter?.title);
                           const imgHtml = `<figure class="nf-img-wrapper" contenteditable="false" style="text-align:center;margin:20px 0;position:relative;display:inline-block;max-width:100%"><span class="nf-img-handle">⠿ drag</span><span class="nf-img-actions"><button class="nf-img-del" title="Delete image">✕</button></span><img src="${url}" style="max-width:100%;border-radius:2px;box-shadow:0 2px 12px rgba(0,0,0,0.15)" alt="${caption.replace(/"/g, "&quot;")}" draggable="false" /><figcaption class="nf-img-caption" style="font-size:10px;color:var(--nf-text-muted);font-style:italic;margin-top:4px;padding-top:4px;border-top:1px solid var(--nf-border);text-align:center">${caption}</figcaption></figure>`;
                           const el = editorRef.current;
-                          if (el) { el.insertAdjacentHTML('beforeend', imgHtml); syncEditorContent(); lastSyncedContentRef.current = el.innerHTML; }
+                          if (el) { el.innerHTML += imgHtml; syncEditorContent(); lastSyncedContentRef.current = el.innerHTML; }
                           showToast("Image inserted into chapter", "success");
                           // Attach image event handlers
                           if (el) {
