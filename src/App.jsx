@@ -644,7 +644,7 @@ const renderMarkdown = (text) => {
   const codeBlocks = [];
   html = html.replace(/```([\s\S]*?)```/g, (_, code) => {
     const idx = codeBlocks.length;
-    codeBlocks.push(`<pre style="background:var(--nf-bg-deep);padding:10px 14px;border-radius:8px;font-family:var(--nf-font-mono);font-size:11.5px;overflow-x:auto;margin:8px 0;border:1px solid var(--nf-border);line-height:1.6">${code}</pre>`);
+    codeBlocks.push(`<pre style="background:var(--nf-bg-deep);padding:10px 14px;border-radius:4px;font-family:var(--nf-font-mono);font-size:11.5px;overflow-x:auto;margin:8px 0;border:1px solid var(--nf-border);line-height:1.6">${code}</pre>`);
     return `%%CODEBLOCK_${idx}%%`;
   });
   html = html.replace(/`([^`]+)`/g, (_, code) => {
@@ -1397,10 +1397,16 @@ const ContextEngine = {
         const isNearby = Math.abs(chNum - currentChNum) <= 2;
         // D4: For distant future chapters (>3 ahead), only show titles (no summaries/beats)
         const isFarFuture = chNum > currentChNum + 3;
-		if (chNum > currentChNum) return;
-        let prefix = isCurrent ? "[CURRENT] " : isNearby ? "  " : "  ";
+        // Skip very distant future chapters (>5 ahead) entirely to save tokens
+        if (chNum > currentChNum + 5) return;
+        let prefix = isCurrent ? "[CURRENT] " : isNearby ? "  " : "    ";
         let line = `${prefix}Ch${chNum}: ${pl.title || "Untitled"}`;
-        if (pl.pov) line += ` (POV: ${pl.pov})`;
+        if (pl.pov || pl.date) {
+          const povDateParts = [];
+          if (pl.pov) povDateParts.push(`POV: ${pl.pov}`);
+          if (pl.date) povDateParts.push(`scene is taking place at ${pl.date}`);
+          line += ` (${povDateParts.join(", ")})`;
+        }
         if (!isFarFuture) {
           if (pl.summary) line += ` — ${pl.summary}`;
           // D1: Include beats for recent past chapters too (not just current/future)
@@ -1465,7 +1471,6 @@ const ContextEngine = {
       const chNum = this._chapterNum(project, i);
       const distance = currentChNum - chNum;
       const isRecent = distance <= lookbackWindow;
-	  console.log(`[MEMORY] Ch${i+1}: distance=${distance} isRecent=${isRecent} summary=${!!ch.summary}(${ch.summary?.length||0}) content=${!!ch.content}(${ch.content?.length||0})`);
 
       if (ch.summary) {
         if (!hasHistory) { parts.push(`\n<chapter_history>`); hasHistory = true; }
@@ -1478,7 +1483,7 @@ const ContextEngine = {
         const titleDisplay = /^Chapter\s+\d+$/i.test(ch.title || "") && ch.summary
           ? `${ch.title} — ${ch.summary.split(/[.!?]/)[0]?.trim() || ch.title}`
           : ch.title || "Untitled";
-        const summaryLine = `Ch${i + 1} "${titleDisplay}" summary: ${ch.summary}${staleHint}`;
+        const summaryLine = `Ch${chNum} "${titleDisplay}" summary: ${ch.summary}${staleHint}`;
         if (historyUsed + summaryLine.length < historyBudget) {
           parts.push(summaryLine);
           historyUsed += summaryLine.length;
@@ -1489,15 +1494,15 @@ const ContextEngine = {
           if (!hasHistory) { parts.push(`\n<chapter_history>`); hasHistory = true; }
           // E9: Increased head+tail budget for unsummarized recent chapters
           if (plain.length <= 2000) {
-            const entry = `Ch${i + 1} "${ch.title}" (full): ${plain}`;
+            const entry = `Ch${chNum} "${ch.title}" (full): ${plain}`;
             if (historyUsed + entry.length < historyBudget) {
               parts.push(entry); historyUsed += entry.length;
             }
           } else {
             const head = _sliceHeadAtBoundary(plain, 600);
             const tail = _sliceAtBoundary(plain, 1000);
-            const entry1 = `Ch${i + 1} "${ch.title}" (opening): ${head}`;
-            const entry2 = `Ch${i + 1} "${ch.title}" (tail): ...${tail}`;
+            const entry1 = `Ch${chNum} "${ch.title}" (opening): ${head}`;
+            const entry2 = `Ch${chNum} "${ch.title}" (tail): ...${tail}`;
             if (historyUsed + entry1.length + entry2.length < historyBudget) {
               parts.push(entry1); parts.push(entry2);
               historyUsed += entry1.length + entry2.length;
@@ -1511,7 +1516,7 @@ const ContextEngine = {
         if (wc > 0) {
           if (!hasHistory) { parts.push(`\n<chapter_history>`); hasHistory = true; }
           const microSummary = _sliceHeadAtBoundary(plain, 200);
-          const entry = `Ch${i + 1} "${ch.title}": ${microSummary}... [${wc} words total, unsummarized]`;
+          const entry = `Ch${chNum} "${ch.title}": ${microSummary}... [${wc} words total, unsummarized]`;
           if (historyUsed + entry.length < historyBudget) {
             parts.push(entry); historyUsed += entry.length;
           }
@@ -2070,9 +2075,22 @@ const Storage = {
   async saveProjects(p) {
     try {
       await _idb.set(LS_PROJECTS, p);
+      // Estimate storage usage — warn if getting large (>80MB of serialized data)
+      try {
+        const estimate = await navigator?.storage?.estimate?.();
+        if (estimate && estimate.quota && estimate.usage) {
+          const usageRatio = estimate.usage / estimate.quota;
+          if (usageRatio > 0.85) return "warning";
+        }
+      } catch {}
       return true;
     } catch (e) {
       console.error("Save failed:", e);
+      // Detect quota-related errors
+      const msg = (e.message || e.name || "").toLowerCase();
+      if (msg.includes("quota") || msg.includes("full") || msg.includes("space") || e.name === "QuotaExceededError") {
+        return "quota";
+      }
       return false;
     }
   },
@@ -2267,7 +2285,7 @@ const ConfirmDialog = memo(({ message, onConfirm, onCancel, confirmLabel }) => {
       animation: "nf-fadeIn 0.12s ease-out",
     }} onClick={onCancel} role="dialog" aria-modal="true" aria-label="Confirmation dialog">
       <div onClick={e => e.stopPropagation()} style={{
-        background: "var(--nf-dialog-bg)", border: "1px solid var(--nf-dialog-border)", borderRadius: 16,
+        background: "var(--nf-dialog-bg)", border: "1px solid var(--nf-dialog-border)", borderRadius: 6,
         padding: "28px 32px", maxWidth: 400, width: "90%",
         boxShadow: "var(--nf-shadow-lg)",
       }}>
@@ -2298,24 +2316,24 @@ const DiffReviewModal = memo(({ original, proposed, onAccept, onReject, onInsert
       animation: "nf-fadeIn 0.12s ease-out",
     }} role="dialog" aria-modal="true" aria-label="Review generated content">
       <div onClick={e => e.stopPropagation()} style={{
-        background: "var(--nf-diff-bg)", border: "1px solid var(--nf-diff-border)", borderRadius: 18,
+        background: "var(--nf-diff-bg)", border: "1px solid var(--nf-diff-border)", borderRadius: 6,
         padding: 0, maxWidth: 920, width: "95%", maxHeight: "85vh",
         boxShadow: "var(--nf-shadow-lg)", display: "flex", flexDirection: "column", overflow: "hidden",
       }}>
         <div style={{ padding: "16px 24px", borderBottom: "1px solid var(--nf-diff-border)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <span style={{ fontFamily: "var(--nf-font-display)", fontSize: 20, fontWeight: 500, color: "var(--nf-text)", letterSpacing: "-0.01em" }}>Review Content</span>
+          <span style={{ fontFamily: "var(--nf-font-display)", fontSize: 20, fontWeight: 400, color: "var(--nf-text)", letterSpacing: "0.01em" }}>Review Content</span>
           <button onClick={onReject} className="nf-btn-icon" aria-label="Close"><Icons.X /></button>
         </div>
         {/* G8: Stack panels vertically on narrow screens */}
         <div style={{ flex: 1, overflow: "auto", display: "flex", gap: 0, flexWrap: "wrap" }}>
           {original && (
             <div style={{ flex: "1 1 300px", minWidth: 250, padding: 22, borderRight: "1px solid var(--nf-diff-border)" }}>
-              <div style={{ fontSize: 9, fontWeight: 700, color: "var(--nf-accent)", textTransform: "uppercase", letterSpacing: "0.12em", marginBottom: 12 }}>Original</div>
+              <div style={{ fontSize: 9, fontWeight: 700, color: "var(--nf-accent)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 12 }}>Original</div>
               <div style={{ fontFamily: "var(--nf-font-prose)", fontSize: 14, lineHeight: 1.9, color: "var(--nf-text-dim)", whiteSpace: "pre-wrap" }}>{original}</div>
             </div>
           )}
           <div style={{ flex: "1 1 300px", minWidth: 250, padding: 22 }}>
-            <div style={{ fontSize: 9, fontWeight: 700, color: "var(--nf-success)", textTransform: "uppercase", letterSpacing: "0.12em", marginBottom: 12 }}>{original ? "Proposed" : "Generated Content"}</div>
+            <div style={{ fontSize: 9, fontWeight: 700, color: "var(--nf-success)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 12 }}>{original ? "Proposed" : "Generated Content"}</div>
             <div style={{ fontFamily: "var(--nf-font-prose)", fontSize: 14, lineHeight: 1.9, color: "var(--nf-text)", whiteSpace: "pre-wrap" }}>{proposed}</div>
           </div>
         </div>
@@ -2355,15 +2373,15 @@ const CharacterSuggestionsModal = memo(({ suggestions, onAccept, onReject, onAcc
       background: "rgba(0,0,0,0.55)", backdropFilter: "blur(4px)",
       display: "flex", alignItems: "center", justifyContent: "center",
       animation: "nf-fadeIn 0.12s ease-out",
-    }} role="dialog" aria-modal="true" aria-label="Review character updates">
+    }} role="dialog" aria-modal="true" aria-label="Review character updates" onClick={onClose}>
       <div onClick={e => e.stopPropagation()} style={{
-        background: "var(--nf-dialog-bg)", border: "1px solid var(--nf-dialog-border)", borderRadius: 18,
+        background: "var(--nf-dialog-bg)", border: "1px solid var(--nf-dialog-border)", borderRadius: 6,
         padding: 0, maxWidth: 700, width: "95%", maxHeight: "85vh",
         boxShadow: "var(--nf-shadow-lg)", display: "flex", flexDirection: "column", overflow: "hidden",
       }}>
         <div style={{ padding: "16px 24px", borderBottom: "1px solid var(--nf-border)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div>
-            <span style={{ fontFamily: "var(--nf-font-display)", fontSize: 18, fontWeight: 500, color: "var(--nf-text)", letterSpacing: "-0.01em" }}>Character Updates</span>
+            <span style={{ fontFamily: "var(--nf-font-display)", fontSize: 20, fontWeight: 400, color: "var(--nf-text)", letterSpacing: "0.01em" }}>Character Updates</span>
             <span style={{ fontSize: 11, color: "var(--nf-text-muted)", marginLeft: 10 }}>from {suggestions.chapterTitle}</span>
           </div>
           <button onClick={onClose} className="nf-btn-icon" aria-label="Close"><Icons.X /></button>
@@ -2388,7 +2406,7 @@ const CharacterSuggestionsModal = memo(({ suggestions, onAccept, onReject, onAcc
               {pending.map(s => (
                 <div key={s.id} style={{
                   padding: "12px 16px", marginBottom: 8, background: "var(--nf-bg-raised)",
-                  border: "1px solid var(--nf-border)", borderRadius: 10,
+                  border: "1px solid var(--nf-border)", borderRadius: 6,
                 }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "start", marginBottom: 6 }}>
                     <div>
@@ -2411,11 +2429,11 @@ const CharacterSuggestionsModal = memo(({ suggestions, onAccept, onReject, onAcc
                   </div>
                   {s.current && (
                     <div style={{ fontSize: 11, color: "var(--nf-text-muted)", marginBottom: 4, padding: "6px 8px", background: "var(--nf-bg-deep)", borderRadius: 6, lineHeight: 1.5, whiteSpace: "pre-wrap" }}>
-                      <span style={{ fontWeight: 600, fontSize: 9, textTransform: "uppercase", letterSpacing: "0.05em", display: "block", marginBottom: 2 }}>Existing (will be kept): </span>{typeof s.current === "string" ? s.current.slice(0, 400) : String(s.current)}{String(s.current).length > 400 ? "…" : ""}
+                      <span style={{ fontWeight: 600, fontSize: 9, textTransform: "uppercase", letterSpacing: "0.08em", display: "block", marginBottom: 2 }}>Existing (will be kept): </span>{typeof s.current === "string" ? s.current.slice(0, 400) : String(s.current)}{String(s.current).length > 400 ? "…" : ""}
                     </div>
                   )}
                   <div style={{ fontSize: 12, color: "var(--nf-text)", padding: "6px 8px", background: "var(--nf-success-bg)", border: "1px solid var(--nf-success)", borderRadius: 6, lineHeight: 1.5, marginBottom: s.reason ? 4 : 0, whiteSpace: "pre-wrap" }}>
-                    <span style={{ fontWeight: 600, fontSize: 9, textTransform: "uppercase", letterSpacing: "0.05em", color: "var(--nf-success)", display: "block", marginBottom: 2 }}>{s.current && s.field !== "status" && s.field !== "statusChangedChapter" ? "New addition:" : "New value:"} </span>{s.suggested}
+                    <span style={{ fontWeight: 600, fontSize: 9, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--nf-success)", display: "block", marginBottom: 2 }}>{s.current && s.field !== "status" && s.field !== "statusChangedChapter" ? "New addition:" : "New value:"} </span>{s.suggested}
                   </div>
                   {s.reason && (
                     <div style={{ fontSize: 10, color: "var(--nf-text-muted)", fontStyle: "italic", marginTop: 4, paddingLeft: 8 }}>
@@ -2544,16 +2562,16 @@ const WhiteRoomModal = memo(({ char1, char2, tension, result, isGenerating, onGe
       background: "rgba(0,0,0,0.6)", backdropFilter: "blur(6px)",
       display: "flex", alignItems: "center", justifyContent: "center",
       animation: "nf-fadeIn 0.12s ease-out",
-    }} role="dialog" aria-modal="true">
+    }} role="dialog" aria-modal="true" onClick={onClose}>
       <div onClick={e => e.stopPropagation()} style={{
-        background: "var(--nf-dialog-bg)", border: "1px solid var(--nf-dialog-border)", borderRadius: 3,
+        background: "var(--nf-dialog-bg)", border: "1px solid var(--nf-dialog-border)", borderRadius: 6,
         padding: 0, maxWidth: 750, width: "95%", maxHeight: "85vh",
         boxShadow: "var(--nf-shadow-lg)", display: "flex", flexDirection: "column", overflow: "hidden",
       }}>
         <div style={{ padding: "18px 24px", borderBottom: "1px solid var(--nf-border)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div>
-            <span style={{ fontFamily: "var(--nf-font-display)", fontSize: 22, fontWeight: 400, color: "var(--nf-text)", letterSpacing: "0.01em" }}>The White Room</span>
-            <div style={{ fontSize: 10, color: "var(--nf-text-muted)", marginTop: 2, letterSpacing: "0.05em" }}>Non-canon character voice testing</div>
+            <span style={{ fontFamily: "var(--nf-font-display)", fontSize: 20, fontWeight: 400, color: "var(--nf-text)", letterSpacing: "0.01em" }}>The White Room</span>
+            <div style={{ fontSize: 10, color: "var(--nf-text-muted)", marginTop: 2, letterSpacing: "0.08em" }}>Non-canon character voice testing</div>
           </div>
           <button onClick={onClose} className="nf-btn-icon" aria-label="Close"><Icons.X /></button>
         </div>
@@ -2581,7 +2599,7 @@ const WhiteRoomModal = memo(({ char1, char2, tension, result, isGenerating, onGe
               fontFamily: "var(--nf-font-prose)", fontSize: 14, lineHeight: 1.9, color: "var(--nf-text)",
               whiteSpace: "pre-wrap", maxHeight: 400, overflowY: "auto",
             }}>
-              <div style={{ fontSize: 9, color: "var(--nf-text-muted)", textTransform: "uppercase", letterSpacing: "0.12em", marginBottom: 10, fontFamily: "var(--nf-font-body)" }}>
+              <div style={{ fontSize: 9, color: "var(--nf-text-muted)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 10, fontFamily: "var(--nf-font-body)" }}>
                 Non-Canon Scene — Voice Test Only
               </div>
               <div dangerouslySetInnerHTML={{ __html: renderMarkdownCached(result) }} />
@@ -2685,7 +2703,7 @@ const TimelineView = memo(({ plotOutline, chapters, characters, onClose }) => {
                     }}>{group.key}</div>
                   )}
                   {group.key === "Undated" && groups.length > 1 && (
-                    <div style={{ fontSize: 10, color: "var(--nf-text-muted)", textTransform: "uppercase", letterSpacing: "0.12em", marginBottom: 8 }}>Undated</div>
+                    <div style={{ fontSize: 10, color: "var(--nf-text-muted)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 }}>Undated</div>
                   )}
                   <div style={{ position: "relative", paddingLeft: 40 }}>
                     <div style={{ position: "absolute", left: 18, top: 0, bottom: 0, width: 1, background: "var(--nf-border)" }} />
@@ -2907,6 +2925,7 @@ const RelationshipWebModal = memo(({ characters, relationships, onClose, povChar
   const hoverTimer = useRef(null);
   const dragOffset = useRef({ dx: 0, dy: 0 });
   const panStart = useRef({ x: 0, y: 0, px: 0, py: 0 });
+  const panRef = useRef({ x: 0, y: 0 });
   const zoomRef = useRef(1);
   const N_R = 28; const CANVAS = 800;
   useEffect(() => { const h = e => { if (e.key === "Escape") onClose(); }; window.addEventListener("keydown", h); return () => window.removeEventListener("keydown", h); }, [onClose]);
@@ -2923,27 +2942,27 @@ const RelationshipWebModal = memo(({ characters, relationships, onClose, povChar
   const charMap = useMemo(() => { const m = {}; chars.forEach(c => { if (c.id) m[c.id] = c; }); return m; }, [chars]);
   const svgCoords = useCallback((cx, cy) => { const svg = svgRef.current; if (!svg) return { x: cx, y: cy }; const pt = svg.createSVGPoint(); pt.x = cx; pt.y = cy; const ctm = svg.getScreenCTM(); if (!ctm) return { x: cx, y: cy }; try { const p = pt.matrixTransform(ctm.inverse()); return { x: p.x, y: p.y }; } catch { return { x: cx, y: cy }; } }, []);
   const onNodeDown = useCallback((nid, e) => { e.stopPropagation(); e.preventDefault(); const n = nodes.find(nd => nd.id === nid); if (!n) return; const p = svgCoords(e.clientX, e.clientY); dragOffset.current = { dx: n.x - p.x, dy: n.y - p.y }; setDragging(nid); setSelectedNode(prev => prev === nid ? null : nid); }, [nodes, svgCoords]);
-  const onCanvasMove = useCallback(e => { if (dragging) { e.preventDefault(); const p = svgCoords(e.clientX, e.clientY); setNodes(prev => prev.map(n => n.id === dragging ? { ...n, x: p.x + dragOffset.current.dx, y: p.y + dragOffset.current.dy } : n)); } else if (panning) { e.preventDefault(); const dx = (e.clientX - panStart.current.x) / zoomRef.current; const dy = (e.clientY - panStart.current.y) / zoomRef.current; setPan({ x: panStart.current.px + dx, y: panStart.current.py + dy }); } }, [dragging, panning, svgCoords]);
+  const onCanvasMove = useCallback(e => { if (dragging) { e.preventDefault(); const p = svgCoords(e.clientX, e.clientY); setNodes(prev => prev.map(n => n.id === dragging ? { ...n, x: p.x + dragOffset.current.dx, y: p.y + dragOffset.current.dy } : n)); } else if (panning) { e.preventDefault(); const dx = (e.clientX - panStart.current.x) / zoomRef.current; const dy = (e.clientY - panStart.current.y) / zoomRef.current; const newPan = { x: panStart.current.px + dx, y: panStart.current.py + dy }; panRef.current = newPan; setPan(newPan); } }, [dragging, panning, svgCoords]);
   const onCanvasUp = useCallback(() => { setDragging(null); setPanning(false); }, []);
-  const onCanvasDown = useCallback(e => { if (e.target === svgRef.current || e.target.tagName === "rect" || e.target.tagName === "line") { if (!dragging) { setPanning(true); panStart.current = { x: e.clientX, y: e.clientY, px: pan.x, py: pan.y }; setSelectedNode(null); } } }, [dragging, pan]);
+  const onCanvasDown = useCallback(e => { if (e.target === svgRef.current || e.target.tagName === "rect" || e.target.tagName === "line") { if (!dragging) { setPanning(true); panStart.current = { x: e.clientX, y: e.clientY, px: panRef.current.x, py: panRef.current.y }; setSelectedNode(null); } } }, [dragging]);
   const onWheel = useCallback(e => { e.preventDefault(); setZoom(z => { const next = e.deltaY < 0 ? z * 1.08 : z / 1.08; const clamped = Math.max(0.25, Math.min(3, next)); zoomRef.current = clamped; return clamped; }); }, []);
   const onNodeEnter = useCallback((nid) => { clearTimeout(hoverTimer.current); setHoveredNode(nid); setHoveredRel(null); }, []);
   const onNodeLeave = useCallback(() => { hoverTimer.current = setTimeout(() => setHoveredNode(null), 80); }, []);
   const onRelEnter = useCallback(rid => { clearTimeout(hoverTimer.current); setHoveredRel(rid); setHoveredNode(null); }, []);
   const onRelLeave = useCallback(() => { hoverTimer.current = setTimeout(() => setHoveredRel(null), 80); }, []);
   useEffect(() => () => clearTimeout(hoverTimer.current), []);
-  const procRels = useMemo(() => { const seen = {}; return (rels || []).filter(r => !(r.meetsInChapter > 0 && r.meetsInChapter > 999)).map(r => { const key = [r.char1, r.char2].sort().join("::"); if (!seen[key]) seen[key] = 0; seen[key]++; return { ...r, curveIdx: seen[key] - 1 }; }); }, [rels]);
+  const procRels = useMemo(() => { const seen = {}; return (rels || []).map(r => { const key = [r.char1, r.char2].sort().join("::"); if (!seen[key]) seen[key] = 0; seen[key]++; return { ...r, curveIdx: seen[key] - 1 }; }); }, [rels]);
   const curvePath = (x1, y1, x2, y2, ci) => { if (ci === 0) return `M${x1},${y1}L${x2},${y2}`; const mx = (x1 + x2) / 2, my = (y1 + y2) / 2; const d = Math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2) || 1; const nx = -(y2 - y1) / d, ny = (x2 - x1) / d; const off = d * 0.12 * (ci % 2 === 0 ? 1 : -1) * Math.ceil((ci + 1) / 2); return `M${x1},${y1}Q${mx + nx * off},${my + ny * off},${x2},${y2}`; };
-  const resetView = useCallback(() => { setNodes(computeWebLayout(chars, rels)); setPan({ x: 0, y: 0 }); setZoom(1); zoomRef.current = 1; setSelectedNode(null); setHoveredNode(null); setHoveredRel(null); }, [chars, rels]);
+  const resetView = useCallback(() => { setNodes(computeWebLayout(chars, rels)); setPan({ x: 0, y: 0 }); panRef.current = { x: 0, y: 0 }; setZoom(1); zoomRef.current = 1; setSelectedNode(null); setHoveredNode(null); setHoveredRel(null); }, [chars, rels]);
   if (!chars.length) return (<div style={{ position: "fixed", inset: 0, zIndex: 9997, background: "rgba(0,0,0,0.6)", backdropFilter: "blur(8px)", display: "flex", alignItems: "center", justifyContent: "center" }} onClick={onClose}><div onClick={e => e.stopPropagation()} style={{ background: "var(--nf-dialog-bg)", border: "1px solid var(--nf-dialog-border)", borderRadius: 3, padding: 40, textAlign: "center", color: "var(--nf-text-muted)", fontFamily: "var(--nf-font-display)", fontStyle: "italic" }}>Add characters first to see their connections</div></div>);
   return (
     <div style={{ position: "fixed", inset: 0, zIndex: 9997, background: "rgba(0,0,0,0.6)", backdropFilter: "blur(8px)", display: "flex", alignItems: "center", justifyContent: "center", animation: "nf-fadeIn 0.2s ease-out" }} onClick={onClose}>
-      <style>{`.nf-rel-web-node{cursor:grab}.nf-rel-web-node:active{cursor:grabbing}.nf-rel-web-line{transition:opacity .2s}.nf-rel-web-line:hover{opacity:1!important}.nf-rel-web-hit{cursor:pointer}.nf-wl{position:absolute;bottom:14px;right:14px;background:var(--nf-bg-raised);border:1px solid var(--nf-border);border-radius:2px;padding:12px 16px;box-shadow:var(--nf-shadow);z-index:10;font-size:10px;color:var(--nf-text-muted);line-height:1.8;user-select:none}.nf-wl-t{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.12em;margin-bottom:6px;padding-bottom:5px;border-bottom:1px solid var(--nf-border);color:var(--nf-text-dim)}.nf-wl-s{margin-bottom:8px}.nf-wl-s:last-child{margin-bottom:0}.nf-wl-i{display:flex;align-items:center;gap:8px;padding:1px 0}.nf-wl-sw{width:24px;height:2px;flex-shrink:0;border-radius:1px}.nf-wl-d{width:8px;height:8px;border-radius:50%;flex-shrink:0}.nf-rel-web-tip{position:fixed;z-index:10001;pointer-events:none;background:var(--nf-dialog-bg);border:1px solid var(--nf-border);border-radius:3px;padding:12px 16px;box-shadow:var(--nf-shadow-lg);max-width:300px;animation:nf-fadeIn .12s ease-out;font-size:12px;line-height:1.6;color:var(--nf-text)}`}</style>
+      <style>{`.nf-rel-web-node{cursor:grab}.nf-rel-web-node:active{cursor:grabbing}.nf-rel-web-line{transition:opacity .2s}.nf-rel-web-line:hover{opacity:1!important}.nf-rel-web-hit{cursor:pointer}.nf-wl{position:absolute;bottom:14px;right:14px;background:var(--nf-bg-raised);border:1px solid var(--nf-border);border-radius:2px;padding:12px 16px;box-shadow:var(--nf-shadow);z-index:10;font-size:10px;color:var(--nf-text-muted);line-height:1.8;user-select:none}.nf-wl-t{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px;padding-bottom:5px;border-bottom:1px solid var(--nf-border);color:var(--nf-text-dim)}.nf-wl-s{margin-bottom:8px}.nf-wl-s:last-child{margin-bottom:0}.nf-wl-i{display:flex;align-items:center;gap:8px;padding:1px 0}.nf-wl-sw{width:24px;height:2px;flex-shrink:0;border-radius:1px}.nf-wl-d{width:8px;height:8px;border-radius:50%;flex-shrink:0}.nf-rel-web-tip{position:fixed;z-index:10001;pointer-events:none;background:var(--nf-dialog-bg);border:1px solid var(--nf-border);border-radius:3px;padding:12px 16px;box-shadow:var(--nf-shadow-lg);max-width:300px;animation:nf-fadeIn .12s ease-out;font-size:12px;line-height:1.6;color:var(--nf-text)}`}</style>
       <div onClick={e => e.stopPropagation()} style={{ background: "var(--nf-dialog-bg)", border: "1px solid var(--nf-dialog-border)", borderRadius: 3, width: "95vw", maxWidth: 1100, height: "88vh", maxHeight: 800, display: "flex", flexDirection: "column", boxShadow: "var(--nf-shadow-lg)", overflow: "hidden", animation: "nf-pop 0.25s ease-out" }}>
         {/* Header */}
         <div style={{ padding: "14px 22px", borderBottom: "1px solid var(--nf-border)", display: "flex", justifyContent: "space-between", alignItems: "center", flexShrink: 0, background: "var(--nf-bg-raised)" }}>
           <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
-            <span style={{ fontFamily: "var(--nf-font-display)", fontSize: 22, fontWeight: 400, color: "var(--nf-text)", letterSpacing: "0.02em" }}>Relationship Web</span>
+            <span style={{ fontFamily: "var(--nf-font-display)", fontSize: 20, fontWeight: 400, color: "var(--nf-text)", letterSpacing: "0.01em" }}>Relationship Web</span>
             <span style={{ fontSize: 11, color: "var(--nf-text-muted)", fontFamily: "var(--nf-font-mono)" }}>{chars.length} characters · {rels.length} connections</span>
           </div>
           <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
@@ -3693,7 +3712,7 @@ const ModelSelector = memo(({ apiKey, value, onChange }) => {
       {open && (
         <div style={{
           position: "absolute", top: "100%", left: 0, right: 0, zIndex: 200,
-          background: "var(--nf-dialog-bg)", border: "1px solid var(--nf-border)", borderRadius: 12,
+          background: "var(--nf-dialog-bg)", border: "1px solid var(--nf-border)", borderRadius: 6,
           boxShadow: "var(--nf-shadow-lg)", maxHeight: 340, display: "flex", flexDirection: "column",
           marginTop: 4, overflow: "hidden",
         }}>
@@ -4044,7 +4063,7 @@ RULES:
         {messages.map(msg => (
           <div key={msg.id} style={{ marginBottom: 8, display: "flex", flexDirection: "column", alignItems: msg.role === "user" ? "flex-end" : "flex-start", animation: "nf-slideUp 0.15s ease-out" }}>
             <div style={{
-              maxWidth: "95%", padding: "9px 12px", borderRadius: 10,
+              maxWidth: "95%", padding: "9px 12px", borderRadius: 6,
               background: msg.isError ? "var(--nf-error-bg)" : msg.role === "user" ? "var(--nf-chat-bubble-user-bg)" : "var(--nf-chat-bubble-bg)",
               border: `1px solid ${msg.isError ? "var(--nf-error-border)" : msg.role === "user" ? "var(--nf-chat-bubble-user-border)" : "var(--nf-border)"}`,
               color: "var(--nf-text)", fontSize: 12, lineHeight: 1.7, wordBreak: "break-word",
@@ -4070,6 +4089,344 @@ RULES:
           <button onClick={() => handleSend()} disabled={!settings.apiKey || isGenerating} className="nf-send-btn"><Icons.Send /></button>
         )}
       </div>
+    </div>
+  );
+});
+
+// ─── 1. CHARACTER PRESENCE STRIP ───
+const CharacterPresenceStrip = memo(({ characters, chapterContent, relationships, povCharId, onCharClick }) => {
+  const plainContent = useMemo(() => chapterContent ? _htmlToPlain(chapterContent) : "", [chapterContent]);
+  const [hovered, setHovered] = useState(null);
+  const [hoverPos, setHoverPos] = useState(null);
+  const hoverTimer = useRef(null);
+  const dismissTimer = useRef(null);
+
+  const sortedChars = useMemo(() => {
+    if (!plainContent || !characters?.length) return [];
+    const mentionedIds = _detectMentionedCharacters(plainContent, characters);
+    if (!mentionedIds.size) return [];
+    const lc = plainContent.toLowerCase();
+    return characters
+      .filter(c => mentionedIds.has(c.id))
+      .map(c => {
+        const nameLC = (c.name || "").toLowerCase();
+        const count = nameLC ? (lc.split(nameLC).length - 1) : 0;
+        return { ...c, _freq: count };
+      })
+      .sort((a, b) => {
+        if (a.id === povCharId) return -1;
+        if (b.id === povCharId) return 1;
+        return b._freq - a._freq;
+      });
+  }, [plainContent, characters, povCharId]);
+
+  useEffect(() => () => { clearTimeout(hoverTimer.current); clearTimeout(dismissTimer.current); }, []);
+
+  if (!sortedChars.length) return null;
+
+  const TC = { none: "#6b9e78", low: "#8b9e6b", medium: "#c4953a", high: "#c4653a", explosive: "#c43a3a" };
+
+  const handleEnter = (c, e) => {
+    clearTimeout(hoverTimer.current);
+    clearTimeout(dismissTimer.current);
+    const rect = e.currentTarget.getBoundingClientRect();
+    hoverTimer.current = setTimeout(() => {
+      setHovered(c);
+      setHoverPos({ x: Math.max(170, Math.min(rect.left + rect.width / 2, window.innerWidth - 170)), y: rect.bottom + 6 });
+    }, 250);
+  };
+  const scheduleDismiss = () => {
+    clearTimeout(hoverTimer.current);
+    dismissTimer.current = setTimeout(() => { setHovered(null); }, 200);
+  };
+  const cancelDismiss = () => { clearTimeout(dismissTimer.current); };
+
+  const hoveredRel = hovered && povCharId && hovered.id !== povCharId && relationships?.length
+    ? relationships.find(r => (r.char1 === povCharId && r.char2 === hovered.id) || (r.char2 === povCharId && r.char1 === hovered.id))
+    : null;
+
+  return (
+    <div className="nf-presence-strip">
+      <span className="nf-presence-label">In scene</span>
+      {sortedChars.map(c => {
+        const isPov = c.id === povCharId;
+        const isDead = c.status === "dead";
+        const isAbsent = c.status === "absent";
+        const rel = (povCharId && c.id !== povCharId && relationships?.length)
+          ? relationships.find(r => (r.char1 === povCharId && r.char2 === c.id) || (r.char2 === povCharId && r.char1 === c.id))
+          : null;
+        const tensionColor = rel?.tension ? (TC[rel.tension] || null) : null;
+        return (
+          <div key={c.id} className={`nf-presence-chip ${isPov ? "nf-pov" : ""} ${isDead ? "nf-dead" : ""} ${isAbsent ? "nf-absent" : ""}`}
+            onClick={() => onCharClick?.(c.id)}
+            onMouseEnter={(e) => handleEnter(c, e)}
+            onMouseLeave={scheduleDismiss}>
+            <div className="nf-presence-avatar-wrap">
+              {c.image
+                ? <img src={c.image} alt="" className="nf-presence-img" />
+                : <span className="nf-presence-initial">{(c.name || "?")[0]}</span>
+              }
+              {isDead && <span className="nf-presence-badge">†</span>}
+              {tensionColor && <span className="nf-presence-tension" style={{ background: tensionColor }} />}
+            </div>
+            <span className="nf-presence-name">{(c.name || "").split(/\s+/)[0]}</span>
+          </div>
+        );
+      })}
+      {hovered && hoverPos && createPortal(
+        <div className="nf-presence-card" style={{ left: hoverPos.x, top: hoverPos.y }}
+          onMouseEnter={cancelDismiss} onMouseLeave={scheduleDismiss}>
+          <div className="nf-pc-head">
+            <div className="nf-pc-avatar">
+              {hovered.image
+                ? <img src={hovered.image} alt="" className="nf-pc-img" />
+                : <span className="nf-pc-initial">{(hovered.name || "?")[0]}</span>
+              }
+            </div>
+            <div className="nf-pc-identity">
+              <div className="nf-pc-name">{hovered.name}</div>
+              <div className="nf-pc-meta">
+                <span>{hovered.role}</span>
+                {hovered.id === povCharId && <span className="nf-pc-tag nf-pc-tag-pov">POV</span>}
+                {hovered.status && hovered.status !== "alive" && <span className="nf-pc-tag nf-pc-tag-status">{hovered.status}</span>}
+                {hovered.pronouns && <span>{hovered.pronouns}</span>}
+              </div>
+            </div>
+          </div>
+          {hovered.personality && (
+            <div className="nf-pc-section">
+              <div className="nf-pc-body">{hovered.personality}</div>
+            </div>
+          )}
+          {hovered.speechPattern && (
+            <div className="nf-pc-section">
+              <div className="nf-pc-section-label">Voice</div>
+              <div className="nf-pc-body nf-pc-italic">{hovered.speechPattern}</div>
+            </div>
+          )}
+          {hovered.appearance && (
+            <div className="nf-pc-section">
+              <div className="nf-pc-section-label">Appearance</div>
+              <div className="nf-pc-body">{hovered.appearance.slice(0, 200)}{hovered.appearance.length > 200 ? "…" : ""}</div>
+            </div>
+          )}
+          {hoveredRel && (
+            <div className="nf-pc-rel-section">
+              <div className="nf-pc-rel-header">
+                <span className="nf-pc-rel-dot" style={{ background: TC[hoveredRel.tension] || "var(--nf-border)" }} />
+                <span className="nf-pc-rel-tension">{hoveredRel.tension}</span>
+                {hoveredRel.tensionType && <span className="nf-pc-rel-type">{hoveredRel.tensionType}</span>}
+                <span className="nf-pc-rel-with">with POV</span>
+              </div>
+              {hoveredRel.dynamic && <div className="nf-pc-body nf-pc-italic">{hoveredRel.dynamic}</div>}
+            </div>
+          )}
+        </div>,
+        document.body
+      )}
+    </div>
+  );
+});
+
+// ─── 3. BEAT PROGRESS RAIL ───
+const BeatProgressRail = memo(({ plotEntry, editorRef, chapterContent }) => {
+  const beats = useMemo(() => Array.isArray(plotEntry?.beats) ? plotEntry.beats : [], [plotEntry?.beats]);
+  const [activeBeatIdx, setActiveBeatIdx] = useState(0);
+
+  // Compute word count per beat segment from actual editor content
+  const beatWeights = useMemo(() => {
+    if (!beats.length) return [];
+    const el = editorRef?.current;
+    if (!el) return beats.map(() => 1);
+    const markers = el.querySelectorAll('.nf-beat-marker');
+    if (!markers.length) return beats.map(() => 1);
+    // Measure text length between consecutive markers
+    const markerNodes = [...markers].sort((a, b) =>
+      a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1
+    );
+    const weights = [];
+    const fullText = el.innerText || "";
+    const totalLen = fullText.length || 1;
+    // Get character offset of each marker
+    const offsets = [];
+    for (const m of markerNodes) {
+      const range = document.createRange();
+      range.setStart(el, 0);
+      range.setEndBefore(m);
+      offsets.push(range.toString().length);
+    }
+    // Compute segment lengths
+    for (let i = 0; i < beats.length; i++) {
+      const start = i < offsets.length ? offsets[i] : (i > 0 && offsets.length > 0 ? offsets[offsets.length - 1] : 0);
+      const end = i + 1 < offsets.length ? offsets[i + 1] : totalLen;
+      weights.push(Math.max(end - start, 1));
+    }
+    return weights;
+  }, [beats, editorRef, chapterContent]); // chapterContent in deps triggers recalc on edit
+
+  useEffect(() => {
+    const el = editorRef?.current;
+    if (!el || !beats.length) return;
+    const update = () => {
+      const markers = el.querySelectorAll('.nf-beat-marker');
+      if (!markers.length) {
+        const scrollRatio = el.scrollHeight > el.clientHeight
+          ? el.scrollTop / (el.scrollHeight - el.clientHeight) : 0;
+        setActiveBeatIdx(Math.floor(scrollRatio * beats.length));
+        return;
+      }
+      const sel = window.getSelection();
+      if (!sel?.rangeCount || !el.contains(sel.anchorNode)) {
+        const scrollRatio = el.scrollHeight > el.clientHeight
+          ? el.scrollTop / (el.scrollHeight - el.clientHeight) : 0;
+        setActiveBeatIdx(Math.floor(scrollRatio * markers.length));
+        return;
+      }
+      const cursorY = sel.getRangeAt(0).getBoundingClientRect().top;
+      let found = 0;
+      markers.forEach((m, i) => {
+        if (m.getBoundingClientRect().top <= cursorY + 20) found = i + 1;
+      });
+      setActiveBeatIdx(Math.min(found, beats.length - 1));
+    };
+    el.addEventListener("keyup", update);
+    el.addEventListener("mouseup", update);
+    el.addEventListener("scroll", update);
+    const t = setTimeout(update, 200);
+    return () => { clearTimeout(t); el.removeEventListener("keyup", update); el.removeEventListener("mouseup", update); el.removeEventListener("scroll", update); };
+  }, [editorRef, beats.length]);
+
+  if (!beats.length) return null;
+
+  const totalWeight = beatWeights.reduce((s, w) => s + w, 0) || 1;
+
+  return (
+    <div className="nf-beat-rail" aria-label="Beat progress">
+      {beats.map((b, i) => {
+        const isComplete = i < activeBeatIdx;
+        const isCurrent = i === activeBeatIdx;
+        const pct = ((beatWeights[i] || 1) / totalWeight) * 100;
+        return (
+          <div key={b.id || i}
+            className={`nf-beat-seg ${isComplete ? "done" : ""} ${isCurrent ? "now" : ""}`}
+            style={{ flex: `${pct} 0 0%` }}
+            title={`${b.title || `Beat ${i + 1}`}${b.description ? `: ${b.description.slice(0, 80)}` : ""}`}>
+            <div className="nf-beat-dot" />
+            {i < beats.length - 1 && <div className="nf-beat-line" />}
+          </div>
+        );
+      })}
+    </div>
+  );
+});
+
+// ─── 4. DIALOGUE TENSION DOTS ───
+// Renders tension color dots in the AI panel when characters with relationships are in scene
+const DialogueTensionIndicator = memo(({ characters, relationships, chapterContent }) => {
+  const scenePairs = useMemo(() => {
+    if (!chapterContent || !characters?.length || !relationships?.length) return [];
+    const mentionedIds = _detectMentionedCharacters(_htmlToPlain(chapterContent), characters);
+    if (mentionedIds.size < 2) return [];
+    const ids = [...mentionedIds];
+    const pairs = [];
+    for (const rel of relationships) {
+      if (ids.includes(rel.char1) && ids.includes(rel.char2) && rel.tension && rel.tension !== "none") {
+        const c1 = characters.find(c => c.id === rel.char1);
+        const c2 = characters.find(c => c.id === rel.char2);
+        if (c1 && c2) pairs.push({ rel, c1Name: c1.name, c2Name: c2.name });
+      }
+    }
+    return pairs;
+  }, [chapterContent, relationships, characters]);
+
+  if (!scenePairs.length) return null;
+
+  const TC = { low: "#8b9e6b", medium: "#c4953a", high: "#c4653a", explosive: "#c43a3a" };
+
+  return (
+    <div className="nf-tension-strip">
+      {scenePairs.map(({ rel, c1Name, c2Name }) => (
+        <Tooltip key={rel.id} text={`${c1Name} ↔ ${c2Name} — ${rel.tension} ${rel.tensionType || ""} tension${rel.dynamic ? `. ${rel.dynamic.slice(0, 140)}` : ""}`}>
+          <div className="nf-tension-pill">
+            <span className="nf-tension-dot" style={{ background: TC[rel.tension] || "var(--nf-border)" }} />
+            <span className="nf-tension-label">{(c1Name || "").split(/\s+/)[0]}</span>
+            <span className="nf-tension-sep">·</span>
+            <span className="nf-tension-label">{(c2Name || "").split(/\s+/)[0]}</span>
+          </div>
+        </Tooltip>
+      ))}
+    </div>
+  );
+});
+
+// ─── 6. CONTINUITY GHOST ───
+// Shows faded last paragraph of previous chapter when current chapter is empty
+const ContinuityGhost = memo(({ prevChapter, prevChapterSummary, currentContent }) => {
+  const isEmpty = !currentContent || wordCount(currentContent) < 5;
+  const [dismissed, setDismissed] = useState(false);
+
+  useEffect(() => { if (isEmpty) setDismissed(false); }, [isEmpty, prevChapter?.id]);
+
+  if (!isEmpty || dismissed || !prevChapter) return null;
+
+  const prevPlain = prevChapter.content ? _htmlToPlain(prevChapter.content) : "";
+  if (!prevPlain || prevPlain.length < 20) return null;
+
+  // Extract last meaningful paragraph — find the last sentence boundary
+  const tail = prevPlain.slice(-400);
+  const sentenceStart = tail.search(/[.!?]["'»)]*\s+[A-Z]/);
+  const lastParagraph = sentenceStart > 0 ? tail.slice(sentenceStart + 1).trim() : tail.slice(-200).trim();
+
+  return (
+    <div className="nf-ghost" onClick={() => setDismissed(true)} role="note" aria-label="Previous chapter ending">
+      <div className="nf-ghost-header">
+        <span className="nf-ghost-from">↖ {prevChapter.title || "Previous chapter"}</span>
+        <span className="nf-ghost-x">✕</span>
+      </div>
+      <div className="nf-ghost-prose">…{lastParagraph}</div>
+      {prevChapterSummary && (
+        <div className="nf-ghost-memo">
+          <span className="nf-ghost-memo-label">Summary</span>
+          {prevChapterSummary.slice(0, 180)}{prevChapterSummary.length > 180 ? "…" : ""}
+        </div>
+      )}
+    </div>
+  );
+});
+
+// ─── 10. RELATIONSHIP WEB MINIMAP ───
+// Tiny dot-and-line preview of the relationship web
+const RelWebMinimap = memo(({ characters, relationships, onClick }) => {
+  const data = useMemo(() => {
+    const chars = (characters || []).filter(c => c.name).slice(0, 8);
+    const rels = relationships || [];
+    if (chars.length < 2) return null;
+    const W = 22, H = 14, CX = W / 2, CY = H / 2, R = Math.min(W, H) * 0.38;
+    const nodes = chars.map((c, i) => {
+      const angle = (i / chars.length) * Math.PI * 2 - Math.PI / 2;
+      return { id: c.id, x: CX + Math.cos(angle) * R, y: CY + Math.sin(angle) * R, isProt: c.role === "protagonist" };
+    });
+    const nodeMap = {};
+    nodes.forEach(n => nodeMap[n.id] = n);
+    return { W, H, nodes, nodeMap, rels: rels.slice(0, 10) };
+  }, [characters, relationships]);
+
+  if (!data) return null;
+  const TC = { none: "rgba(107,158,120,0.3)", low: "rgba(139,158,107,0.4)", medium: "rgba(196,149,58,0.5)", high: "rgba(196,101,58,0.6)", explosive: "rgba(196,58,58,0.7)" };
+
+  return (
+    <div className="nf-minimap">
+      <svg width={data.W} height={data.H} viewBox={`0 0 ${data.W} ${data.H}`}>
+        {data.rels.map(r => {
+          const n1 = data.nodeMap[r.char1], n2 = data.nodeMap[r.char2];
+          if (!n1 || !n2) return null;
+          return <line key={r.id} x1={n1.x} y1={n1.y} x2={n2.x} y2={n2.y} stroke={TC[r.tension] || "rgba(180,140,100,0.2)"} strokeWidth="0.5" strokeLinecap="round" />;
+        })}
+        {data.nodes.map(n => (
+          <circle key={n.id} cx={n.x} cy={n.y} r={n.isProt ? 1.8 : 1.2}
+            fill={n.isProt ? "var(--nf-accent)" : "var(--nf-text-muted)"} opacity={n.isProt ? 0.9 : 0.45} />
+        ))}
+      </svg>
     </div>
   );
 });
@@ -4219,6 +4576,7 @@ export default function NovelForge() {
   const abortRef = useRef(null);
   const streamingContentRef = useRef("");
   const pendingSelectionRef = useRef("");
+  const pendingGenerateRef = useRef(false); // Fix #12: Signal deferred generation after state batch updates
   const _lastChapterPerProject = useRef({}); // C12: Remember last chapter per project
   const [undoState, undoDispatch] = useReducer(undoReducer, { past: [], future: [] });
 
@@ -4367,7 +4725,7 @@ export default function NovelForge() {
 
           const aligned = fixPlotAlignment(migrated); 
 		  setProjects(aligned);
-          setActiveProjectId(migrated[0].id);
+          setActiveProjectId(aligned[0].id);
         }
         if (s && typeof s === "object") {
           const knownKeys = ["apiKey", "model", "maxTokens", "temperature", "systemPrompt", "frequencyPenalty", "presencePenalty", "modelContextWindow"];
@@ -4560,7 +4918,7 @@ export default function NovelForge() {
     };
 
     return { fullPayload: contextPayload, tokenEstimate: totalTokenEstimate, sectionBreakdown, selectedMode: previewMode };
-  }, [project, activeChapterIdx, genMode, chatMessages]);
+  }, [project, activeChapterIdx, genMode, chatMessages, settings.modelContextWindow, activeBeatId]);
 
   // C5/C6: Bounds-check activeChapterIdx — only depends on length, not content
   useEffect(() => {
@@ -4979,7 +5337,7 @@ Then 2-3 sentences describing the specific scene idea, character actions, and em
       default:
         return "";
     }
-  }, [project?.plotOutline, activeChapterIdx]);
+  }, [project?.plotOutline, project?.chapters, activeChapterIdx]);
 
   // Keep backward-compatible modePrompts object for UI tooltips and default messages
   const modePrompts = useMemo(() => ({
@@ -5160,6 +5518,14 @@ Then 2-3 sentences describing the specific scene idea, character actions, and em
     abortRef.current = null; setIsGenerating(false);
   }, [isGenerating, chatInput, genMode, getModePrompt, buildSystemPrompt, chatMessages, callOpenRouterStream, processStream, selectedText, showToast, syncEditorContent, activeChapterIdx, updateChapter]);
 
+  // Fix #12: Deferred generation — fires handleGenerate after batched state updates (genMode, selectedText, chatInput) have settled
+  useEffect(() => {
+    if (pendingGenerateRef.current && !isGenerating) {
+      pendingGenerateRef.current = false;
+      handleGenerate();
+    }
+  }, [genMode, selectedText, chatInput, isGenerating, handleGenerate]);
+
   // ─── KEYBOARD SHORTCUTS ───
   useEffect(() => {
     const handler = (e) => {
@@ -5338,8 +5704,11 @@ const appendToChapter = useCallback((text) => {
 
       if (!suggestedNorm.includes(currentNorm.slice(0, Math.min(50, currentNorm.length)))) {
         // The AI's suggestion DOESN'T contain the existing content — merge them
-        // Append the new suggestion after the existing content with a chapter marker
-        finalValue = `${currentValue.trim()}\n[Ch${(charSuggestions.chapterIdx || 0) + 1}]: ${suggestion.suggested.trim()}`;
+        // Append the new suggestion after the existing content with a chapter+date marker
+        const mergeChNum = (charSuggestions.chapterIdx || 0) + 1;
+        const mergePlotEntry = ContextEngine._plotEntryForChapter(project, charSuggestions.chapterIdx || 0);
+        const mergeDate = mergePlotEntry?.date ? ` (${mergePlotEntry.date})` : "";
+        finalValue = `${currentValue.trim()}\n[Ch${mergeChNum}${mergeDate}]: ${suggestion.suggested.trim()}`;
       }
       // else: AI already included existing content in its suggestion — use as-is
     }
@@ -5376,7 +5745,10 @@ const appendToChapter = useCallback((text) => {
         const currentNorm = currentValue.trim().toLowerCase();
         const suggestedNorm = s.suggested.trim().toLowerCase();
         if (!suggestedNorm.includes(currentNorm.slice(0, Math.min(50, currentNorm.length)))) {
-          finalValue = `${currentValue.trim()}\n[Ch${(charSuggestions.chapterIdx || 0) + 1}]: ${s.suggested.trim()}`;
+          const mergeChNum = (charSuggestions.chapterIdx || 0) + 1;
+          const mergePlotEntry = ContextEngine._plotEntryForChapter(project, charSuggestions.chapterIdx || 0);
+          const mergeDate = mergePlotEntry?.date ? ` (${mergePlotEntry.date})` : "";
+          finalValue = `${currentValue.trim()}\n[Ch${mergeChNum}${mergeDate}]: ${s.suggested.trim()}`;
         }
       }
 
@@ -5461,7 +5833,10 @@ const appendToChapter = useCallback((text) => {
           const curNorm = currentVal.trim().toLowerCase();
           const sugNorm = sugg.suggested.trim().toLowerCase();
           if (!sugNorm.includes(curNorm.slice(0, Math.min(50, curNorm.length)))) {
-            finalVal = `${currentVal.trim()}\n[Ch${(charSuggestions.chapterIdx || 0) + 1}]: ${sugg.suggested.trim()}`;
+            const mergeChNum = (charSuggestions.chapterIdx || 0) + 1;
+            const mergePlotEntry = ContextEngine._plotEntryForChapter(project, charSuggestions.chapterIdx || 0);
+            const mergeDate = mergePlotEntry?.date ? ` (${mergePlotEntry.date})` : "";
+            finalVal = `${currentVal.trim()}\n[Ch${mergeChNum}${mergeDate}]: ${sugg.suggested.trim()}`;
           }
         }
         updateProject({
@@ -5583,12 +5958,17 @@ const appendToChapter = useCallback((text) => {
       // E7: Continuity-focused summary prompt
       const novelContext = `Novel: "${project.title}" (${project.genre || "fiction"})${charContext}`;
 
+      // Look up the plot entry date for this chapter
+      const plotEntryForSummary = ContextEngine._plotEntryForChapter(project, idx);
+      const chapterDate = plotEntryForSummary?.date || "";
+      const datePreamble = chapterDate ? `(Scene is taking place at ${chapterDate}) ` : "";
+
       const summary = await callOpenRouter([
         { role: "system", content: `You are creating a continuity reference summary for AI-assisted novel writing.
 
 ${novelContext}
 
-Write a detailed summary in 3-5 sentences that a writing AI can use to maintain consistency in future chapters. Focus on:
+Write a detailed summary that a writing AI can use to maintain consistency in future chapters.${chapterDate ? ` Begin the summary with "(Scene is taking place at ${chapterDate})"` : ""} Then focus on:
 - Key plot events and irreversible decisions (what HAPPENED that can't be undone)
 - Character emotional states at the END of the chapter (how they feel going forward)
 - Relationship shifts (any change in dynamics, trust, knowledge)
@@ -5596,7 +5976,7 @@ Write a detailed summary in 3-5 sentences that a writing AI can use to maintain 
 - Unresolved threads and cliffhangers that future chapters must address
 
 Be specific with character names. Write as a factual reference, not a story recap.` },
-        { role: "user", content: `Summarize Chapter ${chNum}: "${ch.title || 'Untitled'}":\n\n${sample}` },
+        { role: "user", content: `Summarize Chapter ${chNum}${chapterDate ? ` (${chapterDate})` : ""}: "${ch.title || 'Untitled'}":\n\n${sample}` },
       ], { maxTokens: 10000, temperature: 0.3 });
 
       // E1: Track when summary was generated for stale detection
@@ -5630,34 +6010,34 @@ Be specific with character names. Write as a factual reference, not a story reca
             { role: "system", content: `You are analyzing a completed chapter to recommend concise, factual character profile updates.
 
 CRITICAL FORMAT RULES:
-- Canon Notes: ONLY factual bullet points. Each entry starts with "[ChN]" prefix. NO narrative. NO paragraphs.
-  Example: "[Ch12]: Learned her sister is alive. [Ch12]: Was hit during confrontation with Ray."
-- Desires: Short sentences tracking how wants/needs have shifted. Use "[ChN]" prefix for new entries.
-  Example: "[Ch12]: Wants to find sister — now top priority over career."
+- Canon Notes: ONLY factual bullet points. Each entry starts with "[ChN (DATE)]" prefix where DATE is the story date if known. NO narrative. NO paragraphs.
+  Example: "[Ch12 (May 14, 2025)]: Learned her sister is alive. [Ch12 (May 14, 2025)]: Was hit during confrontation with Ray."
+- Desires: Short sentences tracking how wants/needs have shifted. Use "[ChN (DATE)]" prefix for new entries.
+  Example: "[Ch12 (May 14, 2025)]: Wants to find sister — now top priority over career."
 - Arc: Update ONLY the arc phase tag and add the latest turning point. Keep it under 2 sentences.
   Example: "[Story position: mid, Ch3/15] Hit bottom — just learned the betrayal."
 - Status: Only if they died, became absent, or their status changed.
 - Status Changed (Ch#): Only if status changed this chapter.
-- Backstory: Only if NEW backstory was revealed. Use "[ChN]: [fact]" format.
+- Backstory: Only if NEW backstory was revealed. Use "[ChN (DATE)]: [fact]" format.
 - Speech Pattern: Only if the way they speak visibly changed this chapter.
 - Do NOT suggest updates to "relationships" — character relationships are managed exclusively in the Relations tab.
 
 CRITICAL CONTENT RULES:
 - Each field ALREADY contains accumulated information. You must BUILD ON what's there — NEVER replace.
-- Your "suggested" value must include ALL existing content PLUS the new "[ChN]: ..." entries from this chapter.
+- Your "suggested" value must include ALL existing content PLUS the new "[ChN (DATE)]: ..." entries from this chapter.
 - If a field is "(empty)", write fresh concise content.
 - Only suggest changes where something actually CHANGED or was REVEALED.
 
 For each character who changed, output:
 \`\`\`json
 { "type": "character_updates", "data": [
-  { "name": "CharName", "field": "fieldName", "current": "the FULL existing value", "suggested": "existing + [ChN]: new entry", "reason": "brief: what changed" }
+  { "name": "CharName", "field": "fieldName", "current": "the FULL existing value", "suggested": "existing + [ChN (DATE)]: new entry", "reason": "brief: what changed" }
 ] }
 \`\`\`
 
 Fields you can suggest: desires, arc, status, statusChangedChapter, canonNotes, backstory, speechPattern.
 If no updates are needed, respond "No character updates needed."` },
-            { role: "user", content: `Chapter ${chNum} summary: ${summary}\n\nCurrent character profiles:\n${charContext}\n\nChapter number: ${chNum}` },
+            { role: "user", content: `Chapter ${chNum}${chapterDate ? ` (${chapterDate})` : ""} summary: ${summary}\n\nCurrent character profiles:\n${charContext}\n\nChapter number: ${chNum}${chapterDate ? `\nStory date: ${chapterDate}` : ""}` },
           ], { maxTokens: 10000, temperature: 0.4 });
 
           if (suggestions && !suggestions.toLowerCase().includes("no character updates needed")) {
@@ -5775,7 +6155,7 @@ Example output:
 \`\`\`
 
 If no relationship changes, respond "No relationship updates needed."` },
-              { role: "user", content: `Chapter ${chNum} summary: ${summary}\n\nChapter number: ${chNum}\nCharacters in scene: ${mentionedChars.map(c => c.name).join(", ")}` },
+              { role: "user", content: `Chapter ${chNum}${chapterDate ? ` (${chapterDate})` : ""} summary: ${summary}\n\nChapter number: ${chNum}${chapterDate ? `\nStory date: ${chapterDate}` : ""}\nCharacters in scene: ${mentionedChars.map(c => c.name).join(", ")}` },
             ], { maxTokens: 10000, temperature: 0.5 });
 
             if (relSuggestions && !relSuggestions.toLowerCase().includes("no relationship updates needed")) {
@@ -5908,7 +6288,7 @@ If no relationship changes, respond "No relationship updates needed."` },
       await GDrive.authenticate();
       setGdriveConnected(true);
       setSettings(prev => ({ ...prev, googleClientId: gdriveClientId }));
-      showToast("Connected to Google Drive!", "success");
+      showToast("Connected to Google Drive", "success");
 
       // ── NEW: Auto-load existing backup if one exists ──
       try {
@@ -6056,7 +6436,7 @@ If no relationship changes, respond "No relationship updates needed."` },
     if (!ch?.content || wordCount(ch.content) < 20) { showToast("Write some content first", "error"); return; }
 
     const plain = _htmlToPlain(ch.content);
-    const currentChNum = this._chapterNum(project, chapterIdx);
+    const currentChNum = ContextEngine._chapterNum(project, activeChapterIdx);
 
     // Previous chapter's world view for consistency
     let prevWorldView = "";
@@ -6995,13 +7375,11 @@ CRITICAL: Every sentence must describe something visible. If a detail cannot be 
               {genMode !== "rewrite" && (
               <button onClick={() => {
                 setGenMode("rewrite");
-                // Execute rewrite immediately
                 const domSel = (window.getSelection()?.toString() || "").trim();
                 const effectiveText = domSel || selectedText;
                 if (!effectiveText) { showToast("Select text first", "error"); return; }
-                // Temporarily set selectedText so handleGenerate sees it
                 setSelectedText(effectiveText);
-                setTimeout(() => handleGenerate(), 0);
+                pendingGenerateRef.current = true;
               }} className="nf-btn-micro">
                 <Icons.Replace /> Rewrite
               </button>
@@ -7020,7 +7398,6 @@ CRITICAL: Every sentence must describe something visible. If a detail cannot be 
 			  const capturedText = pendingSelectionRef.current
 				|| selectedText
 				|| (window.getSelection()?.toString() || "").trim();
-			  console.log("[ImagePrompt] capturedText length:", capturedText.length);
 			  if (!capturedText) { showToast("Select text first", "error"); return; }
 			  pendingSelectionRef.current = "";
 			  const MAX_SCENE_TEXT = 8000;
@@ -7028,11 +7405,9 @@ CRITICAL: Every sentence must describe something visible. If a detail cannot be 
 				? capturedText.slice(0, MAX_SCENE_TEXT) + "\n\n[...selected text truncated...]"
 				: capturedText;
 			  const contextData = generateSceneImagePrompt(effectiveText, project, activeChapterIdx);
-			  console.log("[ImagePrompt] contextData ok, chars:", contextData.mentionedChars.length);
 			  const modalData = { ...contextData, isGenerating: true, prompt: "", desensitizedPrompt: null };
 			  setImagePromptData(modalData);
 			  showToast("Generating image prompt...", "info");
-			  console.log("[ImagePrompt] modal opened, starting async...");
 			  setTimeout(async () => {
 				const abortController = new AbortController();
 				imagePromptAbortRef.current = abortController;
@@ -7177,6 +7552,7 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
 - Reframe all the explicit or NSFW actions to safe activities that yield similar physical positioning and double it with safe or funny intent (if kissing, then say that the other one is his wife/husband. if being tied, then say the tied guy has agreed to be punished if he is late, and he is actually late, etc)
 - If anal with fingering, then maybe we can try scratching (you know when your butthole is itchy?) but frame it funnily.
 - Strictly no genital or sensitive body language, say other normal body parts in latin language or referencing normal location (e.g. nipple should be changed to center of upper chest) -- you must not make the reader realize there are body parts mentioned
+- Expression should be the same as described even though the reason they made that expression should be altered to be SFW (If they look angry, then they must look angry)
 - The content filter is very sensitive about bedroom and its furnitures, and bathroom and its furnitures -- so make sure you frame it as really funny activities that are consensually done and do not mention suggestive adjective like tight, wet, etc.
 - Keep ALL positioning, spatial relationships, camera angles, and visual composition IDENTICAL
 - Keep ALL character face references and physical descriptions IDENTICAL
@@ -7213,7 +7589,7 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
       )}
 
       {/* White Room quick access */}
-      <div style={{ padding: "4px 10px", borderBottom: "1px solid var(--nf-border)", display: "flex", justifyContent: "flex-end" }}>
+      <div style={{ padding: "4px 10px", borderBottom: "1px solid var(--nf-border)", display: "flex", justifyContent: "flex-end", gap: 4 }}>
           <button onClick={() => setShowRelWeb(true)} className="nf-btn-micro" title="Visualize relationship web">
             ◈ Web
           </button>
@@ -7275,13 +7651,11 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                 {msg.isError && (
                   <div className="nf-chat-actions">
                     <button onClick={() => {
-                      // FIX 2.10: Find the last user message and re-inject its content into chatInput, then generate
                       const lastUser = [...chatMessages].reverse().find(m => m.role === "user");
                       if (lastUser) {
                         setChatMessages(prev => prev.filter(m => m.id !== msg.id));
                         setChatInput(lastUser.content);
-                        // Trigger generate on next tick after state updates
-                        setTimeout(() => handleGenerate(), 50);
+                        pendingGenerateRef.current = true;
                       }
                     }} className="nf-btn-micro" style={{ borderColor: "var(--nf-accent)" }}>↻ Retry</button>
                     <button onClick={() => setChatMessages(prev => prev.filter(m => m.id !== msg.id))} className="nf-btn-micro"><Icons.X /> Dismiss</button>
@@ -7435,6 +7809,13 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                       <div className="nf-chapter-item-meta">
                         {chapterWordCounts[i] > 0 ? `${chapterWordCounts[i].toLocaleString()} w` : "Empty"}
                         {ch.summary ? " · ✦" : ""}
+                        {(() => {
+                          const plotE = ch.linkedPlotId
+                            ? (project?.plotOutline || []).find(pl => pl.id === ch.linkedPlotId)
+                            : (project?.plotOutline || []).find(pl => (pl.chapter || 0) === i + 1);
+                          if (plotE?.date) return <span className="nf-chapter-date">{plotE.date}</span>;
+                          return null;
+                        })()}
                       </div>
                     </div>
                   </div>
@@ -7535,7 +7916,7 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
               <div style={{ display: "flex", alignItems: "center", gap: 10, flex: 1, minWidth: 0 }}>
                 <span style={{ color: "var(--nf-accent)", fontSize: 12 }}>◇</span>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 9, color: "var(--nf-accent)", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.12em" }}>
+                  <div style={{ fontSize: 9, color: "var(--nf-accent)", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em" }}>
                     Viewing Draft — Ch{(draft.originalIndex ?? activeChapterIdx) + 1}
                   </div>
                   <div style={{ fontSize: 14, fontWeight: 500, color: "var(--nf-text)", fontFamily: "var(--nf-font-display)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
@@ -7930,6 +8311,11 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
             <Tooltip text="Export to PDF">
               <button onClick={() => setPdfExportMode("menu")} className="nf-btn-icon-sm"><Icons.FileText /></button>
             </Tooltip>
+            <Tooltip text="Relationship web">
+              <button onClick={() => setShowRelWeb(true)} className="nf-btn-icon-sm" aria-label="Relationship web">
+                <RelWebMinimap characters={project?.characters} relationships={project?.relationships} onClick={() => setShowRelWeb(true)} />
+              </button>
+            </Tooltip>
             {isMobile && settings.apiKey && (
               <button onClick={() => setShowAiMobile(true)} className="nf-btn-icon-sm" style={{ borderColor: "var(--nf-accent)", color: "var(--nf-accent)" }} aria-label="Open AI assistant"><Icons.Zap /> AI</button>
             )}
@@ -7952,9 +8338,35 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
         </div>
         )}
         <WordGoalBar current={totalProjectWords} goal={project?.wordGoal || 0} sessionWords={sessionWords} />
+        {!focusMode && !viewingDraftId && (
+          <CharacterPresenceStrip
+            characters={project?.characters}
+            chapterContent={activeChapter?.content}
+            relationships={project?.relationships}
+            povCharId={(() => {
+              const plotE = ContextEngine._plotEntryForChapter(project, activeChapterIdx);
+              if (plotE?.povCharacterId) return plotE.povCharacterId;
+              const p = (project?.characters || []).find(c => c.role === "protagonist");
+              return p?.id || null;
+            })()}
+            onCharClick={(charId) => { setActiveTab("characters"); setEditingCharId(charId); }}
+          />
+        )}
         <RichTextToolbar editorRef={editorRef} onContentChange={syncEditorContent} />
         <div className="nf-editor-split">
+          {!focusMode && (
+            <BeatProgressRail
+              plotEntry={ContextEngine._plotEntryForChapter(project, activeChapterIdx)}
+              editorRef={editorRef}
+              chapterContent={activeChapter?.content}
+            />
+          )}
           <div className="nf-text-editor">
+            <ContinuityGhost
+              prevChapter={activeChapterIdx > 0 ? project?.chapters?.[activeChapterIdx - 1] : null}
+              prevChapterSummary={activeChapterIdx > 0 ? project?.chapters?.[activeChapterIdx - 1]?.summary : ""}
+              currentContent={activeChapter?.content}
+            />
             <div ref={editorRef} contentEditable="true" suppressContentEditableWarning
               className="nf-editor-contenteditable"
               spellCheck="true"
@@ -8296,7 +8708,7 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                 );
                 return (
                   <div style={{ marginTop: 8, padding: "10px 12px", background: "var(--nf-bg-deep)", border: "1px solid var(--nf-border)", borderRadius: 2 }}>
-                    <div style={{ fontSize: 9, fontWeight: 500, textTransform: "uppercase", letterSpacing: "0.12em", color: "var(--nf-text-muted)", marginBottom: 8 }}>Relationships (from Relationships tab)</div>
+                    <div style={{ fontSize: 9, fontWeight: 500, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--nf-text-muted)", marginBottom: 8 }}>Relationships (from Relationships tab)</div>
                     {charRels.map(r => {
                       const otherId = r.char1 === editingCharId ? r.char2 : r.char1;
                       const otherName = _resolveCharName(otherId, project?.characters);
@@ -8385,7 +8797,7 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                       <span style={{ fontWeight: 600, fontSize: 13, color: "var(--nf-text)" }}>{item.name || <span style={{ opacity: 0.4, fontStyle: "italic" }}>Unnamed entry</span>}</span>
-                      {item.category && <span style={{ fontSize: 9, padding: "1px 6px", borderRadius: 4, background: "var(--nf-bg-surface)", border: "1px solid var(--nf-border)", color: "var(--nf-text-muted)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>{item.category}</span>}
+                      {item.category && <span style={{ fontSize: 9, padding: "1px 6px", borderRadius: 4, background: "var(--nf-bg-surface)", border: "1px solid var(--nf-border)", color: "var(--nf-text-muted)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em" }}>{item.category}</span>}
                       {isHiddenFromAI && <span style={{ fontSize: 8, padding: "1px 5px", borderRadius: 2, background: "var(--nf-error-bg)", border: "1px solid var(--nf-error-border)", color: "var(--nf-accent)", fontWeight: 600 }}>Hidden until Ch{item.introducedInChapter}</span>}
                     </div>
                     {!isExpanded && item.description && <div style={{ fontSize: 11, color: "var(--nf-text-muted)", marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.description.slice(0, 100)}</div>}
@@ -8412,7 +8824,7 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                         {/* Image Prompts — 4 walls of the room */}
                         <div style={{ marginTop: 12 }}>
                           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-                            <div style={{ fontSize: 9, fontWeight: 500, textTransform: "uppercase", letterSpacing: "0.12em", color: "var(--nf-text-muted)", fontFamily: "var(--nf-font-body)" }}>
+                            <div style={{ fontSize: 9, fontWeight: 500, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--nf-text-muted)", fontFamily: "var(--nf-font-body)" }}>
                               Room Views (4 walls — upload images or copy prompts)
                             </div>
                             <button
@@ -8524,7 +8936,7 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                                       {hasPrompt && (
                                         <button onClick={() => {
                                           navigator.clipboard.writeText(prompts[wallKey]);
-                                          showToast("Prompt copied!", "success");
+                                          showToast("Prompt copied", "success");
                                         }} className="nf-btn-micro" style={{ fontSize: 8, padding: "2px 6px" }}>
                                           <Icons.Copy /> Copy
                                         </button>
@@ -8719,7 +9131,7 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
 						    fontSize: 9, fontWeight: 700, color: "var(--nf-accent)",
 						    background: "var(--nf-bg-surface)", padding: "2px 6px",
 						    borderRadius: 2, border: "1px solid var(--nf-border)",
-						    fontFamily: "var(--nf-font-mono)", letterSpacing: "0.05em",
+						    fontFamily: "var(--nf-font-mono)", letterSpacing: "0.08em",
 						  }}>B{bi + 1}</span>
 					    </div>
 					    <div style={{ flex: 1 }}>
@@ -8933,7 +9345,7 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                     {/* Relationship Evolution Path — visual progression */}
                     {r.progression && (
                       <div style={{ margin: "4px 0 12px", padding: "10px 14px", background: "var(--nf-bg-deep)", border: "1px solid var(--nf-border)", borderRadius: 2 }}>
-                        <div style={{ fontSize: 9, fontWeight: 500, color: "var(--nf-text-muted)", textTransform: "uppercase", letterSpacing: "0.12em", marginBottom: 8, fontFamily: "var(--nf-font-body)" }}>Evolution Path</div>
+                        <div style={{ fontSize: 9, fontWeight: 500, color: "var(--nf-text-muted)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8, fontFamily: "var(--nf-font-body)" }}>Evolution Path</div>
                         <div style={{ display: "flex", alignItems: "center", gap: 0, flexWrap: "wrap" }}>
                           {r.progression.split(/\s*[→➜>]\s*/).filter(Boolean).map((stage, si, arr) => {
                             // Determine if this stage is "reached" based on current status
@@ -9462,7 +9874,8 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
             --nf-font-body: 'DM Sans', -apple-system, sans-serif;
             --nf-font-prose: 'Cormorant Garamond', Georgia, serif;
             --nf-font-mono: 'IBM Plex Mono', monospace;
-            --nf-radius: 4px; --nf-radius-sm: 3px;
+            --nf-radius: 4px; --nf-radius-sm: 3px; --nf-radius-lg: 8px; --nf-radius-dialog: 6px; --nf-radius-pill: 20px;
+            --nf-ls-label: 0.08em; --nf-ls-wide: 0.1em;
           }
           * { box-sizing: border-box; margin: 0; }
           @keyframes nf-spin { to { transform: rotate(360deg); } }
@@ -9613,6 +10026,88 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
           .nf-editor-contenteditable ul, .nf-editor-contenteditable ol { padding-left: 1.5em; margin-bottom: 0.8em; }
           .nf-editor-contenteditable hr { border: none; border-top: 1px solid var(--nf-border); margin: 16px 0; }
           
+          /* ─── 1. Character Presence Strip ─── */
+          .nf-presence-strip { display: flex; align-items: center; gap: 2px; padding: 0 14px; border-bottom: 1px solid var(--nf-border); background: var(--nf-bg-raised); overflow-x: auto; scrollbar-width: none; height: 52px; flex-shrink: 0; }
+          .nf-presence-strip::-webkit-scrollbar { display: none; }
+          .nf-presence-label { font-size: 9px; font-weight: 700; color: var(--nf-text-muted); text-transform: uppercase; letter-spacing: 0.08em; margin-right: 8px; flex-shrink: 0; font-family: var(--nf-font-body); }
+          .nf-presence-chip { display: flex; flex-direction: column; align-items: center; gap: 2px; cursor: pointer; padding: 4px 6px 2px; border-radius: 6px; transition: background 0.15s; position: relative; flex-shrink: 0; }
+          .nf-presence-chip:hover { background: var(--nf-bg-hover); }
+          .nf-presence-chip.nf-pov { background: var(--nf-accent-glow); }
+          .nf-presence-chip.nf-dead { opacity: 0.3; }
+          .nf-presence-chip.nf-absent { opacity: 0.25; }
+          .nf-presence-avatar-wrap { position: relative; width: 32px; height: 32px; }
+          .nf-presence-img { width: 32px; height: 32px; border-radius: 50%; object-fit: cover; border: 2px solid var(--nf-border); display: block; }
+          .nf-pov .nf-presence-img { border-color: var(--nf-accent); }
+          .nf-presence-chip:hover .nf-presence-img { border-color: var(--nf-accent-2); }
+          .nf-presence-initial { width: 32px; height: 32px; border-radius: 50%; background: var(--nf-bg-surface); border: 2px solid var(--nf-border); display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 500; color: var(--nf-text-muted); font-family: var(--nf-font-display); }
+          .nf-pov .nf-presence-initial { border-color: var(--nf-accent); color: var(--nf-accent); }
+          .nf-presence-badge { position: absolute; top: -2px; right: -2px; font-size: 10px; font-weight: 700; color: var(--nf-accent); line-height: 1; }
+          .nf-presence-tension { position: absolute; bottom: 0; right: 0; width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid var(--nf-bg-raised); }
+          .nf-presence-name { font-size: 9px; color: var(--nf-text-muted); font-weight: 500; max-width: 48px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: center; font-family: var(--nf-font-body); line-height: 1.1; }
+          .nf-pov .nf-presence-name { color: var(--nf-accent); font-weight: 700; }
+          .nf-dead .nf-presence-img { filter: grayscale(0.8); }
+          /* Hover card */
+          .nf-presence-card { position: fixed; z-index: 10001; transform: translateX(-50%); width: 320px; max-height: 400px; overflow-y: auto; background: var(--nf-dialog-bg); border: 1px solid var(--nf-border); border-radius: 6px; box-shadow: var(--nf-shadow-lg); animation: nf-fadeIn 0.12s ease-out; scrollbar-width: thin; scrollbar-color: var(--nf-scrollbar-thumb) transparent; }
+          .nf-pc-head { display: flex; align-items: center; gap: 12px; padding: 14px 16px 10px; }
+          .nf-pc-avatar { flex-shrink: 0; }
+          .nf-pc-img { width: 44px; height: 44px; border-radius: 50%; object-fit: cover; border: 2px solid var(--nf-border); display: block; }
+          .nf-pc-initial { width: 44px; height: 44px; border-radius: 50%; background: var(--nf-bg-surface); border: 2px solid var(--nf-border); display: flex; align-items: center; justify-content: center; font-size: 18px; font-weight: 400; color: var(--nf-text-muted); font-family: var(--nf-font-display); }
+          .nf-pc-identity { min-width: 0; }
+          .nf-pc-name { font-size: 16px; font-weight: 500; color: var(--nf-text); font-family: var(--nf-font-display); line-height: 1.2; }
+          .nf-pc-meta { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; margin-top: 3px; font-size: 10px; color: var(--nf-text-muted); text-transform: capitalize; }
+          .nf-pc-tag { padding: 1px 5px; border-radius: 3px; font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; }
+          .nf-pc-tag-pov { background: var(--nf-accent-glow); color: var(--nf-accent); border: 1px solid var(--nf-accent); }
+          .nf-pc-tag-status { background: var(--nf-error-bg); color: var(--nf-accent); border: 1px solid var(--nf-error-border); }
+          .nf-pc-section { padding: 0 16px 10px; }
+          .nf-pc-section-label { font-size: 9px; font-weight: 700; color: var(--nf-accent-2); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 3px; }
+          .nf-pc-body { font-size: 11.5px; color: var(--nf-text-dim); line-height: 1.55; }
+          .nf-pc-italic { font-style: italic; }
+          .nf-pc-rel-section { padding: 8px 16px 12px; margin: 0; border-top: 1px solid var(--nf-border); background: var(--nf-bg-raised); border-radius: 0 0 6px 6px; }
+          .nf-pc-rel-header { display: flex; align-items: center; gap: 5px; margin-bottom: 4px; font-size: 10px; }
+          .nf-pc-rel-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+          .nf-pc-rel-tension { font-weight: 700; color: var(--nf-text); text-transform: capitalize; }
+          .nf-pc-rel-type { color: var(--nf-text-muted); }
+          .nf-pc-rel-with { color: var(--nf-text-muted); opacity: 0.6; }
+          
+          /* ─── 3. Beat Progress Rail ─── */
+          .nf-beat-rail { display: flex; flex-direction: column; align-items: center; width: 18px; flex-shrink: 0; padding: 20px 0 20px; }
+          .nf-beat-seg { display: flex; flex-direction: column; align-items: center; flex: 1; min-height: 18px; }
+          .nf-beat-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--nf-border); transition: all 0.3s ease; flex-shrink: 0; z-index: 1; opacity: 0.4; }
+          .nf-beat-seg.done .nf-beat-dot { background: var(--nf-accent-2); opacity: 0.8; }
+          .nf-beat-seg.now .nf-beat-dot { background: var(--nf-accent); opacity: 1; transform: scale(1.6); box-shadow: 0 0 6px rgba(196,101,58,0.25); }
+          .nf-beat-line { width: 1px; flex: 1; min-height: 6px; background: var(--nf-border); opacity: 0.2; transition: all 0.3s; }
+          .nf-beat-seg.done .nf-beat-line { background: var(--nf-accent-2); opacity: 0.4; }
+          .nf-beat-seg.now .nf-beat-line { background: var(--nf-accent-2); opacity: 0.25; }
+          
+          /* ─── 4. Dialogue Tension Indicator ─── */
+          .nf-tension-strip { display: flex; flex-wrap: wrap; gap: 4px; padding: 5px 10px; border-bottom: 1px solid var(--nf-border); }
+          .nf-tension-pill { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 3px; background: var(--nf-bg-surface); cursor: default; transition: background 0.15s; }
+          .nf-tension-pill:hover { background: var(--nf-bg-hover); }
+          .nf-tension-dot { width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0; }
+          .nf-tension-label { font-size: 9px; color: var(--nf-text-muted); font-weight: 600; white-space: nowrap; }
+          .nf-tension-sep { font-size: 9px; color: var(--nf-border); font-weight: 400; }
+          
+          /* ─── 5. Timeline Date (chapter sidebar) ─── */
+          .nf-chapter-date { display: block; font-size: 9px; color: var(--nf-accent-2); margin-top: 1px; font-family: var(--nf-font-mono); letter-spacing: 0.01em; opacity: 0.6; }
+          .nf-chapter-item.active .nf-chapter-date { opacity: 1; color: var(--nf-accent); }
+          
+          /* ─── 6. Continuity Ghost ─── */
+          .nf-ghost { padding: 16px 44px 14px; cursor: pointer; transition: opacity 0.25s ease; opacity: 0.5; }
+          .nf-ghost:hover { opacity: 0.8; }
+          .nf-ghost-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+          .nf-ghost-from { font-size: 10px; font-weight: 600; color: var(--nf-accent-2); font-family: var(--nf-font-body); }
+          .nf-ghost-x { font-size: 10px; color: var(--nf-text-muted); opacity: 0; transition: opacity 0.2s; }
+          .nf-ghost:hover .nf-ghost-x { opacity: 0.6; }
+          .nf-ghost-prose { font-family: var(--nf-font-prose); font-size: 14px; line-height: 1.75; color: var(--nf-editor-text); font-style: italic; opacity: 0.4; transition: opacity 0.25s; }
+          .nf-ghost:hover .nf-ghost-prose { opacity: 0.6; }
+          .nf-ghost-memo { margin-top: 8px; padding: 6px 10px; border-left: 2px solid var(--nf-accent-2); font-size: 10px; color: var(--nf-text-muted); line-height: 1.5; font-family: var(--nf-font-body); opacity: 0.5; transition: opacity 0.25s; }
+          .nf-ghost:hover .nf-ghost-memo { opacity: 0.7; }
+          .nf-ghost-memo-label { font-size: 8px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: var(--nf-accent-2); margin-right: 6px; }
+          
+          /* ─── 10. Relationship Web Minimap ─── */
+          .nf-minimap { cursor: pointer; line-height: 0; flex-shrink: 0; display: inline-block; }
+          .nf-minimap svg { display: block; }
+          
           .nf-focus-mode .nf-chapter-sidebar { display: none; }
           .nf-focus-mode .nf-ai-panel { display: none; }
           .nf-focus-mode .nf-rich-toolbar { opacity: 0; transition: opacity 0.2s; }
@@ -9701,6 +10196,15 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
             .nf-focus-mode .nf-editor-contenteditable { padding: 20px 16px; }
             .nf-rich-toolbar { padding: 3px 6px; }
             .nf-focus-exit-btn { opacity: 0.7; }
+            .nf-presence-strip { height: 42px; padding: 0 8px; }
+            .nf-presence-img, .nf-presence-initial { width: 24px; height: 24px; font-size: 10px; }
+            .nf-presence-avatar-wrap { width: 24px; height: 24px; }
+            .nf-presence-name { font-size: 7px; max-width: 32px; }
+            .nf-presence-label { display: none; }
+            .nf-beat-rail { display: none; }
+            .nf-ghost { padding: 10px 16px; }
+            .nf-ghost-prose { font-size: 12px; }
+            .nf-chapter-date { font-size: 8px; }
           }
           @media (max-width: 480px) {
             .nf-tab-label { display: none; }
@@ -9934,14 +10438,14 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                 <strong style={{ color: "var(--nf-text-dim)" }}>Publish</strong> — clean book with title page, table of contents, justified prose
               </div>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-                <div style={{ fontSize: 9, textTransform: "uppercase", letterSpacing: "0.12em", color: "var(--nf-text-muted)", gridColumn: "1 / -1", marginBottom: 2, fontWeight: 500 }}>Full Book</div>
+                <div style={{ fontSize: 9, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--nf-text-muted)", gridColumn: "1 / -1", marginBottom: 2, fontWeight: 500 }}>Full Book</div>
                 <button onClick={() => handleExportPdf("draft")} className="nf-btn" style={{ justifyContent: "center" }}>
                   <Icons.FileText /> Draft
                 </button>
                 <button onClick={() => handleExportPdf("publish")} className="nf-btn nf-btn-primary" style={{ justifyContent: "center" }}>
                   <Icons.Book /> Publish
                 </button>
-                <div style={{ fontSize: 9, textTransform: "uppercase", letterSpacing: "0.12em", color: "var(--nf-text-muted)", gridColumn: "1 / -1", marginTop: 8, marginBottom: 2, fontWeight: 500 }}>Current Chapter Only</div>
+                <div style={{ fontSize: 9, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--nf-text-muted)", gridColumn: "1 / -1", marginTop: 8, marginBottom: 2, fontWeight: 500 }}>Current Chapter Only</div>
                 <button onClick={() => handleExportPdf("chapter-draft")} className="nf-btn" style={{ justifyContent: "center" }}>
                   <Icons.FileText /> Ch. Draft
                 </button>
@@ -9983,7 +10487,7 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                 {/* Reference images from world entry */}
                 {imagePromptData.worldRefImages.length > 0 && (
                   <div style={{ marginBottom: 16 }}>
-                    <div style={{ fontSize: 9, fontWeight: 500, textTransform: "uppercase", letterSpacing: "0.12em", color: "var(--nf-accent)", marginBottom: 8 }}>
+                    <div style={{ fontSize: 9, fontWeight: 500, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--nf-accent)", marginBottom: 8 }}>
                       Attach these reference images to your image LLM for location consistency
                     </div>
                     <div style={{ display: "flex", gap: 8, overflowX: "auto" }}>
