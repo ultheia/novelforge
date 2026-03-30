@@ -6904,7 +6904,7 @@ CRITICAL: Every sentence must describe something visible. If a detail cannot be 
   const handleGenerateImage = useCallback(async (prompt) => {
     if (!settings.apiKey || !prompt?.trim()) return;
     setImageGenStatus({ status: "generating", imageUrl: null, retryCount: 0, error: null });
-    const maxRetries = 3;
+    const maxRetries = 6;
     for (let attempt = 0; attempt < maxRetries; attempt++) {
       try {
         setImageGenStatus(prev => ({ ...prev, retryCount: attempt }));
