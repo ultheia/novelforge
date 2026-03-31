@@ -290,20 +290,27 @@ const GDriveImages = {
   
   async syncUpload(allImages, onProgress) {
     const folderId = await this.findOrCreateImageFolder();
-    let uploaded = 0, skipped = 0, repaired = 0;
+    let uploaded = 0, skipped = 0;
 
-    // ── Phase 1: Batch-verify cached Drive files actually exist ──
-    const cachedHashes = new Set();
+    // ── Phase 1: Pre-compute hashes on ORIGINAL data (deterministic) and compress ──
+    const prepared = [];
     for (const img of allImages) {
+      // Hash the ORIGINAL base64 data — this is deterministic
+      const hash = await ImageUtils.hashBase64(img.data);
+      // Only compress for upload (non-deterministic, but we don't hash the result)
       const compressed = await ImageUtils.compressBase64(img.data);
-      const hash = await ImageUtils.hashBase64(compressed);
-      if (this._hashToDriveId[hash]) cachedHashes.add(hash);
+      prepared.push({ ...img, hash, compressed });
+    }
+
+    // ── Phase 2: Batch-verify cached Drive files actually exist ──
+    const cachedHashes = new Set();
+    for (const p of prepared) {
+      if (this._hashToDriveId[p.hash]) cachedHashes.add(p.hash);
     }
 
     if (cachedHashes.size > 0) {
       try {
         const hashesArr = [...cachedHashes];
-        // Check in batches of 30 (Drive query URL length limit)
         for (let i = 0; i < hashesArr.length; i += 30) {
           const batch = hashesArr.slice(i, i + 30);
           const nameQuery = batch.map(h => `name='${h}.jpg'`).join(" or ");
@@ -314,39 +321,34 @@ const GDriveImages = {
           if (res.ok) {
             const data = await res.json();
             const foundHashes = new Set((data.files || []).map(f => f.name.replace(".jpg", "")));
-            // Remove stale entries — files that don't actually exist on Drive
             for (const h of batch) {
               if (!foundHashes.has(h)) {
-                console.warn(`[NovelForge] Stale cache entry removed: ${h}`);
                 delete this._hashToDriveId[h];
               }
             }
           }
         }
       } catch (e) {
-        console.warn("[NovelForge] Cache verification failed, proceeding with upload:", e.message);
-        // If verification fails, clear the entire cache so everything re-uploads
+        console.warn("[NovelForge] Cache verification failed:", e.message);
         for (const h of cachedHashes) delete this._hashToDriveId[h];
       }
     }
 
-    // ── Phase 2: Upload with fresh/verified cache ──
-    for (const img of allImages) {
-      const compressed = await ImageUtils.compressBase64(img.data);
-      const hash = await ImageUtils.hashBase64(compressed);
-
-      if (this._hashToDriveId[hash]) {
-        this._pathToBase64[img.path] = compressed;
-        this._pathToDriveId[img.path] = this._hashToDriveId[hash];
+    // ── Phase 3: Upload with verified cache ──
+    for (const p of prepared) {
+      if (this._hashToDriveId[p.hash]) {
+        this._pathToBase64[p.path] = p.compressed;
+        this._pathToDriveId[p.path] = this._hashToDriveId[p.hash];
         skipped++;
+        if (onProgress) onProgress(uploaded + skipped, prepared.length);
         continue;
       }
 
       try {
-        const blob = ImageUtils.base64ToBlob(compressed);
+        const blob = ImageUtils.base64ToBlob(p.compressed);
         const form = new FormData();
         form.append("metadata", new Blob([JSON.stringify({
-          name: `${hash}.jpg`,
+          name: `${p.hash}.jpg`,
           mimeType: blob.type,
           parents: [folderId],
         })], { type: "application/json" }));
@@ -358,16 +360,15 @@ const GDriveImages = {
         });
         if (res.ok) {
           const data = await res.json();
-          this._hashToDriveId[hash] = data.id;
-          this._pathToBase64[img.path] = compressed;
-          this._pathToDriveId[img.path] = data.id;
+          this._hashToDriveId[p.hash] = data.id;
+          this._pathToBase64[p.path] = p.compressed;
+          this._pathToDriveId[p.path] = data.id;
           uploaded++;
         } else {
-          const errText = await res.text().catch(() => "");
-          console.error(`[NovelForge] Image upload failed (${res.status}):`, img.path, errText);
+          console.error(`[NovelForge] Image upload failed (${res.status}):`, p.path);
         }
       } catch (e) {
-        console.error("[NovelForge] Image upload exception:", img.path, e.message);
+        console.error("[NovelForge] Image upload exception:", p.path, e.message);
       }
 
       if (onProgress) onProgress(uploaded + skipped + repaired, allImages.length);
@@ -2883,7 +2884,8 @@ const CleanViewModal = memo(({ project, startChapter, onClose }) => {
     return () => window.removeEventListener("keydown", handler);
   }, [onClose, chapters.length]);
 
-  const contentHtml = ch?.content || "";
+  // Strip beat markers and other editor artifacts for clean reading
+  const contentHtml = (ch?.content || "").replace(/<div\s+class="nf-beat-marker"[^>]*>.*?<\/div>/g, "").replace(/<div\s+class="nf-beat-marker"[^>]*\/>/g, "");
   return (
     <div style={{
 	  position: "fixed", inset: 0, zIndex: 9996, background: "var(--nf-bg-deep)",
@@ -2892,9 +2894,12 @@ const CleanViewModal = memo(({ project, startChapter, onClose }) => {
 	  <style>{`
 		.nf-img-handle { display: none !important; }
 		.nf-img-actions { display: none !important; }
+		.nf-beat-marker { display: none !important; }
+		.nf-clean-reader p { margin-bottom: 1em; }
+		.nf-clean-reader figure { margin: 24px 0; }
+		.nf-clean-reader figure img { width: 100%; height: auto; border-radius: 2px; }
 	  `}</style>
   {/* Minimal header */}
-      {/* Minimal header */}
       <div style={{ padding: "10px 24px", borderBottom: "1px solid var(--nf-border)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
           <button onClick={() => setViewChapter(prev => Math.max(prev - 1, 0))} disabled={viewChapter === 0} className="nf-btn-icon" style={{ opacity: viewChapter === 0 ? 0.2 : 1 }}>
@@ -2911,10 +2916,10 @@ const CleanViewModal = memo(({ project, startChapter, onClose }) => {
       </div>
       {/* Reader area */}
       <div style={{ flex: 1, overflow: "auto", display: "flex", justifyContent: "center" }}>
-        <div style={{
+        <div className="nf-clean-reader" style={{
           maxWidth: 680, width: "100%", padding: "48px 32px 100px",
-          fontFamily: "var(--nf-font-prose)", fontSize: 17, lineHeight: 1.85,
-          color: "var(--nf-editor-text)", letterSpacing: "0.01em",
+          fontFamily: "var(--nf-font-prose)", fontSize: 17, lineHeight: 2.0,
+          color: "var(--nf-editor-text)", letterSpacing: "0.015em",
         }} dangerouslySetInnerHTML={{ __html: contentHtml || '<p style="color:var(--nf-text-muted);font-style:italic">This chapter is empty.</p>' }} />
       </div>
       {/* Keyboard hint */}
@@ -3272,8 +3277,11 @@ const _attachImageEvents = (fig, editorEl) => {
   // Drag to reposition — grab handle or image
   const handle = fig.querySelector('.nf-img-handle');
   const img = fig.querySelector('img');
-  const dragSource = handle || img;
-  if (!dragSource) return;
+  if (!handle && !img) return;
+
+  // Prevent native drag behavior on the figure
+  fig.setAttribute('draggable', 'false');
+  fig.addEventListener('dragstart', (e) => e.preventDefault());
 
   let isDragging = false;
   let clone = null;
@@ -3352,7 +3360,8 @@ const _attachImageEvents = (fig, editorEl) => {
     editorEl.dispatchEvent(new Event('input', { bubbles: true }));
   };
 
-  dragSource.addEventListener('mousedown', onMouseDown);
+  if (handle) handle.addEventListener('mousedown', onMouseDown);
+  if (img) img.addEventListener('mousedown', onMouseDown);
 };
 
 const _attachBeatDragEvents = (markerEl, editorEl) => {
@@ -3700,6 +3709,45 @@ const Field = memo(({ label, value, onChange, multiline, placeholder, small, typ
     )}
   </div>
 ));
+
+// Debounced field — keeps local state while typing, only pushes to parent on blur or after 400ms idle
+// Prevents re-rendering entire parent component tree on every keystroke
+const DebouncedField = memo(({ label, value, onChange, multiline, placeholder, small, type }) => {
+  const [local, setLocal] = useState(value || "");
+  const timerRef = useRef(null);
+  const onChangeRef = useRef(onChange);
+  onChangeRef.current = onChange;
+
+  // Sync from parent when value changes externally
+  useEffect(() => { setLocal(value || ""); }, [value]);
+
+  const flush = useCallback(() => {
+    clearTimeout(timerRef.current);
+    onChangeRef.current(local);
+  }, [local]);
+
+  const handleChange = useCallback((e) => {
+    const v = e.target.value;
+    setLocal(v);
+    clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(() => onChangeRef.current(v), 400);
+  }, []);
+
+  useEffect(() => () => clearTimeout(timerRef.current), []);
+
+  return (
+    <div className="nf-field">
+      {label && <label className="nf-label">{label}</label>}
+      {multiline ? (
+        <textarea value={local} onChange={handleChange} onBlur={flush} placeholder={placeholder}
+          className={`nf-textarea ${small ? "nf-textarea-sm" : ""}`} />
+      ) : (
+        <input value={local} onChange={handleChange} onBlur={flush} placeholder={placeholder}
+          type={type || "text"} className="nf-input" />
+      )}
+    </div>
+  );
+});
 
 // ─── SELECT FIELD ───
 const SelectField = memo(({ label, value, onChange, options, placeholder }) => (
@@ -7040,15 +7088,49 @@ CRITICAL: Every sentence must describe something visible. If a detail cannot be 
     const caption = _sceneCaption(selectedText, activeChapterIdx, activeChapter?.title);
     const imgHtml = `<figure class="nf-img-wrapper" contenteditable="false" style="text-align:center;margin:20px 0;position:relative;display:block;width:100%"><span class="nf-img-handle">⠿ drag</span><span class="nf-img-actions"><button class="nf-img-del" title="Delete image">✕</button></span><img src="${imageUrl}" style="max-width:100%;border-radius:2px;box-shadow:0 2px 12px rgba(0,0,0,0.15)" alt="${caption.replace(/"/g, '&quot;')}" draggable="false" /><figcaption class="nf-img-caption" style="font-size:10px;color:var(--nf-text-muted);font-style:italic;margin-top:4px;padding-top:4px;border-top:1px solid var(--nf-border);text-align:center">${caption}</figcaption></figure>`;
     el.focus();
+    // Always append at the END of editor content
+    const sel = window.getSelection();
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    range.collapse(false); // collapse to end
+    sel.removeAllRanges();
+    sel.addRange(range);
     document.execCommand("insertHTML", false, "<br/>" + imgHtml + "<br/>");
     syncEditorContent();
     lastSyncedContentRef.current = el.innerHTML;
     const newFig = el.querySelector('figure.nf-img-wrapper:last-of-type');
     if (newFig) _attachImageEvents(newFig, el);
-    showToast("Image inserted into chapter", "success");
+    showToast("Image appended to chapter", "success");
     setImagePromptData(null);
     setImageGenStatus(null);
   }, [selectedText, activeChapterIdx, activeChapter?.title, syncEditorContent, showToast]);
+
+  const [pendingImageInsert, setPendingImageInsert] = useState(null); // { imageUrl, caption }
+
+  // Insert pending image when write tab editor mounts
+  useEffect(() => {
+    if (!pendingImageInsert || activeTab !== "write") return;
+    const tryInsert = () => {
+      const el = editorRef.current;
+      if (!el) return false;
+      const { imageUrl, caption } = pendingImageInsert;
+      const imgHtml = `<figure class="nf-img-wrapper" contenteditable="false" style="text-align:center;margin:20px 0;position:relative;display:block;width:100%"><span class="nf-img-handle">⠿ drag</span><span class="nf-img-actions"><button class="nf-img-del" title="Delete image">✕</button></span><img src="${imageUrl}" style="max-width:100%;border-radius:2px;box-shadow:0 2px 12px rgba(0,0,0,0.15)" alt="${caption.replace(/"/g, '&quot;')}" draggable="false" /><figcaption class="nf-img-caption" style="font-size:10px;color:var(--nf-text-muted);font-style:italic;margin-top:4px;padding-top:4px;border-top:1px solid var(--nf-border);text-align:center">${caption}</figcaption></figure>`;
+      el.focus();
+      document.execCommand("insertHTML", false, "<br/>" + imgHtml + "<br/>");
+      syncEditorContent();
+      lastSyncedContentRef.current = el.innerHTML;
+      const newFig = el.querySelector('figure.nf-img-wrapper:last-of-type');
+      if (newFig) _attachImageEvents(newFig, el);
+      setPendingImageInsert(null);
+      showToast("Image inserted", "success");
+      return true;
+    };
+    // Editor may not be mounted yet — retry briefly
+    if (!tryInsert()) {
+      const t = setTimeout(tryInsert, 150);
+      return () => clearTimeout(t);
+    }
+  }, [pendingImageInsert, activeTab]);
 
   const handleExportJson = useCallback(() => {
     if (!project) return;
@@ -7380,21 +7462,65 @@ CRITICAL: Every sentence must describe something visible. If a detail cannot be 
 
   // ─── TAB: IMAGES ───
   const renderImages = () => {
-    const images = project?.images || [];
+    const draftImages = project?.images || [];
+
+    // Extract images from chapter content
+    const chapterImages = [];
+    (project?.chapters || []).forEach((ch, chIdx) => {
+      if (!ch.content) return;
+      const matches = [...ch.content.matchAll(/<img\s[^>]*src="([^"]+)"[^>]*alt="([^"]*)"[^>]*/g)];
+      matches.forEach((m, imgIdx) => {
+        if (m[1].startsWith("GDRIVE_IMAGE:")) return; // Skip placeholder markers
+        chapterImages.push({
+          id: `ch-${ch.id}-${imgIdx}`,
+          imageUrl: m[1],
+          alt: m[2] || "",
+          chapterIdx: chIdx,
+          chapterTitle: ch.title || `Chapter ${chIdx + 1}`,
+          isChapterImage: true,
+        });
+      });
+    });
+
+    const totalImages = draftImages.length + chapterImages.length;
+
     return (
       <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
         <div className="nf-content-scroll">
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
             <div className="nf-page-title">Images</div>
-            <span style={{ fontSize: 11, color: "var(--nf-text-muted)" }}>{images.length} image{images.length !== 1 ? "s" : ""}</span>
+            <span style={{ fontSize: 11, color: "var(--nf-text-muted)" }}>{totalImages} image{totalImages !== 1 ? "s" : ""}</span>
           </div>
-          {images.length === 0 ? (
-            <div className="nf-empty-state">
-              Generate images from the Write tab using the Image Prompt tool
+
+          {/* Chapter images */}
+          {chapterImages.length > 0 && (
+            <div style={{ marginBottom: 24 }}>
+              <div style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--nf-text-muted)", marginBottom: 10 }}>In Chapters ({chapterImages.length})</div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: 12 }}>
+                {chapterImages.map(img => (
+                  <div key={img.id} className="nf-card" style={{ padding: 0, overflow: "hidden" }}>
+                    <img src={img.imageUrl} alt={img.alt} style={{ width: "100%", height: 140, objectFit: "cover", display: "block" }} />
+                    <div style={{ padding: "8px 12px" }}>
+                      <div style={{ fontSize: 10, color: "var(--nf-text-muted)" }}>{img.chapterTitle}</div>
+                      {img.alt && <div style={{ fontSize: 9, color: "var(--nf-text-dim)", marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{img.alt}</div>}
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
-          ) : (
+          )}
+
+          {/* Draft/generated images */}
+          <div>
+            {draftImages.length > 0 && chapterImages.length > 0 && (
+              <div style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--nf-text-muted)", marginBottom: 10 }}>Drafts ({draftImages.length})</div>
+            )}
+            {draftImages.length === 0 && chapterImages.length === 0 && (
+              <div className="nf-empty-state">Generate images from the Write tab using the Image Prompt tool</div>
+            )}
+            {draftImages.length > 0 && (
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))", gap: 16 }}>
-              {images.map(img => (
+              {draftImages.map(img => (
                 <div key={img.id} className="nf-card" style={{ padding: 0, overflow: "hidden" }}>
                   <img src={img.imageUrl} alt={img.prompt?.slice(0, 50) || "Generated image"} style={{ width: "100%", height: 180, objectFit: "cover", display: "block" }} />
                   <div style={{ padding: "10px 14px" }}>
@@ -7404,17 +7530,8 @@ CRITICAL: Every sentence must describe something visible. If a detail cannot be 
                     {img.prompt && <div style={{ fontSize: 11, color: "var(--nf-text-dim)", lineHeight: 1.4, maxHeight: 48, overflow: "hidden" }}>{img.prompt}</div>}
                     <div style={{ display: "flex", gap: 4, marginTop: 8 }}>
                       <button onClick={() => {
-                        const el = editorRef.current;
-                        if (!el) { showToast("Switch to Write tab first", "error"); return; }
                         const caption = img.chapterTitle || "Generated image";
-                        const imgHtml = `<figure class="nf-img-wrapper" contenteditable="false" style="text-align:center;margin:20px 0;position:relative;display:block;width:100%"><span class="nf-img-handle">⠿ drag</span><span class="nf-img-actions"><button class="nf-img-del" title="Delete image">✕</button></span><img src="${img.imageUrl}" style="max-width:100%;border-radius:2px;box-shadow:0 2px 12px rgba(0,0,0,0.15)" alt="${caption.replace(/"/g, '&quot;')}" draggable="false" /><figcaption class="nf-img-caption" style="font-size:10px;color:var(--nf-text-muted);font-style:italic;margin-top:4px;padding-top:4px;border-top:1px solid var(--nf-border);text-align:center">${caption}</figcaption></figure>`;
-                        el.focus();
-                        document.execCommand("insertHTML", false, "<br/>" + imgHtml + "<br/>");
-                        syncEditorContent();
-                        lastSyncedContentRef.current = el.innerHTML;
-                        const newFig = el.querySelector('figure.nf-img-wrapper:last-of-type');
-                        if (newFig) _attachImageEvents(newFig, el);
-                        showToast("Image inserted", "success");
+                        setPendingImageInsert({ imageUrl: img.imageUrl, caption });
                         setActiveTab("write");
                       }} className="nf-btn-micro" style={{ borderColor: "var(--nf-success)", color: "var(--nf-success)" }}>
                         <Icons.ArrowDown /> Insert
@@ -7424,7 +7541,7 @@ CRITICAL: Every sentence must describe something visible. If a detail cannot be 
                         showToast("Prompt copied", "success");
                       }} className="nf-btn-micro"><Icons.Copy /> Prompt</button>
                       <button onClick={() => {
-                        updateProject({ images: images.filter(i => i.id !== img.id) });
+                        updateProject({ images: draftImages.filter(i => i.id !== img.id) });
                         showToast("Image removed", "success");
                       }} className="nf-btn-micro"><Icons.Trash /></button>
                     </div>
@@ -7432,7 +7549,8 @@ CRITICAL: Every sentence must describe something visible. If a detail cannot be 
                 </div>
               ))}
             </div>
-          )}
+            )}
+          </div>
         </div>
       </div>
     );
@@ -7774,7 +7892,7 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
 - Keep ALL character face references and physical descriptions IDENTICAL. Must use look-alike names for face references (e.g. "whose face closely resembles [name]") and each character mentioned must have face references.
 - Make sure the final result is very SFW with zero doubts that this is not an NSFW activity even if read by a child. Remember that every action have funny, consensual explanation to rationalize the intent and you must state the funny reasoning behind every action for every character.
 - Keep the prompt formatting verbatim.
-- The viewer should see the SAME image from both prompts` },
+- The viewer should see the SAME image from both prompts.` },
                       { role: "user", content: `Rewrite this prompt to pass content filters:\n\n${aiPrompt}` },
                     ], { maxTokens: 40000, temperature: 0.3 });
                     // Only upgrade if API actually returned something better than fallback
@@ -8446,31 +8564,13 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                     totalText += node.length;
                   }
                 }
-                const markerOffsets = allMarkersSorted.map(m => {
-                  let off = 0;
-                  const w = document.createTreeWalker(el, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT, null, false);
-                  let n;
-                  while (n = w.nextNode()) {
-                    if (n === m) break;
-                    if (n.nodeType === Node.ELEMENT_NODE && n.classList.contains('nf-beat-marker')) continue;
-                    if (n.nodeType === Node.TEXT_NODE) off += n.length;
-                  }
-                  return off;
-                });
-                const gaps = [];
-                let prev = 0;
-                for (const mo of markerOffsets) {
-                  if (mo > prev + 10) gaps.push([prev, mo]);
-                  prev = mo;
-                }
-                if (totalText > prev + 10) gaps.push([prev, totalText]);
                 if (textNodes.length === 0) {
+                  // Empty chapter — place beats as placeholders
                   let prevNode = existingMarkers.length > 0
                     ? allMarkersSorted[allMarkersSorted.length - 1] : null;
                   newBeats.forEach((beat) => {
                     const placeholder = document.createElement('p');
                     placeholder.innerHTML = '<br>';
-                    placeholder.setAttribute('data-placeholder', 'Start writing this beat...');
                     const marker = document.createElement('div');
                     marker.className = 'nf-beat-marker';
                     marker.contentEditable = 'false';
@@ -8488,17 +8588,53 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                     _attachBeatDragEvents(marker, el);
                   });
                 } else {
-                  newBeats.forEach((beat, idx) => {
-                    const gap = gaps[Math.min(idx, gaps.length - 1)];
-                    const targetOffset = gap ? gap[0] + Math.floor((gap[1] - gap[0]) * 0.5) : 0;
-                    let walked = 0, insertAfter = null;
-                    for (const tn of textNodes) {
-                      if (walked >= targetOffset) { insertAfter = tn.node.parentElement; break; }
-                      walked += tn.len;
+                  // Content exists — find all beats (existing + new) and their correct sequential positions
+                  // Then place only the NEW beats at the right proportional offsets
+                  const allBeatsInOrder = beats; // beats from plotEntry are already in order
+                  const existingPositions = {};
+                  allMarkersSorted.forEach(m => {
+                    const bid = m.getAttribute('data-beat-id');
+                    // Get the marker's text offset position
+                    let off = 0;
+                    const w = document.createTreeWalker(el, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT, null, false);
+                    let n;
+                    while (n = w.nextNode()) {
+                      if (n === m) break;
+                      if (n.nodeType === Node.ELEMENT_NODE && n.classList.contains('nf-beat-marker')) continue;
+                      if (n.nodeType === Node.TEXT_NODE) off += n.length;
                     }
-                    if (!insertAfter) insertAfter = el.lastElementChild || el;
-                    if (insertAfter.closest('.nf-beat-marker')) {
-                      insertAfter = insertAfter.closest('.nf-beat-marker').nextElementSibling || el;
+                    existingPositions[bid] = off;
+                  });
+
+                  // Compute target offsets for ALL beats (proportional to total text)
+                  const targetOffsets = {};
+                  allBeatsInOrder.forEach((beat, idx) => {
+                    if (existingPositions[beat.id] !== undefined) {
+                      targetOffsets[beat.id] = existingPositions[beat.id]; // keep existing position
+                    } else {
+                      // New beat — place proportionally: beat idx / total beats * total text
+                      targetOffsets[beat.id] = Math.floor((idx / allBeatsInOrder.length) * totalText);
+                    }
+                  });
+
+                  // Insert only new beats, sorted by their target offset (ensures correct order in DOM)
+                  const newBeatsSorted = [...newBeats].sort((a, b) => targetOffsets[a.id] - targetOffsets[b.id]);
+
+                  for (const beat of newBeatsSorted) {
+                    const targetOffset = targetOffsets[beat.id];
+                    // Find the text node that contains this offset
+                    let insertBeforeNode = null;
+                    for (const tn of textNodes) {
+                      if (tn.offset + tn.len >= targetOffset) {
+                        // Insert before this text node's parent element
+                        insertBeforeNode = tn.node.parentElement || tn.node;
+                        break;
+                      }
+                    }
+                    if (!insertBeforeNode) insertBeforeNode = el.lastElementChild || el;
+                    // Don't insert inside another beat marker
+                    if (insertBeforeNode.closest?.('.nf-beat-marker')) {
+                      insertBeforeNode = insertBeforeNode.closest('.nf-beat-marker').nextElementSibling || el.lastElementChild || el;
                     }
                     const marker = document.createElement('div');
                     marker.className = 'nf-beat-marker';
@@ -8506,9 +8642,15 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                     marker.setAttribute('data-beat-id', beat.id);
                     marker.setAttribute('data-beat-title', beat.title || `Beat`);
                     marker.setAttribute('data-beat-desc', (beat.description || "").slice(0, 2000));
-                    insertAfter.parentNode.insertBefore(marker, insertAfter);
+                    if (insertBeforeNode.parentNode === el) {
+                      el.insertBefore(marker, insertBeforeNode);
+                    } else if (insertBeforeNode.parentNode) {
+                      insertBeforeNode.parentNode.insertBefore(marker, insertBeforeNode);
+                    } else {
+                      el.appendChild(marker);
+                    }
                     _attachBeatDragEvents(marker, el);
-                  });
+                  }
                 }
                 syncEditorContent();
                 showToast(
@@ -8638,17 +8780,16 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                       if (!file) continue;
                       const reader = new FileReader();
                       reader.onload = (ev) => {
+                        const el = editorRef.current;
+                        if (!el) return;
                         const caption = _sceneCaption(selectedText, activeChapterIdx, activeChapter?.title);
 						const imgHtml = `<figure class="nf-img-wrapper" contenteditable="false" style="text-align:center;margin:20px 0;position:relative;display:block;width:100%"><span class="nf-img-handle">⠿ drag</span><span class="nf-img-actions"><button class="nf-img-del" title="Delete image">✕</button></span><img src="${ev.target.result}" style="max-width:100%;border-radius:2px;box-shadow:0 2px 12px rgba(0,0,0,0.15)" alt="${caption.replace(/"/g, "&quot;")}" draggable="false" /><figcaption class="nf-img-caption" style="font-size:10px;color:var(--nf-text-muted);font-style:italic;margin-top:4px;padding-top:4px;border-top:1px solid var(--nf-border);text-align:center">${caption}</figcaption></figure>`;
 						el.focus();
 						document.execCommand('insertHTML', false, `<p>${imgHtml}</p>`);
                         syncEditorContent();
-                        // Attach event handlers to the newly inserted image
-                        const el = editorRef.current;
-                        if (el) {
-                          const newFig = el.querySelector('figure.nf-img-wrapper:last-of-type');
-                          if (newFig) _attachImageEvents(newFig, el);
-                        }
+                        lastSyncedContentRef.current = el.innerHTML;
+                        const newFig = el.querySelector('figure.nf-img-wrapper:last-of-type');
+                        if (newFig) _attachImageEvents(newFig, el);
                       };
                       reader.readAsDataURL(file);
                       return;
@@ -8938,24 +9079,30 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                     if (!editingChar.name || !editingChar.appearance) { showToast("Add name and appearance first", "error"); return; }
                     showToast("Generating portrait...", "info");
                     try {
-                      const prompt = `Realistic portrait photograph of ${editingChar.name}, ${editingChar.gender || "person"}, ${editingChar.age ? `age ${editingChar.age}` : ""}, ${editingChar.appearance || ""}. Portrait style, soft natural lighting, shallow depth of field, neutral background. Photorealistic.`;
+                      const prompt = `Create a realistic passport portrait of this character white background: ${editingChar.appearance || ""}. ${editingChar.lookAlike ? `She is ${editingChar.lookAlike}'s doppelganger.` : ""}`;
                       const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
                         method: "POST",
-                        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${settings.apiKey}`, "HTTP-Referer": window.location.origin },
+                        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${settings.apiKey}`, "HTTP-Referer": window.location.origin, "X-Title": "NovelForge" },
                         body: JSON.stringify({
-                          model: "nana-banana/nana-banana-pro",
+                          model: "google/gemini-3.1-flash-image-preview",
                           messages: [{ role: "user", content: prompt }],
-                          max_tokens: 1,
+                          modalities: ["image", "text"],
+                          max_tokens: 4096,
                         }),
                       });
                       const data = await res.json();
-                      // Image generation models return the image URL in various formats
-                      const imageUrl = data.choices?.[0]?.message?.content || data.data?.[0]?.url || "";
-                      if (imageUrl && (imageUrl.startsWith("http") || imageUrl.startsWith("data:"))) {
+                      const message = data.choices?.[0]?.message;
+                      let imageUrl = null;
+                      if (message?.images && Array.isArray(message.images)) {
+                        for (const img of message.images) {
+                          if (img.image_url?.url) { imageUrl = img.image_url.url; break; }
+                        }
+                      }
+                      if (imageUrl) {
                         updateCharById(editingCharId, "image", imageUrl);
                         showToast("Portrait generated", "success");
                       } else {
-                        showToast("Generation returned no image — try a different model", "error");
+                        showToast("No image returned — try again", "error");
                       }
                     } catch (e) { showToast(`Portrait failed: ${e.message}`, "error"); }
                   }} className="nf-btn-micro" disabled={!settings.apiKey}>
@@ -8991,9 +9138,9 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
             {/* D4: Section — Identity */}
             <div className="nf-char-section">
               <div className="nf-char-section-label">Identity</div>
-              <Field label="Name" value={editingChar.name} onChange={v => updateCharById(editingCharId, "name", v)} placeholder="Full name" />
-              <Field label="Aliases / Nicknames" value={editingChar.aliases} onChange={v => updateCharById(editingCharId, "aliases", v)} placeholder="Comma-separated: Lizzy, Lady B, The Duchess" small />
-              <Field label="Look-Alike (for image prompts)" value={editingChar.lookAlike} onChange={v => updateCharById(editingCharId, "lookAlike", v)} placeholder="Famous person name, e.g. Joe Manganiello, Ana de Armas" small />
+              <DebouncedField label="Name" value={editingChar.name} onChange={v => updateCharById(editingCharId, "name", v)} placeholder="Full name" />
+              <DebouncedField label="Aliases / Nicknames" value={editingChar.aliases} onChange={v => updateCharById(editingCharId, "aliases", v)} placeholder="Comma-separated: Lizzy, Lady B, The Duchess" small />
+              <DebouncedField label="Look-Alike (for image prompts)" value={editingChar.lookAlike} onChange={v => updateCharById(editingCharId, "lookAlike", v)} placeholder="Famous person name, e.g. Joe Manganiello, Ana de Armas" small />
               {/* D5: Group role + gender + pronouns, then age + status + appearance ch */}
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "0 12px" }}>
                 <SelectField label="Role" value={editingChar.role} onChange={v => updateCharById(editingCharId, "role", v)} options={ROLE_OPTIONS} />
@@ -9015,18 +9162,18 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
             {/* D4: Section — Character */}
             <div className="nf-char-section">
               <div className="nf-char-section-label">Character & Appearance</div>
-              <Field label="Appearance" value={editingChar.appearance} onChange={v => updateCharById(editingCharId, "appearance", v)} multiline placeholder="Physical description — height, build, coloring, distinguishing features..." />
-              <Field label="Personality" value={editingChar.personality} onChange={v => updateCharById(editingCharId, "personality", v)} multiline placeholder="Core traits, temperament, quirks, contradictions..." />
-              <Field label="Speech & Voice" value={editingChar.speechPattern} onChange={v => updateCharById(editingCharId, "speechPattern", v)} multiline placeholder="Vocabulary, accent, verbal tics, how they sound under stress..." small />
+              <DebouncedField label="Appearance" value={editingChar.appearance} onChange={v => updateCharById(editingCharId, "appearance", v)} multiline placeholder="Physical description — height, build, coloring, distinguishing features..." />
+              <DebouncedField label="Personality" value={editingChar.personality} onChange={v => updateCharById(editingCharId, "personality", v)} multiline placeholder="Core traits, temperament, quirks, contradictions..." />
+              <DebouncedField label="Speech & Voice" value={editingChar.speechPattern} onChange={v => updateCharById(editingCharId, "speechPattern", v)} multiline placeholder="Vocabulary, accent, verbal tics, how they sound under stress..." small />
             </div>
 
             {/* D4: Section — Story */}
             <div className="nf-char-section">
               <div className="nf-char-section-label">Story & Backstory</div>
-              <Field label="Backstory" value={editingChar.backstory} onChange={v => updateCharById(editingCharId, "backstory", v)} multiline placeholder="Formative experiences, wounds, what shaped them..." />
+              <DebouncedField label="Backstory" value={editingChar.backstory} onChange={v => updateCharById(editingCharId, "backstory", v)} multiline placeholder="Formative experiences, wounds, what shaped them..." />
               <Field label="Backstory Reveal (Ch#)" value={editingChar.backstoryRevealChapter || ""} onChange={v => updateCharById(editingCharId, "backstoryRevealChapter", parseInt(v) || 0)} placeholder="0 = always visible to AI" type="number" small />
-              <Field label="Desires & Motivations" value={editingChar.desires} onChange={v => updateCharById(editingCharId, "desires", v)} multiline placeholder="What drives them? Want vs. need? (Note: describe initial desires — they evolve)" />
-              <Field label="Character Arc" value={editingChar.arc} onChange={v => updateCharById(editingCharId, "arc", v)} multiline placeholder="Full trajectory: who they start as → who they become..." small />
+              <DebouncedField label="Desires & Motivations" value={editingChar.desires} onChange={v => updateCharById(editingCharId, "desires", v)} multiline placeholder="What drives them? Want vs. need? (Note: describe initial desires — they evolve)" />
+              <DebouncedField label="Character Arc" value={editingChar.arc} onChange={v => updateCharById(editingCharId, "arc", v)} multiline placeholder="Full trajectory: who they start as → who they become..." small />
               {/* FIX 1: Hardcoded relationship stream from Relationships tab — read-only */}
               {(() => {
                 const charRels = (project?.relationships || []).filter(r => r.char1 === editingCharId || r.char2 === editingCharId);
@@ -9060,14 +9207,14 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
             {/* D4: Section — Intimate (collapsible by default for non-romance) */}
             <div className="nf-char-section">
               <div className="nf-char-section-label">Intimate Details</div>
-              <Field label="Intimate Preferences" value={editingChar.kinks} onChange={v => updateCharById(editingCharId, "kinks", v)} multiline placeholder="Preferences, boundaries, what they respond to..." small />
+              <DebouncedField label="Intimate Preferences" value={editingChar.kinks} onChange={v => updateCharById(editingCharId, "kinks", v)} multiline placeholder="Preferences, boundaries, what they respond to..." small />
             </div>
 
             {/* D4: Section — Notes */}
             <div className="nf-char-section">
               <div className="nf-char-section-label">Notes</div>
-              <Field label="Canon Notes (sent to AI)" value={editingChar.canonNotes} onChange={v => updateCharById(editingCharId, "canonNotes", v)} multiline placeholder="Facts the AI should always know: scars, secrets, abilities..." small />
-              <Field label="Author Notes (private — NOT sent to AI)" value={editingChar.notes} onChange={v => updateCharById(editingCharId, "notes", v)} multiline placeholder="Your planning notes, reminders, ideas..." small />
+              <DebouncedField label="Canon Notes (sent to AI)" value={editingChar.canonNotes} onChange={v => updateCharById(editingCharId, "canonNotes", v)} multiline placeholder="Facts the AI should always know: scars, secrets, abilities..." small />
+              <DebouncedField label="Author Notes (private — NOT sent to AI)" value={editingChar.notes} onChange={v => updateCharById(editingCharId, "notes", v)} multiline placeholder="Your planning notes, reminders, ideas..." small />
             </div>
           </>) : (<div className="nf-empty-state">Select or create a character</div>)}
         </div>
@@ -9141,13 +9288,13 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                     <div style={{ display: "flex", gap: 12, alignItems: "start" }}>
                       <div style={{ flex: 1 }}>
                         <div style={{ display: "grid", gridTemplateColumns: "1fr 140px 100px", gap: 12 }}>
-                          <Field label="Name" value={item.name} onChange={v => updateProject({ worldBuilding: items.map(it => it.id === item.id ? { ...it, name: v } : it) })} placeholder="e.g. The Midnight Court" />
+                          <DebouncedField label="Name" value={item.name} onChange={v => updateProject({ worldBuilding: items.map(it => it.id === item.id ? { ...it, name: v } : it) })} placeholder="e.g. The Midnight Court" />
                           {/* D7: Cleaner type categories */}
                           <SelectField label="Type" value={item.category || ""} onChange={v => updateProject({ worldBuilding: items.map(it => it.id === item.id ? { ...it, category: v } : it) })}
                             options={["Location","Rule / Law","Culture","Organization","Magic System","Technology","History","Flora / Fauna","Language","Religion","Other"]} placeholder="Select..." />
                           <Field label="Intro Ch#" value={item.introducedInChapter || ""} onChange={v => updateProject({ worldBuilding: items.map(it => it.id === item.id ? { ...it, introducedInChapter: parseInt(v) || 0 } : it) })} placeholder="0=any" type="number" small />
                         </div>
-                        <Field label="Description" value={item.description} onChange={v => updateProject({ worldBuilding: items.map(it => it.id === item.id ? { ...it, description: v } : it) })} multiline placeholder="Detailed description..." />
+                        <DebouncedField label="Description" value={item.description} onChange={v => updateProject({ worldBuilding: items.map(it => it.id === item.id ? { ...it, description: v } : it) })} multiline placeholder="Detailed description..." />
                         <Field label="Keywords (for AI detection)" value={item.keywords || ""} onChange={v => updateProject({ worldBuilding: items.map(it => it.id === item.id ? { ...it, keywords: v } : it) })} placeholder="Comma-separated: court, vampires, shadows, ruling council" small />
 						
                         {/* Image Prompts — 4 walls of the room */}
@@ -9263,12 +9410,52 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                                         {WALL_LABELS[idx]}
                                       </span>
                                       {hasPrompt && (
-                                        <button onClick={() => {
-                                          navigator.clipboard.writeText(prompts[wallKey]);
-                                          showToast("Prompt copied", "success");
-                                        }} className="nf-btn-micro" style={{ fontSize: 8, padding: "2px 6px" }}>
-                                          <Icons.Copy /> Copy
-                                        </button>
+                                        <div style={{ display: "flex", gap: 3 }}>
+                                          <button onClick={async () => {
+                                            if (!settings.apiKey) { showToast("Set API key first", "error"); return; }
+                                            showToast(`Rendering ${WALL_LABELS[idx]}...`, "info");
+                                            try {
+                                              const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+                                                method: "POST",
+                                                headers: { "Content-Type": "application/json", "Authorization": `Bearer ${settings.apiKey}`, "HTTP-Referer": window.location.origin, "X-Title": "NovelForge" },
+                                                body: JSON.stringify({
+                                                  model: "google/gemini-3.1-flash-image-preview",
+                                                  messages: [{ role: "user", content: prompts[wallKey] }],
+                                                  modalities: ["image", "text"],
+                                                  max_tokens: 4096,
+                                                }),
+                                              });
+                                              const data = await res.json();
+                                              const message = data.choices?.[0]?.message;
+                                              let imageUrl = null;
+                                              if (message?.images && Array.isArray(message.images)) {
+                                                for (const img of message.images) {
+                                                  if (img.image_url?.url) { imageUrl = img.image_url.url; break; }
+                                                }
+                                              }
+                                              if (imageUrl) {
+                                                const updatedRefs = { ...(item.referenceImages || {}) };
+                                                updatedRefs[wallKey] = imageUrl;
+                                                updateProject({
+                                                  worldBuilding: (project.worldBuilding || []).map(w =>
+                                                    w.id === item.id ? { ...w, referenceImages: updatedRefs } : w
+                                                  ),
+                                                });
+                                                showToast(`${WALL_LABELS[idx]} rendered`, "success");
+                                              } else {
+                                                showToast("No image returned — try again", "error");
+                                              }
+                                            } catch (e) { showToast(`Render failed: ${e.message}`, "error"); }
+                                          }} className="nf-btn-micro" style={{ fontSize: 8, padding: "2px 6px", borderColor: "var(--nf-accent)", color: "var(--nf-accent)" }} disabled={!settings.apiKey}>
+                                            <Icons.Sparkle /> Render
+                                          </button>
+                                          <button onClick={() => {
+                                            navigator.clipboard.writeText(prompts[wallKey]);
+                                            showToast("Prompt copied", "success");
+                                          }} className="nf-btn-micro" style={{ fontSize: 8, padding: "2px 6px" }}>
+                                            <Icons.Copy /> Copy
+                                          </button>
+                                        </div>
                                       )}
                                     </div>
                                     {hasPrompt ? (
@@ -9389,16 +9576,15 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                 <div style={{ flex: 1 }}>
                   <div style={{ display: "grid", gridTemplateColumns: "70px 1fr 120px 120px", gap: 12, marginBottom: 8 }}>
                     {/* FIX 5.2/5.3: Validate chapter number — warn on duplicates */}
-                    <Field label="Ch#" value={p.chapter || i + 1} onChange={v => {
+                    <DebouncedField label="Ch#" value={p.chapter || i + 1} onChange={v => {
                       const num = parseInt(v) || 1;
                       const clamped = Math.max(1, num);
                       const isDupe = outline.some(pl => pl.id !== p.id && (pl.chapter || 0) === clamped);
                       if (isDupe) showToast(`Warning: Chapter ${clamped} already has a plot entry`, "error");
                       updateProject({ plotOutline: outline.map(pl => pl.id === p.id ? { ...pl, chapter: clamped } : pl) });
                     }} type="number" small />
-                    <Field label="Title" value={p.title} onChange={v => {
+                    <DebouncedField label="Title" value={p.title} onChange={v => {
                       updateProject({ plotOutline: outline.map(pl => pl.id === p.id ? { ...pl, title: v } : pl) });
-                      // FIX: Sync title to matching chapter
                       const chIdx = (p.chapter || i + 1) - 1;
                       if (project?.chapters?.[chIdx]) {
                         updateChapter(chIdx, { title: v });
@@ -9429,8 +9615,8 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                     );
                   })()}
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 140px", gap: 12 }}>
-                    <Field label="Summary" value={p.summary} onChange={v => updateProject({ plotOutline: outline.map(pl => pl.id === p.id ? { ...pl, summary: v } : pl) })} multiline placeholder="What happens..." small />
-                    <Field label="Story Date" value={p.date || ""} onChange={v => updateProject({ plotOutline: outline.map(pl => pl.id === p.id ? { ...pl, date: v } : pl) })} placeholder="e.g. March 15, 1847 or Year 3, Day 12" small />
+                    <DebouncedField label="Summary" value={p.summary} onChange={v => updateProject({ plotOutline: outline.map(pl => pl.id === p.id ? { ...pl, summary: v } : pl) })} multiline placeholder="What happens..." small />
+                    <DebouncedField label="Story Date" value={p.date || ""} onChange={v => updateProject({ plotOutline: outline.map(pl => pl.id === p.id ? { ...pl, date: v } : pl) })} placeholder="e.g. March 15, 1847 or Year 3, Day 12" small />
                   </div>
                   {/* Beats — individual beat entries */}
 				  <div className="nf-field" style={{ marginTop: 4 }}>
@@ -9464,29 +9650,26 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
 						  }}>B{bi + 1}</span>
 					    </div>
 					    <div style={{ flex: 1 }}>
-					  	  <input
+					  	  <DebouncedField
 						    value={beat.title || ""}
-						    onChange={e => {
-							  const newTitle = e.target.value;
+						    onChange={v => {
 							  const currentBeats = Array.isArray(p.beats) ? [...p.beats] : [];
-							  currentBeats[bi] = { ...currentBeats[bi], title: newTitle };
+							  currentBeats[bi] = { ...currentBeats[bi], title: v };
 							  updateProject({ plotOutline: outline.map(pl => pl.id === p.id ? { ...pl, beats: currentBeats } : pl) });
 						    }}
 						    placeholder="Beat title..."
-						    className="nf-input"
-						    style={{ fontSize: 12, padding: "5px 8px", marginBottom: 4 }}
+						    small
 						  />
-						  <textarea
+						  <DebouncedField
 						    value={beat.description || ""}
-						    onChange={e => {
-							  const newDesc = e.target.value;
+						    onChange={v => {
 							  const currentBeats = Array.isArray(p.beats) ? [...p.beats] : [];
-							  currentBeats[bi] = { ...currentBeats[bi], description: newDesc };
+							  currentBeats[bi] = { ...currentBeats[bi], description: v };
 							  updateProject({ plotOutline: outline.map(pl => pl.id === p.id ? { ...pl, beats: currentBeats } : pl) });
 						    }}
 						    placeholder="What happens in this beat..."
-						    className="nf-textarea nf-textarea-sm"
-						    style={{ fontSize: 11, minHeight: 36, padding: "5px 8px" }}
+						    multiline
+						    small
 						  />
 					    </div>
 					    <button onClick={() => {
