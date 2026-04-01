@@ -3470,12 +3470,15 @@ const _initEditorImageDelegation = (editorEl) => {
       const editorRect = editorEl.getBoundingClientRect();
       if (ev.clientY < editorRect.top || ev.clientY > editorRect.bottom) return;
 
-      // Default: insert before the first real child (top of editor)
+      // Remove placeholder FIRST so it doesn't pollute child iteration
+      if (placeholder.parentNode) placeholder.remove();
+
+      // Default: insert at beginning of editor
       let bestChild = editorEl.firstElementChild;
       let insertBefore = true;
 
       for (const child of editorEl.children) {
-        if (child === figEl || child === placeholder) continue;
+        if (child === figEl) continue;
         const rect = child.getBoundingClientRect();
         if (rect.height === 0) continue;
         const midY = rect.top + rect.height / 2;
@@ -3488,16 +3491,14 @@ const _initEditorImageDelegation = (editorEl) => {
         insertBefore = false;
       }
 
-      if (placeholder.parentNode) placeholder.remove();
-
-      if (bestChild) {
+      if (bestChild && bestChild.parentNode === editorEl) {
         if (insertBefore) {
           editorEl.insertBefore(placeholder, bestChild);
-        } else if (bestChild.nextSibling) {
-          editorEl.insertBefore(placeholder, bestChild.nextSibling);
         } else {
-          editorEl.appendChild(placeholder);
+          editorEl.insertBefore(placeholder, bestChild.nextSibling);
         }
+      } else {
+        editorEl.appendChild(placeholder);
       }
     };
 
