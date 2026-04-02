@@ -920,14 +920,22 @@ const ContextEngine = {
   _plotEntryForChapter(project, chapterIdx) {
     const ch = project?.chapters?.[chapterIdx];
     if (!ch) return null;
+    
+    // First try by linked ID (if it still exists)
     if (ch.linkedPlotId) {
-      const match = (project?.plotOutline || []).find(pl => pl.id === ch.linkedPlotId);
-      if (match) return match;
+      const byId = (project?.plotOutline || []).find(pl => pl.id === ch.linkedPlotId);
+      if (byId) return byId;
+      // Linked ID is stale — fall through to chapter number lookup
     }
+    
+    // Fallback: find by chapter number
     const chNum = this._chapterNum(project, chapterIdx);
-    return (project?.plotOutline || []).find(pl => (pl.chapter || 0) === chNum) || null;
+    const byChapter = (project?.plotOutline || []).find(pl => (pl.chapter || 0) === chNum);
+    if (byChapter) return byChapter;
+    
+    // Last resort: find ANY plot entry with beats (for legacy data)
+    return (project?.plotOutline || []).find(pl => Array.isArray(pl.beats) && pl.beats.length > 0) || null;
   },
-
 
   // I4: Better token estimation for structured text — XML tags and field labels tokenize at ~3.3 chars/token
   _estimateLen(text) {
