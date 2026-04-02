@@ -5571,8 +5571,7 @@ export default function NovelForge() {
     const hasContent = !!content;
   
     const needsRepopulate = lastSyncedChapterRef.current !== key
-      || (editorEmpty && hasContent)
-      || (lastSyncedContentRef.current !== null && lastSyncedContentRef.current !== content && el.innerHTML !== content);
+      || (editorEmpty && hasContent);
   
     if (needsRepopulate) {
       lastSyncedChapterRef.current = key;
