@@ -3344,7 +3344,6 @@ const _insertImageAtPoint = (editorEl, imgHtml, position = "end") => {
 
   try { window.getSelection()?.removeAllRanges(); } catch {}
   editorEl.focus();
-  _attachImageEvents(figEl, editorEl);
   return figEl;
 };
 
@@ -3363,15 +3362,19 @@ const _sceneCaption = (text, chapterIdx, chapterTitle) => {
 // Replace _attachImageEvents — only the flag is needed now,
 // delegation handles everything else via event listeners on the editor.
 
-const _attachImageEvents = (fig, editorEl) => {
+const _attachImageEvents = (fig, editorEl, dragRef) => {
   if (!fig || fig._nfEventsAttached) return;
   fig._nfEventsAttached = true;
 
-  // Prevent native drag
+  // Prevent native drag on figure and all child images
   fig.setAttribute('draggable', 'false');
   fig.ondragstart = (e) => e.preventDefault();
+  fig.querySelectorAll('img').forEach(img => {
+    img.draggable = false;
+    img.setAttribute('draggable', 'false');
+  });
 
-  // Delete button
+  // Delete button — same as before
   const delBtn = fig.querySelector('.nf-img-del');
   if (delBtn) {
     delBtn.onclick = (e) => {
@@ -3380,6 +3383,161 @@ const _attachImageEvents = (fig, editorEl) => {
       editorEl.dispatchEvent(new Event('input', { bubbles: true }));
     };
   }
+
+  // ═══ DRAG LOGIC — mirrors _attachBeatDragEvents pattern exactly ═══
+  const handle = fig.querySelector('.nf-img-handle');
+  const imgEl = fig.querySelector(':scope > img, figure.nf-img-wrapper > img');
+  const dragTarget = handle || imgEl || fig;
+  if (!dragTarget) return;
+
+  dragTarget.addEventListener('mousedown', (e) => {
+    if (e.button !== 0) return;
+    // Don't interfere with delete button
+    if (e.target.closest('.nf-img-del')) return;
+    e.preventDefault();
+    e.stopPropagation();
+
+    // Mark editor as dragging — blocks all input listeners from killing the drag
+    editorEl._nfDragging = true;
+
+    // Block any input events from propagating during drag
+    const blockInput = (ev) => { if (editorEl._nfDragging) { ev.stopImmediatePropagation(); ev.stopPropagation(); } };
+    editorEl.addEventListener('input', blockInput, true);
+    const removeBlockInput = () => { editorEl.removeEventListener('input', blockInput, true); };
+
+    const figWidth = fig.offsetWidth;
+
+    // Create floating clone for visual feedback
+    const clone = fig.cloneNode(true);
+    clone.style.cssText = `position:fixed;pointer-events:none;z-index:10000;opacity:0.7;width:${figWidth}px;box-shadow:0 8px 30px rgba(0,0,0,0.3);border-radius:4px;`;
+    clone.querySelectorAll('img').forEach(img => { img.style.width = '100%'; img.style.height = 'auto'; img.style.display = 'block'; });
+    clone.querySelectorAll('.nf-img-handle, .nf-img-actions').forEach(el => el.style.display = 'none');
+    document.body.appendChild(clone);
+
+    // Create drop-indicator placeholder
+    const placeholder = document.createElement('div');
+    placeholder.className = 'nf-drag-placeholder';
+    placeholder.style.cssText = 'height:3px;background:var(--nf-accent);margin:4px 0;border-radius:2px;pointer-events:none;';
+
+    // Dim original figure
+    fig.style.opacity = '0.2';
+    fig.classList.add('dragging');
+
+    // Position clone at cursor
+    clone.style.left = (e.clientX - figWidth / 2) + 'px';
+    clone.style.top = (e.clientY - 30) + 'px';
+
+    const onMove = (ev) => {
+      ev.preventDefault();
+      clone.style.left = (ev.clientX - figWidth / 2) + 'px';
+      clone.style.top = (ev.clientY - 30) + 'px';
+
+      const editorRect = editorEl.getBoundingClientRect();
+      if (ev.clientY < editorRect.top || ev.clientY > editorRect.bottom) {
+        if (placeholder.parentNode) placeholder.remove();
+        return;
+      }
+
+      if (placeholder.parentNode) placeholder.remove();
+
+      // Find nearest child to cursor Y — iterate ALL children, keep the closest
+      let bestChild = null;
+      let insertBefore = true;
+      let bestDist = Infinity;
+
+      for (const child of editorEl.children) {
+        if (child === fig || child === placeholder) continue;
+        const rect = child.getBoundingClientRect();
+        if (rect.height === 0) continue;
+        const midY = rect.top + rect.height / 2;
+        const dist = Math.abs(ev.clientY - midY);
+        if (dist < bestDist) {
+          bestDist = dist;
+          bestChild = child;
+          insertBefore = ev.clientY < midY;
+        }
+      }
+
+      if (bestChild) {
+        if (insertBefore) {
+          editorEl.insertBefore(placeholder, bestChild);
+        } else {
+          const next = bestChild.nextElementSibling;
+          if (next) {
+            editorEl.insertBefore(placeholder, next);
+          } else {
+            editorEl.appendChild(placeholder);
+          }
+        }
+      } else {
+        editorEl.appendChild(placeholder);
+      }
+    };
+
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      removeBlockInput();
+
+      // Determine if the image actually moved
+      let didMove = false;
+      if (placeholder.parentNode && fig.parentNode) {
+        for (const child of editorEl.children) {
+          if (child === placeholder) { didMove = true; break; }
+          if (child === fig) break;
+        }
+      }
+
+      // Cleanup floating clone
+      if (clone.parentNode) clone.remove();
+
+      // Restore original figure
+      fig.style.opacity = '';
+      fig.classList.remove('dragging');
+
+      if (didMove && placeholder.parentNode) {
+        // Place figure at the placeholder's position
+        editorEl.insertBefore(fig, placeholder);
+      }
+
+      // Remove placeholder
+      if (placeholder.parentNode) placeholder.remove();
+
+      // Clear dragging flag — allows _initEditorImageDelegation to re-run
+      editorEl._nfDragging = false;
+
+      // Clear dragRef so React knows no drag is active
+      dragRef.current = null;
+
+      // Notify editor of content change
+      if (didMove) {
+        editorEl.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+    };
+
+    // Escape cancels drag
+    const onKey = (ev) => {
+      if (ev.key === 'Escape') {
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+        document.removeEventListener('keydown', onKey);
+		removeBlockInput();
+        if (clone.parentNode) clone.remove();
+        fig.style.opacity = '';
+        fig.classList.remove('dragging');
+        if (placeholder.parentNode) placeholder.remove();
+        editorEl._nfDragging = false;
+        dragRef.current = null;
+      }
+    };
+
+    // Store in dragRef so useEffect cleanup can cancel mid-drag
+    dragRef.current = { fig, clone, placeholder, onMove, onUp, onKey };
+
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+    document.addEventListener('keydown', onKey);
+  });
 };
 
 // Editor-level event delegation for image drag — handles ALL images without per-element listeners
@@ -3391,6 +3549,9 @@ const _initEditorImageDelegation = (editorEl, dragRef) => {
   // ═══ Don't re-setup delegation while a drag is in progress — it kills the drag ═══
   if (editorEl._nfDragging) return;
 
+  // Clear flag (safety net for stuck states)
+  editorEl._nfDragging = false;
+
   // Remove previous listeners to prevent duplicates on re-runs
   if (editorEl._nfCleanupDragPrevention) {
     editorEl._nfCleanupDragPrevention();
@@ -3401,11 +3562,9 @@ const _initEditorImageDelegation = (editorEl, dragRef) => {
     delete editorEl._nfCleanupActiveDrag;
   }
 
-  // drag state is now stored in imageDragRef (component-level ref) so it persists across re-calls
-
   // ── Suppress native browser drag on images ──
   const onDragStart = (e) => {
-    if (e.target.closest('.nf-img-wrapper') || e.target.closest('figure.nf-img-wrapper img') || e.target.tagName === 'IMG') {
+    if (e.target.closest('.nf-img-wrapper') || e.target.tagName === 'IMG') {
       e.preventDefault();
       e.stopPropagation();
       return false;
@@ -3414,7 +3573,7 @@ const _initEditorImageDelegation = (editorEl, dragRef) => {
   editorEl.addEventListener('dragstart', onDragStart);
 
   const onSelectStart = (e) => {
-    if (e.target.closest('.nf-img-wrapper') || e.target.closest('figure.nf-img-wrapper img')) {
+    if (e.target.closest('.nf-img-wrapper')) {
       e.preventDefault();
     }
   };
@@ -3425,162 +3584,7 @@ const _initEditorImageDelegation = (editorEl, dragRef) => {
     editorEl.removeEventListener('selectstart', onSelectStart);
   };
 
-  // ── Drag cleanup ──
-    const cleanupDrag = (applyMove) => {
-      const state = dragRef.current;
-      if (!state) return;
-      dragRef.current = null;
-
-    if (state.clone?.parentNode) state.clone.remove();
-
-    if (applyMove && state.placeholder?.parentNode && state.fig?.parentNode) {
-      editorEl.insertBefore(state.fig, state.placeholder);
-    }
-
-    if (state.placeholder?.parentNode) state.placeholder.remove();
-
-    if (state.fig) {
-      state.fig.style.opacity = '';
-      state.fig.classList.remove('dragging');
-    }
-
-    document.removeEventListener('mousemove', state.onMove);
-    document.removeEventListener('mouseup', state.onUp);
-    document.removeEventListener('keydown', state.onKey);
-  };
-
-  // Expose for React useEffect cleanup
-  editorEl._nfCleanupActiveDrag = () => cleanupDrag(false);
-
-  // Cancel drag if content changes externally
-  const onEditorInput = () => {
-    if (dragRef.current) cleanupDrag(false);
-  };
-  editorEl.addEventListener('input', onEditorInput);
-
-  // ── Mousedown on image → start drag ──
-  const onEditorMouseDown = (e) => {
-    // Prevent interference if a drag is already in progress
-    if (dragRef.current) { e.preventDefault(); return; }
-    editorEl._nfDragging = true;
-
-    const handle = e.target.closest('.nf-img-handle');
-    const imgTarget = e.target.closest('figure.nf-img-wrapper > img, figure.nf-img-wrapper img');
-    const figEl = e.target.closest('figure.nf-img-wrapper');
-
-    if (!handle && !imgTarget) {
-      editorEl._nfDragging = false;
-      return;
-    }
-
-    figEl.draggable = false;
-    figEl.setAttribute('draggable', 'false');
-    figEl.querySelectorAll('img').forEach(img => {
-      img.draggable = false;
-      img.setAttribute('draggable', 'false');
-    });
-
-    e.preventDefault();
-    e.stopPropagation();
-
-    if (dragRef.current) cleanupDrag(false);
-
-    editorEl._nfDragging = true;
-
-    const figWidth = figEl.offsetWidth;
-    const clone = figEl.cloneNode(true);
-    clone.style.cssText = `position:fixed;pointer-events:none;z-index:10000;opacity:0.7;width:${figWidth}px;box-shadow:0 8px 30px rgba(0,0,0,0.3);border-radius:4px;`;
-    document.body.appendChild(clone);
-
-    const placeholder = document.createElement('div');
-    placeholder.className = 'nf-drag-placeholder';
-    placeholder.style.cssText = 'height:3px;background:var(--nf-accent);margin:4px 0;border-radius:2px;pointer-events:none;';
-
-    figEl.style.opacity = '0.2';
-    figEl.classList.add('dragging');
-
-    clone.style.left = (e.clientX - figWidth / 2) + 'px';
-    clone.style.top = (e.clientY - 30) + 'px';
-
-    const onMove = (ev) => {
-      const state = dragRef.current;
-      if (!state) return;
-      ev.preventDefault();
-
-      const cloneWidth = state.clone.offsetWidth || figWidth;
-      state.clone.style.left = (ev.clientX - cloneWidth / 2) + 'px';
-      state.clone.style.top = (ev.clientY - 30) + 'px';
-
-      const editorRect = editorEl.getBoundingClientRect();
-      if (ev.clientY < editorRect.top || ev.clientY > editorRect.bottom) return;
-
-      if (state.placeholder.parentNode) state.placeholder.remove();
-
-      let bestChild = editorEl.firstElementChild;
-      let insertBefore = true;
-
-      for (const child of editorEl.children) {
-        if (child === state.fig || child === state.placeholder) continue;
-        const rect = child.getBoundingClientRect();
-        if (rect.height === 0) continue;
-        const midY = rect.top + rect.height / 2;
-        if (ev.clientY < midY) {
-          bestChild = child;
-          insertBefore = true;
-          break;
-        }
-        bestChild = child;
-        insertBefore = false;
-      }
-
-      if (bestChild && bestChild.parentNode === editorEl) {
-        if (insertBefore) {
-          editorEl.insertBefore(state.placeholder, bestChild);
-        } else {
-          editorEl.insertBefore(state.placeholder, bestChild.nextSibling);
-        }
-      } else {
-        editorEl.appendChild(state.placeholder);
-      }
-    };
-
-    const onUp = () => {
-      const state = dragRef.current;
-      if (!state) return;
-
-      // Walk DOM: if placeholder appears before fig, image was moved
-      let didMove = false;
-      if (state.placeholder?.parentNode && state.fig?.parentNode) {
-        for (const child of editorEl.children) {
-          if (child === state.placeholder) { didMove = true; break; }
-          if (child === state.fig) break;
-        }
-      }
-
-      cleanupDrag(didMove);
-      editorEl._nfDragging = false;
-
-      if (didMove) {
-        editorEl.dispatchEvent(new Event('input', { bubbles: true }));
-      }
-    };
-
-    const onKey = (ev) => {
-      if (ev.key === 'Escape') {
-        cleanupDrag(false);
-        editorEl._nfDragging = false;
-      }
-    };
-
-    dragRef.current = { fig: figEl, clone, placeholder, figWidth, onMove, onUp, onKey };
-
-    document.addEventListener('mousemove', onMove);
-    document.addEventListener('mouseup', onUp);
-    document.addEventListener('keydown', onKey);
-  };
-  editorEl.addEventListener('mousedown', onEditorMouseDown);
-
-  // ── Click → delete button ──
+  // ── Click → delete button (delegated) ──
   const onEditorClick = (e) => {
     const delBtn = e.target.closest('.nf-img-del');
     if (!delBtn) return;
@@ -3592,6 +3596,26 @@ const _initEditorImageDelegation = (editorEl, dragRef) => {
     editorEl.dispatchEvent(new Event('input', { bubbles: true }));
   };
   editorEl.addEventListener('click', onEditorClick);
+
+  // ── Cancel active drag on content change (but NOT during an active drag) ──
+  const onEditorInput = () => {
+    if (editorEl._nfDragging) return; // ← Don't kill a drag mid-flight
+    if (dragRef.current) {
+      const state = dragRef.current;
+      dragRef.current = null;
+      if (state.clone?.parentNode) state.clone.remove();
+      if (state.placeholder?.parentNode) state.placeholder.remove();
+      if (state.fig) { state.fig.style.opacity = ''; state.fig.classList.remove('dragging'); }
+    }
+  };
+  editorEl.addEventListener('input', onEditorInput);
+
+  // Expose for cleanup
+  editorEl._nfCleanupActiveDrag = () => {
+    editorEl.removeEventListener('click', onEditorClick);
+    editorEl.removeEventListener('input', onEditorInput);
+    editorEl._nfDragging = false;
+  };
 };
 
 const _attachBeatDragEvents = (markerEl, editorEl) => {
@@ -4172,7 +4196,7 @@ const ModelSelector = memo(({ apiKey, value, onChange }) => {
 // ─── SAVE STATUS ───
 const SaveIndicator = memo(({ status, fileLinked }) => {
   const styles = {
-    saving: { color: "var(--nf-accent-2)", text: "Saving...", icon: "spinner" },
+    saving: { color: "var(--nf-accent-2)", text: "", icon: "spinner" },
     saved: { color: "var(--nf-success)", text: fileLinked ? "Saved to file" : "Saved", icon: "check" },
     error: { color: "var(--nf-accent)", text: "Save failed", icon: "x" },
     idle: { color: "var(--nf-text-muted)", text: "", icon: null },
@@ -4180,14 +4204,21 @@ const SaveIndicator = memo(({ status, fileLinked }) => {
   const s = styles[status] || styles.idle;
   if (!s.text) return (
     <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-      <div style={{ width: 6, height: 6, borderRadius: 3, background: "var(--nf-success)", opacity: 0.4 }} title="All changes saved" />
+      <div style={{
+        width: 6, height: 6, borderRadius: 3,
+        background: "var(--nf-success)", opacity: 0.5,
+        boxShadow: "0 0 4px var(--nf-success)",
+        animation: "nf-glyph-idle 3s ease-in-out infinite",
+      }} title="All changes saved" />
       {fileLinked && <span style={{ fontSize: 9, color: "var(--nf-success)", opacity: 0.6 }} title="Auto-saving to JSON file">📄</span>}
     </div>
   );
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10, color: s.color, fontWeight: 500, letterSpacing: "0.04em", transition: "opacity 0.2s" }}
       role="status" aria-live="polite">
-      {s.icon === "spinner" ? <Spinner /> : s.icon === "check" ? <Icons.CloudCheck /> : <Icons.X />}
+      {s.icon === "spinner" ? (
+        <div style={{ width: 8, height: 8, borderRadius: 4, background: "var(--nf-accent-2)", animation: "nf-glyph-pulse-fast 0.7s ease-in-out infinite", boxShadow: "0 0 6px var(--nf-accent-glow-2)" }} />
+      ) : s.icon === "check" ? <Icons.CloudCheck /> : <Icons.X />}
       {s.text}
     </div>
   );
@@ -4575,11 +4606,11 @@ const CharacterPresenceStrip = memo(({ characters, chapterContent, relationships
             onMouseLeave={scheduleDismiss}>
             <div className="nf-presence-avatar-wrap">
               {c.image
-                ? <img src={c.image} alt="" className="nf-presence-img" />
-                : <span className="nf-presence-initial">{(c.name || "?")[0]}</span>
+                ? <img src={c.image} alt="" className="nf-presence-img" style={isPov ? { boxShadow: `0 0 8px ${"var(--nf-accent)"}40` } : undefined} />
+                : <span className="nf-presence-initial" style={isPov ? { boxShadow: `0 0 8px ${"var(--nf-accent)"}40` } : undefined}>{(c.name || "?")[0]}</span>
               }
               {isDead && <span className="nf-presence-badge">†</span>}
-              {tensionColor && <span className="nf-presence-tension" style={{ background: tensionColor }} />}
+              {tensionColor && <span className="nf-presence-tension" style={{ background: tensionColor, boxShadow: `0 0 4px ${tensionColor}`, animation: "nf-glyph-char-glow 3s ease-in-out infinite" }} />}
             </div>
             <span className="nf-presence-name">{(c.name || "").split(/\s+/)[0]}</span>
           </div>
@@ -4759,8 +4790,8 @@ const DialogueTensionIndicator = memo(({ characters, relationships, chapterConte
     <div className="nf-tension-strip">
       {scenePairs.map(({ rel, c1Name, c2Name }) => (
         <Tooltip key={rel.id} text={`${c1Name} ↔ ${c2Name} — ${rel.tension} ${rel.tensionType || ""} tension${rel.dynamic ? `. ${rel.dynamic.slice(0, 140)}` : ""}`}>
-          <div className="nf-tension-pill">
-            <span className="nf-tension-dot" style={{ background: TC[rel.tension] || "var(--nf-border)" }} />
+            <div className="nf-tension-pill" style={{ boxShadow: `0 0 6px ${TC[rel.tension] || "transparent"}20` }}>
+            <span className="nf-tension-dot" style={{ background: TC[rel.tension] || "var(--nf-border)", boxShadow: `0 0 4px ${TC[rel.tension] || "transparent"}` }} />
             <span className="nf-tension-label">{(c1Name || "").split(/\s+/)[0]}</span>
             <span className="nf-tension-sep">·</span>
             <span className="nf-tension-label">{(c2Name || "").split(/\s+/)[0]}</span>
@@ -4889,6 +4920,24 @@ const GlyphRail = memo(({ saveStatus, isGenerating, wordProgress, characters, de
           0%, 100% { opacity: 0.55; }
           50% { opacity: 1; }
         }
+        @keyframes nf-glyph-idle {
+          0%, 80%, 100% { opacity: 0.3; box-shadow: 0 0 2px currentColor; }
+          40% { opacity: 0.7; box-shadow: 0 0 6px currentColor; }
+        }
+        @keyframes nf-glyph-ring-expand {
+          0% { r: 3; opacity: 0.4; }
+          100% { r: 8; opacity: 0; }
+        }
+        @keyframes nf-glyph-dot-sequenced {
+          0%, 100% { opacity: 0.15; transform: scale(0.8); }
+          30% { opacity: 0.9; transform: scale(1.2); }
+          60% { opacity: 0.15; transform: scale(0.8); }
+        }
+        @keyframes nf-glyph-stamp {
+          0% { transform: scale(1.3) rotate(-2deg); opacity: 0; }
+          60% { transform: scale(0.97) rotate(0.5deg); }
+          100% { transform: scale(1) rotate(0deg); opacity: 1; }
+        }
       `}</style>
 
       {/* Hidden SVG with shared filter definitions */}
@@ -4978,7 +5027,33 @@ const GlyphRail = memo(({ saveStatus, isGenerating, wordProgress, characters, de
             style={{ animation: "nf-glyph-char-glow 2s ease-in-out infinite" }}
           />
         )}
-
+		
+		{/* 4.5. Chapter activity pulse — ring that expands when chapter has content, y=62 */}
+        {(() => {
+          const hasContent = (wordProgress > 0);
+          return (
+            <g>
+              <circle
+                cx={CX} cy={62} r={3}
+                fill="none"
+                stroke={hasContent ? "#6b7394" : "var(--nf-border)"}
+                strokeWidth={0.6}
+                opacity={hasContent ? 0.5 : 0.12}
+              />
+              {hasContent && (
+                <circle
+                  cx={CX} cy={62} r={3}
+                  fill="none"
+                  stroke="#6b7394"
+                  strokeWidth={0.6}
+                  opacity={0}
+                  style={{ animation: "nf-glyph-ring-expand 3s ease-out infinite" }}
+                />
+              )}
+            </g>
+          );
+        })()}
+		
         {/* 5. Session progress glyph — thin vertical bar, y=90-118 */}
         <rect
           x={CX - 0.5} y={94} width={1} height={24} rx={0.5}
@@ -5785,17 +5860,19 @@ export default function NovelForge() {
       } else {
         el.innerHTML = cleanContent ? cleanContent.split("\n\n").map(p => `<p>${p.replace(/\n/g, "<br/>")}</p>`).join("") : "";
       }
-      _initEditorImageDelegation(el, imageDragRef);
-      setTimeout(() => {
-        el.querySelectorAll('figure.nf-img-wrapper').forEach(fig => _attachImageEvents(fig, el));
-        el.querySelectorAll('.nf-beat-marker').forEach(m => _attachBeatDragEvents(m, el));
+      if (!el._nfDragging) {
         _initEditorImageDelegation(el, imageDragRef);
-      }, 50);
+        setTimeout(() => {
+          el.querySelectorAll('figure.nf-img-wrapper').forEach(fig => _attachImageEvents(fig, el, imageDragRef));
+          el.querySelectorAll('.nf-beat-marker').forEach(m => _attachBeatDragEvents(m, el));
+        }, 50);
+      }
     } else {
       lastSyncedContentRef.current = content;
     }
 
     return () => {
+      if (el._nfDragging) return; // Don't kill a drag mid-flight
       if (el._nfCleanupDragPrevention) {
         el._nfCleanupDragPrevention();
         delete el._nfCleanupDragPrevention;
@@ -6063,7 +6140,7 @@ Then 2-3 sentences describing the specific scene idea, character actions, and em
     const currentModePrompt = getModePrompt(genMode);
     const userMsg = chatInput.trim() || currentModePrompt;
     if (!userMsg) return;
-    if (editorRef.current) { debouncedSyncEditor.cancel(); syncEditorContent(); }
+    if (editorRef.current && !editorRef.current._nfDragging) { debouncedSyncEditor.cancel(); syncEditorContent(); }
     setIsGenerating(true); setStreamingContent(""); streamingContentRef.current = "";
     const userMsgObj = { id: uid(), role: "user", content: userMsg, mode: genMode, chapterIdx: activeChapterIdx };
     setChatMessages(prev => [...prev.slice(-(CHAT_HISTORY_LIMIT - 1)), userMsgObj]);
@@ -8634,7 +8711,21 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
             </div>
           </div>
         )}
-        {isGenerating && !streamingContent && <div className="nf-generating"><Spinner /> Generating...</div>}
+        {isGenerating && !streamingContent && (
+          <div className="nf-generating">
+            <div style={{ display: "flex", gap: 3, alignItems: "center" }}>
+              {[0, 1, 2].map(i => (
+                <div key={i} style={{
+                  width: 5, height: 5, borderRadius: "50%",
+                  background: "var(--nf-accent)",
+                  animation: "nf-glyph-breathe 1.4s ease-in-out infinite",
+                  animationDelay: `${i * 0.2}s`,
+                }} />
+              ))}
+            </div>
+            <span style={{ fontSize: 11, color: "var(--nf-text-muted)", marginLeft: 6 }}>Thinking</span>
+          </div>
+        )}
         {/* B15: Use instant scroll during streaming, smooth otherwise */}
         <div ref={chatEndRef} />
       </div>
@@ -8767,7 +8858,26 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                         )}
                       </div>
                       <div className="nf-chapter-item-meta">
-                        {chapterWordCounts[i] > 0 ? `${chapterWordCounts[i].toLocaleString()} w` : "Empty"}
+                        {chapterWordCounts[i] > 0 ? (
+                          <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                            <span style={{
+                              width: 4, height: 4, borderRadius: "50%",
+                              background: i === activeChapterIdx ? "var(--nf-accent)" : "var(--nf-success)",
+                              boxShadow: i === activeChapterIdx ? "0 0 4px var(--nf-accent)" : "none",
+                              animation: i === activeChapterIdx ? "nf-glyph-pulse-fast 2s ease-in-out infinite" : "none",
+                              flexShrink: 0,
+                            }} />
+                            {chapterWordCounts[i].toLocaleString()} w
+                          </span>
+                        ) : (
+                          <span style={{ display: "inline-flex", alignItems: "center", gap: 4, opacity: 0.5 }}>
+                            <span style={{
+                              width: 4, height: 4, borderRadius: "50%",
+                              border: "1px solid var(--nf-border)", background: "transparent",
+                            }} />
+                            Empty
+                          </span>
+                        )}
                         {ch.summary ? " · ✦" : ""}
                         {(() => {
                           const plotE = ch.linkedPlotId
@@ -10125,7 +10235,7 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                                           setProjects(prev => prev.map(p => {
 											if (p.id !== activeProjectId) return p;
 											return { ...p, worldBuilding: (p.worldBuilding || []).map(w =>
-											  w.id === item.id ? { ...w, referenceImages: updatedRefs } : w
+											  w.id === item.id ? { ...w, referenceImages: updated } : w
 											)};
 										  }));
                                         }} className="nf-btn-icon" style={{
