@@ -3482,9 +3482,27 @@ const _attachImageEvents = (fig, editorEl, dragRef) => {
       // Determine if the image actually moved
       let didMove = false;
       if (placeholder.parentNode && fig.parentNode) {
-        for (const child of editorEl.children) {
-          if (child === placeholder) { didMove = true; break; }
-          if (child === fig) break;
+        // Check if the image was moved to a different position
+        // We need to compare the original position with the new position
+        const placeholderParent = placeholder.parentNode;
+        const figParent = fig.parentNode;
+        
+        // If placeholder is in a different parent, definitely moved
+        if (placeholderParent !== figParent) {
+          didMove = true;
+        } else {
+          // Same parent - check if positions are different
+          // Get all children of the parent
+          const children = Array.from(placeholderParent.children);
+          const figIndex = children.indexOf(fig);
+          const placeholderIndex = children.indexOf(placeholder);
+          
+          // If placeholder is before the figure, image moved up
+          // If placeholder is after the figure, image moved down
+          // If they're at the same index (placeholder replaces figure), it's a move
+          if (placeholderIndex !== figIndex) {
+            didMove = true;
+          }
         }
       }
 
@@ -3521,7 +3539,7 @@ const _attachImageEvents = (fig, editorEl, dragRef) => {
         document.removeEventListener('mousemove', onMove);
         document.removeEventListener('mouseup', onUp);
         document.removeEventListener('keydown', onKey);
-		removeBlockInput();
+        removeBlockInput();
         if (clone.parentNode) clone.remove();
         fig.style.opacity = '';
         fig.classList.remove('dragging');
