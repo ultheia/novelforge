@@ -5250,13 +5250,25 @@ export default function NovelForge() {
   useEffect(() => { tabChatHistoriesRef.current = tabChatHistories; }, [tabChatHistories]);
 
   useEffect(() => {
-    const handler = (e) => {
+    const handler = () => {
       try {
         const el = editorRef.current;
         if (el && activeProjectId && !el._nfDragging) {
           const html = el.innerHTML;
           if (html && html !== "<br>" && html !== lastSyncedContentRef.current) {
-            syncEditorContent(true);
+            lastSyncedContentRef.current = html;
+            setProjects(prev => {
+              const updated = prev.map(p => {
+                if (p.id !== activeProjectId) return p;
+                const chapters = [...p.chapters];
+                if (chapters[activeChapterIdx]) {
+                  chapters[activeChapterIdx] = { ...chapters[activeChapterIdx], content: html };
+                }
+                return { ...p, chapters };
+              });
+              projectsRef.current = updated;
+              return updated;
+            });
           }
         }
       } catch (err) { /* ignore */ }
@@ -5272,7 +5284,7 @@ export default function NovelForge() {
     };
     window.addEventListener("beforeunload", handler);
     return () => window.removeEventListener("beforeunload", handler);
-  }, [activeProjectId, debouncedSaveProjects, debouncedSaveSettings, debouncedSaveTabChats, syncEditorContent]);
+  }, [activeProjectId, activeChapterIdx, debouncedSaveProjects, debouncedSaveSettings, debouncedSaveTabChats]);
 
   // ─── SCROLL CHAT ───
   // B15: Use instant scroll during streaming to keep up with content, smooth for new messages
@@ -10065,23 +10077,24 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                                         <Icons.Export /> {hasPrompt ? "Upload Image" : "Upload Image (no prompt needed)"}
                                         <input type="file" accept="image/*" style={{ display: "none" }}
                                           onChange={e => {
-                                            const file = e.target.files?.[0];
-                                            if (!file) return;
-                                            if (file.size > 2 * 1024 * 1024) { showToast("Max 2MB", "error"); return; }
-                                            const reader = new FileReader();
-                                            reader.onload = ev => {
-                                              const updatedRefs = { ...(item.referenceImages || {}) };
-                                              updatedRefs[wallKey] = ev.target.result;
-                                              setProjects(prev => prev.map(p => {
-											    if (p.id !== activeProjectId) return p;
-											    return { ...p, worldBuilding: (p.worldBuilding || []).map(w =>
-											      w.id === item.id ? { ...w, referenceImages: updatedRefs } : w
-											  )};
-                                              showToast("Image uploaded", "success");
-                                            };
-                                            reader.readAsDataURL(file);
-                                            e.target.value = "";
-                                          }}
+										    const file = e.target.files?.[0];
+										    if (!file) return;
+										    if (file.size > 2 * 1024 * 1024) { showToast("Max 2MB", "error"); return; }
+										    const reader = new FileReader();
+										    reader.onload = ev => {
+										  	  const updatedRefs = { ...(item.referenceImages || {}) };
+										  	  updatedRefs[wallKey] = ev.target.result;
+										  	  setProjects(prev => prev.map(p => {
+										  	  if (p.id !== activeProjectId) return p;
+										  	  return { ...p, worldBuilding: (p.worldBuilding || []).map(w =>
+										  	 	 w.id === item.id ? { ...w, referenceImages: updatedRefs } : w
+										  	  )};
+										  	  }));
+										  	  showToast("Image uploaded", "success");
+										    };
+										    reader.readAsDataURL(file);
+										    e.target.value = "";
+										  }}
                                         />
                                       </label>
                                     </div>
