@@ -150,6 +150,23 @@ const TENSION_TYPE_OPTIONS = [
   { value: "neutral", label: "Neutral" }, { value: "acquaintance", label: "Acquaintance / Distant" },
   { value: "mixed", label: "Mixed / Complex" },
 ];
+const RELATIONSHIP_CATEGORY_OPTIONS = [
+  { value: "romantic", label: "Romantic" }, { value: "family", label: "Family" },
+  { value: "friendship", label: "Friendship" }, { value: "professional", label: "Professional" },
+  { value: "mentor", label: "Mentor / Mentee" }, { value: "rivalry", label: "Rivalry" },
+  { value: "political", label: "Political / Alliance" }, { value: "spiritual", label: "Spiritual / Bond" },
+  { value: "other", label: "Other" },
+];
+const POWER_DYNAMIC_OPTIONS = [
+  { value: "equal", label: "Equal" }, { value: "char1-dominant", label: "Char 1 Dominant" },
+  { value: "char2-dominant", label: "Char 2 Dominant" }, { value: "shifting", label: "Shifting / Contested" },
+];
+const TRUST_LEVEL_OPTIONS = [
+  { value: "none", label: "None" }, { value: "low", label: "Low" },
+  { value: "medium", label: "Medium" }, { value: "high", label: "High" },
+  { value: "absolute", label: "Absolute" },
+];
+const BUILD_OPTIONS = ["Slim","Lean","Athletic","Average","Muscular","Stocky","Heavyset","Petite","Curvy","Tall & lanky","Other"];
 
 // ─── IMAGE UTILITIES ───
 const ImageUtils = {
@@ -988,6 +1005,24 @@ const ContextEngine = {
     let tokensUsed = 0;
     const currentChNum = this._chapterNum(project, chapterIdx);
 
+    // ✅ FIX: Declare _charOrgCtx HERE so both characters AND plot sections can use it
+    const _charOrgCtx = {};
+    (project.worldBuilding || []).forEach(w => {
+      if (w.category !== "Organization" || !Array.isArray(w.orgHierarchy)) return;
+      w.orgHierarchy.forEach(pos => {
+        if (!pos.charId) return;
+        const superior = pos.parentId ? w.orgHierarchy.find(p => p.id === pos.parentId) : null;
+        const subordinates = w.orgHierarchy.filter(p => p.parentId === pos.id && p.charId);
+        if (!_charOrgCtx[pos.charId]) _charOrgCtx[pos.charId] = [];
+        _charOrgCtx[pos.charId].push({
+          position: pos.name || "Member",
+          org: w.name || "Organization",
+          reportsTo: superior?.charId ? _resolveCharName(superior.charId, project.characters) : (superior?.name || null),
+          manages: subordinates.map(s => s.charId ? _resolveCharName(s.charId, project.characters) : s.name).filter(Boolean),
+        });
+      });
+    });
+
     // --- Determine scene context for intelligent filtering ---
     const curChapter = project.chapters?.[chapterIdx];
     const sceneNotes = curChapter?.sceneNotes || "";
@@ -1063,6 +1098,33 @@ const ContextEngine = {
 
     const relevantWorldIds = _detectRelevantWorld(detectionText, project.worldBuilding);
 
+    // NEW: Inject plot-selected locations into relevant world IDs
+    if (curPlotEntry?.locations) {
+      const plotLocIds = Array.isArray(curPlotEntry.locations) ? curPlotEntry.locations : [];
+      for (const lid of plotLocIds) {
+        if ((project.worldBuilding || []).some(w => w.id === lid)) {
+          relevantWorldIds.add(lid);
+        }
+      }
+    }
+
+    // NEW: Collect "ambient" characters — characters who frequent relevant locations
+    // but are NOT explicitly mentioned or plot-selected. These get compact treatment.
+    const ambientCharIds = new Set();
+    if (project.worldBuilding?.length) {
+      for (const wid of relevantWorldIds) {
+        const w = project.worldBuilding.find(we => we.id === wid);
+        if (w && Array.isArray(w.frequentCharacters)) {
+          for (const cid of w.frequentCharacters) {
+            // Only add if they're not already explicitly mentioned
+            if (!mentionedCharIds.has(cid) && (project.characters || []).some(c => c.id === cid)) {
+              ambientCharIds.add(cid);
+            }
+          }
+        }
+      }
+    }
+
     // A22: Identify POV character — FIX: Multi-strategy detection
     let povCharId = null;
     // Strategy 0 (highest priority): Explicit POV character ID from plot outline
@@ -1116,6 +1178,18 @@ const ContextEngine = {
           const mismatch = (genderLower === "male" && pronounLower.startsWith("she/")) || (genderLower === "female" && pronounLower.startsWith("he/"));
           if (mismatch) fields.push(["[Note]", "Gender/pronoun combination is intentional — do not 'correct'"]);
         }
+        if (c.occupation) fields.push(["Occupation", c.occupation]);
+        // Inject org hierarchy positions
+        if (_charOrgCtx[c.id]) {
+          _charOrgCtx[c.id].forEach(org => {
+            let orgLine = `${org.position} in ${org.org}`;
+            if (org.reportsTo) orgLine += ` — reports to ${org.reportsTo}`;
+            if (org.manages.length > 0) orgLine += ` — manages ${org.manages.join(", ")}`;
+            fields.push(["Org rank", orgLine]);
+          });
+        }
+        if (c.height) fields.push(["Height", c.height]);
+        if (c.build) fields.push(["Build", c.build]);
         // A10: Compact appearance after first few chapters
         if (c.appearance) {
           if (c.firstAppearanceChapter > 0 && currentChNum > c.firstAppearanceChapter + 2) {
@@ -1125,6 +1199,11 @@ const ContextEngine = {
           }
         }
         if (c.personality) fields.push(["Personality", c.personality]);
+        if (c.fears) fields.push(["Fears", c.fears]);
+        if (c.flaws) fields.push(["Flaws", c.flaws]);
+        if (c.strengths) fields.push(["Strengths", c.strengths]);
+        if (c.skills) fields.push(["Skills/Abilities", c.skills]);
+        if (c.habits) fields.push(["Habits/Mannerisms", c.habits]);
         // A2: Backstory gated by reveal chapter
         if (c.backstory) {
           if (c.backstoryRevealChapter > 0 && currentChNum < c.backstoryRevealChapter) {
@@ -1133,11 +1212,28 @@ const ContextEngine = {
             fields.push(["Backstory", c.backstory]);
           }
         }
+        // Secrets — gated like backstory
+        if (c.secrets) fields.push(["Known Secrets", c.secrets]);
+        if (c.hiddenSecrets) {
+          if (c.secretRevealChapter > 0 && currentChNum < c.secretRevealChapter) {
+            fields.push(["Hidden Secrets", "[UNREVEALED — Do NOT hint at these secrets yet.]"]);
+          } else {
+            fields.push(["Hidden Secrets (NOW REVEALED)", c.hiddenSecrets]);
+          }
+        }
         // A3: Desires with temporal context
         if (c.desires) {
           fields.push(["Desires/Motivations", `${c.desires} [Note: Desires evolve — cross-reference with chapter content for current state]`]);
         }
+        if (c.shortTermGoals) fields.push(["Short-term Goals", c.shortTermGoals]);
+        if (c.longTermGoals) fields.push(["Long-term Goals", c.longTermGoals]);
+        if (c.internalConflict) fields.push(["Internal Conflict", c.internalConflict]);
+        if (c.externalConflict) fields.push(["External Conflict", c.externalConflict]);
         if (c.speechPattern) fields.push(["Speech pattern", c.speechPattern]);
+        if (c.voiceSamples) fields.push(["Voice samples", c.voiceSamples]);
+        if (c.signatureItems) fields.push(["Signature items", c.signatureItems]);
+        if (c.allegiances) fields.push(["Allegiances", c.allegiances]);
+        if (c.tags) fields.push(["Traits", c.tags]);
         // A8: Only include character's relationships text if no Relationships tab entries exist for this character
         if (c.relationships) {
           const hasRelEntries = (project.relationships || []).some(r => {
@@ -1266,6 +1362,42 @@ const ContextEngine = {
           }
         }
       }
+
+      // NEW: Ambient characters — frequent this location but NOT in scene
+      // Ultra-compact: ONE line each. Instruction goes in section header, not per character.
+      if (ambientCharIds.size > 0) {
+        const ambientChars = (project.characters || []).filter(c => ambientCharIds.has(c.id));
+        const livingAmbient = ambientChars.filter(c => {
+          if (c.status === "dead") return false;
+          if (c.firstAppearanceChapter > 0 && currentChNum < c.firstAppearanceChapter) return false;
+          return true;
+        });
+        if (livingAmbient.length > 0) {
+          const locNames = [];
+          for (const wid of relevantWorldIds) {
+            const w = (project.worldBuilding || []).find(we => we.id === wid);
+            if (w && Array.isArray(w.frequentCharacters) && w.frequentCharacters.some(cid => ambientCharIds.has(cid))) {
+              locNames.push(w.name);
+            }
+          }
+          charParts.push(`\n— Nearby (at ${locNames.join("/") || "location"} — may appear naturally, not the focus):`);
+          for (const c of livingAmbient) {
+            // TRUE one-liner: "Name (role, pronoun) — 6-word personality max"
+            let line = `  ◦ ${c.name}`;
+            const meta = [c.role || "supporting", c.pronouns, c.occupation].filter(Boolean).join(", ");
+            line += ` (${meta})`;
+            // Personality: max ~8 words, hard truncate
+            if (c.personality) {
+              const words = c.personality.split(/\s+/).slice(0, 8).join(" ");
+              line += ` — ${words}${c.personality.split(/\s+/).length > 8 ? "…" : ""}`;
+            }
+            if (tokensUsed + this._estimateLen(line) < budgetChars) {
+              charParts.push(line);
+              tokensUsed += this._estimateLen(line);
+            }
+          }
+        }
+      }
       // A18: Name list only for characters who have been introduced
       const introducedNames = project.characters
         .filter(c => c.name && (c.firstAppearanceChapter === 0 || !c.firstAppearanceChapter || c.firstAppearanceChapter <= currentChNum))
@@ -1307,16 +1439,27 @@ const ContextEngine = {
           const c2Name = _resolveCharName(r.char2, chars);
           // B2/B3: Include temporal scope and tension type
           let line = `${c1Name} ↔ ${c2Name}: ${r.dynamic}`;
+          if (r.category && r.category !== "romantic") line += ` | Category: ${r.category}`;
           if (r.status) line += ` | Status: ${r.status}`;
           if (r.tension) {
             line += ` | Tension: ${r.tension}`;
             if (r.tensionType) line += ` (${r.tensionType})`; // B3: Tension flavor
           }
+          if (r.powerDynamic && r.powerDynamic !== "equal") line += ` | Power: ${r.powerDynamic}`;
+          if (r.trustLevel) line += ` | Trust: ${r.trustLevel}`;
+          if (r.terms) line += ` | Address: ${r.terms}`;
+          if (r.isPublic === false) line += ` | [SECRET — other characters don't know]`;
           // B7: Directional perspectives
           if (r.char1Perspective) line += ` | ${c1Name}'s view: ${_truncateAtBoundary(r.char1Perspective, 1000)}`;
           if (r.char2Perspective) line += ` | ${c2Name}'s view: ${_truncateAtBoundary(r.char2Perspective, 1000)}`;
+          if (r.chemistry) line += ` | Chemistry: ${_truncateAtBoundary(r.chemistry, 200)}`;
+          if (r.conflictSource) line += ` | Conflict: ${_truncateAtBoundary(r.conflictSource, 200)}`;
+          if (r.sharedSecrets) line += ` | Shared secrets: ${_truncateAtBoundary(r.sharedSecrets, 200)}`;
+          if (r.taboos) line += ` | Taboos: ${r.taboos}`;
           // B10: Progression arc
           if (r.progression) line += ` | Arc: ${r.progression}`;
+          // Key scenes relevant to current chapter
+          if (r.keyScenes) line += ` | Key scenes: ${_truncateAtBoundary(r.keyScenes, 300)}`;
           // B1/B2: Evolution timeline with chapter awareness
           if (r.evolutionTimeline) {
             line += ` | Evolution: ${_truncateAtBoundary(r.evolutionTimeline, 1000)}`;
@@ -1380,6 +1523,33 @@ const ContextEngine = {
             } else {
               entry += `: ${w.description}`;
             }
+          }
+          // Include rich location/org details for relevant entries
+          if (w.atmosphere) entry += ` | Atmosphere: ${w.atmosphere}`;
+          if (w.sensoryDetails) entry += ` | Sensory: ${_truncateAtBoundary(w.sensoryDetails, 200)}`;
+          if (w.dangers) entry += ` | Dangers: ${w.dangers}`;
+          if (w.rules) entry += ` | Rules: ${w.rules}`;
+          if (w.subLocations) entry += ` | Areas: ${w.subLocations}`;
+          if (w.culturalNorms) entry += ` | Norms: ${_truncateAtBoundary(w.culturalNorms, 150)}`;
+          // Org hierarchy summary for organizations
+          if (w.category === "Organization" && Array.isArray(w.orgHierarchy) && w.orgHierarchy.length > 0) {
+            const hierStr = w.orgHierarchy.map(pos => {
+              let h = pos.name || "?";
+              if (pos.charId) {
+                const ch = (project.characters || []).find(c => c.id === pos.charId);
+                if (ch) h += ` (${ch.name})`;
+              }
+              return h;
+            }).join(", ");
+            entry += ` | Hierarchy: ${hierStr}`;
+          }
+          // Characters at this location
+          if (Array.isArray(w.frequentCharacters) && w.frequentCharacters.length > 0) {
+            const charNames = w.frequentCharacters.map(cid => {
+              const ch = (project.characters || []).find(c => c.id === cid);
+              return ch?.name;
+            }).filter(Boolean);
+            if (charNames.length) entry += ` | Characters here: ${charNames.join(", ")}`;
           }
           if (tokensUsed + this._estimateLen(entry) < budgetWorld) {
             worldParts.push(entry);
@@ -1456,6 +1626,44 @@ const ContextEngine = {
           }
 		}
         if (pl.sceneType) line += ` [${pl.sceneType}]`;
+        // Include plot-selected locations
+        if (Array.isArray(pl.locations) && pl.locations.length > 0 && !isFarFuture) {
+          const locNames = pl.locations.map(lid => {
+            const loc = (project.worldBuilding || []).find(w => w.id === lid);
+            return loc?.name;
+          }).filter(Boolean);
+          if (locNames.length) line += ` | Location: ${locNames.join(", ")}`;
+        }
+        // Include plot-selected characters for current/nearby
+        if (Array.isArray(pl.characters) && pl.characters.length > 0 && (isCurrent || isNearby) && !isFarFuture) {
+          const charDescs = pl.characters.map(cid => {
+            const ch = (project.characters || []).find(c => c.id === cid);
+            if (!ch) return null;
+            let desc = ch.name;
+            // Append org rank if they hold one
+            if (_charOrgCtx[cid] && _charOrgCtx[cid].length > 0) {
+              desc += ` [${_charOrgCtx[cid].map(o => `${o.position}, ${o.org}`).join("; ")}]`;
+            }
+            return desc;
+          }).filter(Boolean);
+          if (charDescs.length) line += ` | Characters: ${charDescs.join(", ")}`;
+        }
+        // For current chapter: if location has an org, note the org context
+        if (isCurrent && Array.isArray(pl.locations) && pl.locations.length > 0) {
+          pl.locations.forEach(lid => {
+            const loc = (project.worldBuilding || []).find(w => w.id === lid);
+            if (!loc) return;
+            // Check if any connected world entries are organizations
+            if (Array.isArray(loc.connectedTo)) {
+              loc.connectedTo.forEach(connId => {
+                const conn = (project.worldBuilding || []).find(w => w.id === connId);
+                if (conn?.category === "Organization" && conn.orgPurpose) {
+                  line += ` | Org at location: ${conn.name} (${_truncateAtBoundary(conn.orgPurpose, 80)})`;
+                }
+              });
+            }
+          });
+        }
         if (tokensUsed + this._estimateLen(line) < budgetPlot) {
           plotParts.push(line);
           tokensUsed += this._estimateLen(line);
@@ -1735,7 +1943,7 @@ const ContextEngine = {
           if (editing) {
             parts.push(`\n<currently_editing_character>`);
             // G5: Explicitly label which fields are empty vs filled
-            const fields = [["name","Name"],["role","Role"],["gender","Gender"],["age","Age"],["pronouns","Pronouns"],["aliases","Aliases"],["appearance","Appearance"],["personality","Personality"],["backstory","Backstory"],["desires","Desires"],["speechPattern","Speech pattern"],["relationships","Relationships"],["kinks","Preferences"],["arc","Arc"],["canonNotes","Canon notes"],["notes","Author notes"]];
+            const fields = [["name","Name"],["role","Role"],["gender","Gender"],["age","Age"],["pronouns","Pronouns"],["aliases","Aliases"],["occupation","Occupation"],["height","Height"],["build","Build"],["tags","Tags"],["allegiances","Allegiances"],["appearance","Appearance"],["personality","Personality"],["backstory","Backstory"],["desires","Desires"],["shortTermGoals","Short-term goals"],["longTermGoals","Long-term goals"],["speechPattern","Speech pattern"],["voiceSamples","Voice samples"],["habits","Habits & mannerisms"],["fears","Fears"],["flaws","Flaws"],["strengths","Strengths"],["skills","Skills"],["internalConflict","Internal conflict"],["externalConflict","External conflict"],["signatureItems","Signature items"],["secrets","Known secrets"],["hiddenSecrets","Hidden secrets"],["kinks","Preferences"],["arc","Arc"],["canonNotes","Canon notes"],["notes","Author notes"]];
             const emptyFields = [];
             const filledFields = [];
             fields.forEach(([k, label]) => {
@@ -1782,13 +1990,52 @@ const ContextEngine = {
             let line = `• ${w.name}`;
             if (w.category) line += ` [${w.category}]`;
             if (w.description) line += `: ${_truncateAtBoundary(w.description, 1000)}`;
+            if (w.atmosphere) line += ` | Atmosphere: ${w.atmosphere}`;
+            if (w.sensoryDetails) line += ` | Sensory: ${_truncateAtBoundary(w.sensoryDetails, 200)}`;
+            if (w.subLocations) line += ` | Sub-locations: ${w.subLocations}`;
+            if (w.dangers) line += ` | Dangers: ${w.dangers}`;
+            if (w.rules) line += ` | Rules: ${w.rules}`;
+            if (w.history) line += ` | History: ${_truncateAtBoundary(w.history, 200)}`;
+            if (w.culturalNorms) line += ` | Norms: ${_truncateAtBoundary(w.culturalNorms, 200)}`;
+            if (w.resources) line += ` | Resources: ${w.resources}`;
+            if (w.population) line += ` | Population: ${w.population}`;
+            if (w.orgPurpose) line += ` | Purpose: ${_truncateAtBoundary(w.orgPurpose, 200)}`;
+            // Include frequent characters by name
+            if (Array.isArray(w.frequentCharacters) && w.frequentCharacters.length > 0 && project.characters) {
+              const charNames = w.frequentCharacters.map(cid => {
+                const ch = project.characters.find(c => c.id === cid);
+                return ch?.name || "?";
+              }).filter(n => n !== "?");
+              if (charNames.length) line += ` | Characters here: ${charNames.join(", ")}`;
+            }
+            // Include org hierarchy summary
+            if (Array.isArray(w.orgHierarchy) && w.orgHierarchy.length > 0 && project.characters) {
+              const hierParts = w.orgHierarchy.map(pos => {
+                let h = pos.name || "Unnamed";
+                if (pos.role) h += ` (${pos.role})`;
+                if (pos.charId) {
+                  const ch = project.characters.find(c => c.id === pos.charId);
+                  if (ch) h += ` — held by ${ch.name}`;
+                }
+                return h;
+              });
+              line += ` | Hierarchy: ${hierParts.join(" → ")}`;
+            }
+            // Include connected entries
+            if (Array.isArray(w.connectedTo) && w.connectedTo.length > 0) {
+              const connNames = w.connectedTo.map(cid => {
+                const other = project.worldBuilding.find(ww => ww.id === cid);
+                return other?.name || "?";
+              }).filter(n => n !== "?");
+              if (connNames.length) line += ` | Connected to: ${connNames.join(", ")}`;
+            }
             parts.push(line);
           });
           parts.push(`</existing_world_entries>`);
         }
         // G2: Include characters for world consistency
         if (project.characters?.length) {
-          parts.push(`\nCharacters: ${project.characters.map(c => `${c.name} (${c.role})`).join(", ")}`);
+          parts.push(`\nCharacters: ${project.characters.map(c => `${c.name} (${c.role}${c.occupation ? `, ${c.occupation}` : ""})`).join(", ")}`);
         }
         break;
       }
@@ -1799,13 +2046,64 @@ const ContextEngine = {
           project.plotOutline.forEach((pl, i) => {
             let line = `Ch${pl.chapter || i + 1}: ${pl.title || "Untitled"}`;
             if (pl.summary) line += ` — ${pl.summary}`;
-            if (pl.beats) line += ` | Beats: ${pl.beats}`;
+            if (pl.beats) {
+              const beatsText = Array.isArray(pl.beats)
+                ? pl.beats.map(b => `${b.title || "Beat"}: ${b.description || ""}`).join("; ")
+                : pl.beats;
+              if (beatsText) line += ` | Beats: ${beatsText}`;
+            }
+            // Include locations
+            if (Array.isArray(pl.locations) && pl.locations.length > 0) {
+              const locNames = pl.locations.map(lid => {
+                const loc = (project.worldBuilding || []).find(w => w.id === lid);
+                return loc?.name;
+              }).filter(Boolean);
+              if (locNames.length) line += ` | Location: ${locNames.join(", ")}`;
+            }
+            // Include characters with org roles
+            if (Array.isArray(pl.characters) && pl.characters.length > 0) {
+              const charDescs = pl.characters.map(cid => {
+                const ch = (project.characters || []).find(c => c.id === cid);
+                if (!ch) return null;
+                // Check if this character holds any org positions
+                let desc = ch.name;
+                (project.worldBuilding || []).forEach(w => {
+                  if (w.category !== "Organization" || !Array.isArray(w.orgHierarchy)) return;
+                  w.orgHierarchy.forEach(pos => {
+                    if (pos.charId === cid) desc += ` [${pos.name}, ${w.name}]`;
+                  });
+                });
+                return desc;
+              }).filter(Boolean);
+              if (charDescs.length) line += ` | Characters: ${charDescs.join(", ")}`;
+            }
             parts.push(line);
           });
           parts.push(`</existing_plot>`);
         }
         if (project.characters?.length) {
           parts.push(`\nCharacters: ${project.characters.map(c => `${c.name} (${c.role})`).join(", ")}`);
+        }
+        // Include locations for plot planning
+        const plotLocations = (project.worldBuilding || []).filter(w => w.name && (w.category === "Location" || !w.category));
+        if (plotLocations.length > 0) {
+          parts.push(`\nAvailable locations: ${plotLocations.map(l => l.name).join(", ")}`);
+        }
+        // Include organizations for plot planning
+        const plotOrgs = (project.worldBuilding || []).filter(w => w.name && w.category === "Organization");
+        if (plotOrgs.length > 0) {
+          parts.push(`\nOrganizations: ${plotOrgs.map(o => {
+            let desc = o.name;
+            if (o.orgPurpose) desc += ` — ${_truncateAtBoundary(o.orgPurpose, 100)}`;
+            if (Array.isArray(o.orgHierarchy) && o.orgHierarchy.length > 0) {
+              const leaders = o.orgHierarchy.filter(p => !p.parentId && p.charId).map(p => {
+                const ch = (project.characters || []).find(c => c.id === p.charId);
+                return ch ? `${p.name}: ${ch.name}` : p.name;
+              });
+              if (leaders.length) desc += ` [${leaders.join(", ")}]`;
+            }
+            return desc;
+          }).join("; ")}`);
         }
         // G4: Include chapter summaries for what's actually been written
         // FIX: Use original chapter index, not filtered index
@@ -1836,8 +2134,11 @@ const ContextEngine = {
         if (project.characters?.length) {
           parts.push(`\nCharacters:`);
           project.characters.forEach(c => {
-            let line = `  • ${c.name} (${c.role})`;
+            let line = `  • ${c.name} (${c.role}`;
+            if (c.occupation) line += `, ${c.occupation}`;
+            line += `)`;
             if (c.personality) line += ` — ${_truncateAtBoundary(c.personality, 1000)}`;
+            if (c.allegiances) line += ` [Allegiance: ${c.allegiances}]`;
             parts.push(line);
           });
         }
@@ -1851,8 +2152,17 @@ const ContextEngine = {
             visibleRels.forEach(r => {
             const c1Name = _resolveCharName(r.char1, chars);
             const c2Name = _resolveCharName(r.char2, chars);
-            let line = `${c1Name} ↔ ${c2Name}: ${r.dynamic} | Status: ${r.status} | Tension: ${r.tension}`;
+            let line = `${c1Name} ↔ ${c2Name}: ${r.dynamic} | Category: ${r.category || "romantic"} | Status: ${r.status} | Tension: ${r.tension}`;
             if (r.tensionType) line += ` (${r.tensionType})`;
+            if (r.powerDynamic && r.powerDynamic !== "equal") line += ` | Power: ${r.powerDynamic}`;
+            if (r.trustLevel) line += ` | Trust: ${r.trustLevel}`;
+            if (r.chemistry) line += ` | Chemistry: ${_truncateAtBoundary(r.chemistry, 150)}`;
+            if (r.conflictSource) line += ` | Conflict: ${_truncateAtBoundary(r.conflictSource, 150)}`;
+            if (r.sharedSecrets) line += ` | Shared secrets: ${_truncateAtBoundary(r.sharedSecrets, 150)}`;
+            if (r.keyScenes) line += ` | Key scenes: ${_truncateAtBoundary(r.keyScenes, 200)}`;
+            if (r.terms) line += ` | Terms: ${r.terms}`;
+            if (r.taboos) line += ` | Taboos: ${r.taboos}`;
+            if (r.isPublic === false) line += ` | [SECRET RELATIONSHIP]`;
             if (r.progression) line += ` | Arc: ${r.progression}`;
             if (r.char1Perspective) line += ` | ${c1Name}'s view: ${r.char1Perspective}`;
             if (r.char2Perspective) line += ` | ${c2Name}'s view: ${r.char2Perspective}`;
@@ -1895,6 +2205,27 @@ const createDefaultCharacter = () => ({
   canonNotes: "",
   image: "",
   lookAlike: "", // Famous person look-alike for image prompt consistency
+  // ─── NEW FIELDS ───
+  occupation: "",
+  title: "", // honorific or rank
+  tags: "", // comma-separated trait tags
+  fears: "",
+  flaws: "",
+  strengths: "",
+  skills: "",
+  signatureItems: "", // possessions, weapons, keepsakes
+  secrets: "", // known to reader
+  hiddenSecrets: "", // NOT sent to AI until reveal chapter
+  secretRevealChapter: 0,
+  shortTermGoals: "",
+  longTermGoals: "",
+  internalConflict: "",
+  externalConflict: "",
+  habits: "", // mannerisms, tics, routines
+  voiceSamples: "", // example quotes in their voice
+  allegiances: "", // factions, groups, loyalties
+  height: "",
+  build: "",
 });
 
 // ─── IndexedDB STORAGE (replaces localStorage — no 5MB limit) ───
@@ -2945,40 +3276,88 @@ function computeWebLayout(characters, relationships) {
   const rels = relationships || [];
   if (!chars.length) return [];
   const CX = 400, CY = 400, RADIUS = 220;
-  let nodes = chars.map((c, i) => {
+  // Build adjacency for smarter initial placement
+  const adj = {};
+  chars.forEach(c => { if (c.id) adj[c.id] = []; });
+  rels.forEach(r => {
+    if (r.char1 && r.char2 && adj[r.char1] && adj[r.char2]) {
+      adj[r.char1].push(r.char2);
+      adj[r.char2].push(r.char1);
+    }
+  });
+  // Sort by connectivity for better initial layout
+  const sortedChars = [...chars].sort((a, b) => (adj[b.id]?.length || 0) - (adj[a.id]?.length || 0));
+  let nodes = sortedChars.map((c, i) => {
     const angle = (i / chars.length) * Math.PI * 2 - Math.PI / 2;
+    // Place highly connected nodes closer to center
+    const connRatio = Math.max(0.4, 1 - (adj[c.id]?.length || 0) / Math.max(chars.length, 1));
     return {
       id: c.id,
-      x: CX + Math.cos(angle) * RADIUS + (Math.random() - 0.5) * 50,
-      y: CY + Math.sin(angle) * RADIUS + (Math.random() - 0.5) * 50,
+      x: CX + Math.cos(angle) * RADIUS * connRatio + (Math.random() - 0.5) * 30,
+      y: CY + Math.sin(angle) * RADIUS * connRatio + (Math.random() - 0.5) * 30,
       vx: 0, vy: 0,
     };
   });
-  // Build O(1) lookup map
   const nodeMap = {};
   nodes.forEach(n => nodeMap[n.id] = n);
   const edgeSet = new Set();
   rels.forEach(r => { if (r.char1 && r.char2) edgeSet.add([r.char1, r.char2].sort().join("::")); });
   const edges = [...edgeSet].map(k => { const [a, b] = k.split("::"); return [a, b]; });
-  // Reduce iterations for large graphs — 60 is enough for stable layout
   const n = nodes.length;
-  const ITERS = n > 15 ? 50 : n > 8 ? 80 : 120;
+  // Adaptive iterations — fewer for large graphs, use Barnes-Hut-like optimization for 20+
+  const ITERS = n > 30 ? 40 : n > 15 ? 55 : n > 8 ? 80 : 120;
   const SPRING_K = 0.025, REPULSION = 6000, TARGET_DIST = 170, CENTER_PULL = 0.008, DAMPING = 0.82;
   for (let iter = 0; iter < ITERS; iter++) {
     const temp = 1 - iter / ITERS;
-    for (let i = 0; i < n; i++) {
-      const ni = nodes[i];
-      ni.vx = (CX - ni.x) * CENTER_PULL;
-      ni.vy = (CY - ni.y) * CENTER_PULL;
-      for (let j = i + 1; j < n; j++) {
-        const nj = nodes[j];
-        const dx = ni.x - nj.x, dy = ni.y - nj.y;
-        const distSq = dx * dx + dy * dy || 1;
-        const f = REPULSION / distSq;
-        const d = Math.sqrt(distSq);
-        const fx = (dx / d) * f, fy = (dy / d) * f;
-        ni.vx += fx; ni.vy += fy;
-        nj.vx -= fx; nj.vy -= fy;
+    // For large graphs, use grid-based approximation to avoid O(n²)
+    if (n > 25) {
+      const CELL = 80;
+      const grid = {};
+      for (let i = 0; i < n; i++) {
+        const ni = nodes[i];
+        ni.vx = (CX - ni.x) * CENTER_PULL;
+        ni.vy = (CY - ni.y) * CENTER_PULL;
+        const cx = Math.floor(ni.x / CELL), cy = Math.floor(ni.y / CELL);
+        const key = `${cx},${cy}`;
+        if (!grid[key]) grid[key] = [];
+        grid[key].push(i);
+      }
+      for (let i = 0; i < n; i++) {
+        const ni = nodes[i];
+        const cx = Math.floor(ni.x / CELL), cy = Math.floor(ni.y / CELL);
+        for (let dx = -2; dx <= 2; dx++) {
+          for (let dy = -2; dy <= 2; dy++) {
+            const cell = grid[`${cx+dx},${cy+dy}`];
+            if (!cell) continue;
+            for (const j of cell) {
+              if (j <= i) continue;
+              const nj = nodes[j];
+              const ddx = ni.x - nj.x, ddy = ni.y - nj.y;
+              const distSq = ddx * ddx + ddy * ddy || 1;
+              const f = REPULSION / distSq;
+              const d = Math.sqrt(distSq);
+              const fx = (ddx / d) * f, fy = (ddy / d) * f;
+              ni.vx += fx; ni.vy += fy;
+              nj.vx -= fx; nj.vy -= fy;
+            }
+          }
+        }
+      }
+    } else {
+      for (let i = 0; i < n; i++) {
+        const ni = nodes[i];
+        ni.vx = (CX - ni.x) * CENTER_PULL;
+        ni.vy = (CY - ni.y) * CENTER_PULL;
+        for (let j = i + 1; j < n; j++) {
+          const nj = nodes[j];
+          const dx = ni.x - nj.x, dy = ni.y - nj.y;
+          const distSq = dx * dx + dy * dy || 1;
+          const f = REPULSION / distSq;
+          const d = Math.sqrt(distSq);
+          const fx = (dx / d) * f, fy = (dy / d) * f;
+          ni.vx += fx; ni.vy += fy;
+          nj.vx -= fx; nj.vy -= fy;
+        }
       }
     }
     for (const [a, b] of edges) {
@@ -3002,125 +3381,426 @@ function computeWebLayout(characters, relationships) {
   return nodes;
 }
 
-const RelationshipWebModal = memo(({ characters, relationships, onClose, povCharId }) => {
+const RelationshipWebModal = memo(({ characters, relationships, onClose, povCharId, worldBuilding }) => {
   const [nodes, setNodes] = useState(() => computeWebLayout(characters, relationships));
-  const [dragging, setDragging] = useState(null);
-  const [hoveredNode, setHoveredNode] = useState(null);
-  const [hoveredRel, setHoveredRel] = useState(null);
   const [selectedNode, setSelectedNode] = useState(null);
-  const [pan, setPan] = useState({ x: 0, y: 0 });
-  const [zoom, setZoom] = useState(1);
-  const [panning, setPanning] = useState(false);
+  const [hoveredInfo, setHoveredInfo] = useState(null); // {type: 'node'|'rel', id, x, y}
+  const [filterCategory, setFilterCategory] = useState("all");
+  const [showLocations, setShowLocations] = useState(true);
+  const [showOrgs, setShowOrgs] = useState(true);
   const svgRef = useRef(null);
-  const hoverTimer = useRef(null);
-  const dragOffset = useRef({ dx: 0, dy: 0 });
-  const panStart = useRef({ x: 0, y: 0, px: 0, py: 0 });
+  const dragRef = useRef(null); // {id, offsetX, offsetY} — NO setState during drag
   const panRef = useRef({ x: 0, y: 0 });
+  const panStateRef = useRef(null); // {startX, startY, origPanX, origPanY}
   const zoomRef = useRef(1);
+  const [, forceUpdate] = useReducer(x => x + 1, 0); // minimal re-render trigger
+  const nodesRef = useRef(nodes);
+  nodesRef.current = nodes;
+  const rafRef = useRef(null);
   const N_R = 28; const CANVAS = 800;
+
   useEffect(() => { const h = e => { if (e.key === "Escape") onClose(); }; window.addEventListener("keydown", h); return () => window.removeEventListener("keydown", h); }, [onClose]);
+  useEffect(() => () => { if (rafRef.current) cancelAnimationFrame(rafRef.current); }, []);
+
   const chars = characters || []; const rels = relationships || [];
+  const worlds = worldBuilding || [];
   const TC = { none: "#6b9e78", low: "#8b9e6b", medium: "#c4953a", high: "#c4653a", explosive: "#c43a3a" };
   const tColor = t => TC[t] || "rgba(180,140,100,0.3)";
   const LS = { committed: "", lovers: "24 6", dating: "14 6", "friends-with-benefits": "10 6", friends: "8 6", developing: "6 6", acquaintances: "3 6", strangers: "2 8", enemies: "8 3", "enemies-to-lovers": "14 3 3 3", tension: "8 4", estranged: "2 12", exes: "10 4", forbidden: "6 3 2 3", unrequited: "4 8", complicated: "8 4 2 4", default: "6 6" };
   const lDash = s => LS[s] || LS.default;
+
+  // ─── LOCATION ZONE COLORS (muted, distinguishable palette) ───
+  const ZONE_COLORS = [
+    "rgba(139,115,85,0.09)", "rgba(100,140,180,0.09)", "rgba(180,100,100,0.09)",
+    "rgba(100,170,120,0.09)", "rgba(160,120,180,0.09)", "rgba(180,160,100,0.09)",
+    "rgba(120,160,160,0.09)", "rgba(180,120,140,0.09)", "rgba(140,140,100,0.09)",
+  ];
+  const ZONE_BORDER_COLORS = [
+    "rgba(139,115,85,0.25)", "rgba(100,140,180,0.25)", "rgba(180,100,100,0.25)",
+    "rgba(100,170,120,0.25)", "rgba(160,120,180,0.25)", "rgba(180,160,100,0.25)",
+    "rgba(120,160,160,0.25)", "rgba(180,120,140,0.25)", "rgba(140,140,100,0.25)",
+  ];
+
+  // ─── COMPUTE LOCATION ZONES as Venn-style ellipses ───
+  const locationZones = useMemo(() => {
+    if (!showLocations) return [];
+    // Only locations with frequentCharacters assigned
+    const locations = worlds.filter(w =>
+      (w.category === "Location" || !w.category) &&
+      Array.isArray(w.frequentCharacters) && w.frequentCharacters.length > 0 && w.name
+    );
+    if (!locations.length || !nodes.length) return [];
+
+    return locations.map((loc, li) => {
+      // Find which nodes belong to this location
+      const memberNodes = nodes.filter(n => loc.frequentCharacters.includes(n.id));
+      if (memberNodes.length === 0) return null;
+
+      // Compute bounding ellipse around member nodes
+      const xs = memberNodes.map(n => n.x);
+      const ys = memberNodes.map(n => n.y);
+      const cx = xs.reduce((a, b) => a + b, 0) / xs.length;
+      const cy = ys.reduce((a, b) => a + b, 0) / ys.length;
+
+      // Radius = max distance from center to any member + generous padding
+      const PAD = 65;
+      let rx = PAD, ry = PAD;
+      memberNodes.forEach(n => {
+        rx = Math.max(rx, Math.abs(n.x - cx) + PAD);
+        ry = Math.max(ry, Math.abs(n.y - cy) + PAD);
+      });
+      // Ensure minimum size and slight aspect ratio variation for visual interest
+      rx = Math.max(rx, 70);
+      ry = Math.max(ry, 60);
+      // Add slight rotation based on member positions for organic feel
+      let angle = 0;
+      if (memberNodes.length >= 2) {
+        const dx = memberNodes[memberNodes.length - 1].x - memberNodes[0].x;
+        const dy = memberNodes[memberNodes.length - 1].y - memberNodes[0].y;
+        angle = Math.atan2(dy, dx) * (180 / Math.PI) * 0.3; // subtle tilt
+      }
+
+      return {
+        id: loc.id,
+        name: loc.name,
+        cx, cy, rx, ry, angle,
+        memberCount: memberNodes.length,
+        colorIdx: li % ZONE_COLORS.length,
+        atmosphere: loc.atmosphere || "",
+      };
+    }).filter(Boolean);
+  }, [worlds, nodes, showLocations]);
+
   const conns = useMemo(() => { const m = {}; chars.forEach(c => { if (c.id) m[c.id] = 0; }); rels.forEach(r => { if (r.char1 && m[r.char1] !== undefined) m[r.char1]++; if (r.char2 && m[r.char2] !== undefined) m[r.char2]++; }); return m; }, [chars, rels]);
   const effectivePovChar = useMemo(() => {
     if (povCharId) { const c = chars.find(ch => ch.id === povCharId); if (c) return c.id; }
     const p = chars.find(c => c.role === "protagonist"); return p?.id || null;
   }, [chars, povCharId]);
   const charMap = useMemo(() => { const m = {}; chars.forEach(c => { if (c.id) m[c.id] = c; }); return m; }, [chars]);
-  const svgCoords = useCallback((cx, cy) => { const svg = svgRef.current; if (!svg) return { x: cx, y: cy }; const pt = svg.createSVGPoint(); pt.x = cx; pt.y = cy; const ctm = svg.getScreenCTM(); if (!ctm) return { x: cx, y: cy }; try { const p = pt.matrixTransform(ctm.inverse()); return { x: p.x, y: p.y }; } catch { return { x: cx, y: cy }; } }, []);
-  const onNodeDown = useCallback((nid, e) => { e.stopPropagation(); e.preventDefault(); const n = nodes.find(nd => nd.id === nid); if (!n) return; const p = svgCoords(e.clientX, e.clientY); dragOffset.current = { dx: n.x - p.x, dy: n.y - p.y }; setDragging(nid); setSelectedNode(prev => prev === nid ? null : nid); }, [nodes, svgCoords]);
-  const onCanvasMove = useCallback(e => { if (dragging) { e.preventDefault(); const p = svgCoords(e.clientX, e.clientY); setNodes(prev => prev.map(n => n.id === dragging ? { ...n, x: p.x + dragOffset.current.dx, y: p.y + dragOffset.current.dy } : n)); } else if (panning) { e.preventDefault(); const dx = (e.clientX - panStart.current.x) / zoomRef.current; const dy = (e.clientY - panStart.current.y) / zoomRef.current; const newPan = { x: panStart.current.px + dx, y: panStart.current.py + dy }; panRef.current = newPan; setPan(newPan); } }, [dragging, panning, svgCoords]);
-  const onCanvasUp = useCallback(() => { setDragging(null); setPanning(false); }, []);
-  const onCanvasDown = useCallback(e => { if (e.target === svgRef.current || e.target.tagName === "rect" || e.target.tagName === "line") { if (!dragging) { setPanning(true); panStart.current = { x: e.clientX, y: e.clientY, px: panRef.current.x, py: panRef.current.y }; setSelectedNode(null); } } }, [dragging]);
-  const onWheel = useCallback(e => { e.preventDefault(); setZoom(z => { const next = e.deltaY < 0 ? z * 1.08 : z / 1.08; const clamped = Math.max(0.25, Math.min(3, next)); zoomRef.current = clamped; return clamped; }); }, []);
-  const onNodeEnter = useCallback((nid) => { clearTimeout(hoverTimer.current); setHoveredNode(nid); setHoveredRel(null); }, []);
-  const onNodeLeave = useCallback(() => { hoverTimer.current = setTimeout(() => setHoveredNode(null), 80); }, []);
-  const onRelEnter = useCallback(rid => { clearTimeout(hoverTimer.current); setHoveredRel(rid); setHoveredNode(null); }, []);
-  const onRelLeave = useCallback(() => { hoverTimer.current = setTimeout(() => setHoveredRel(null), 80); }, []);
-  useEffect(() => () => clearTimeout(hoverTimer.current), []);
-  const procRels = useMemo(() => { const seen = {}; return (rels || []).map(r => { const key = [r.char1, r.char2].sort().join("::"); if (!seen[key]) seen[key] = 0; seen[key]++; return { ...r, curveIdx: seen[key] - 1 }; }); }, [rels]);
+
+  // Character → location lookup for node labels
+  const charLocations = useMemo(() => {
+    const map = {};
+    worlds.forEach(w => {
+      if (Array.isArray(w.frequentCharacters) && w.name) {
+        w.frequentCharacters.forEach(cid => {
+          if (!map[cid]) map[cid] = [];
+          map[cid].push(w.name);
+        });
+      }
+    });
+    return map;
+  }, [worlds]);
+
+  // ─── ORG HIERARCHY LINKS: extract reporting-line connections between characters ───
+  const orgLinks = useMemo(() => {
+    if (!showOrgs) return [];
+    const links = [];
+    worlds.forEach(w => {
+      if (w.category !== "Organization" || !Array.isArray(w.orgHierarchy) || w.orgHierarchy.length === 0) return;
+      const hier = w.orgHierarchy;
+      // For each position that has a charId AND a parentId whose parent also has a charId,
+      // create a reporting link between the two characters
+      hier.forEach(pos => {
+        if (!pos.charId || !pos.parentId) return;
+        const parent = hier.find(p => p.id === pos.parentId);
+        if (!parent || !parent.charId) return;
+        // Don't create self-links
+        if (pos.charId === parent.charId) return;
+        links.push({
+          id: `org-${w.id}-${pos.id}`,
+          subordinateId: pos.charId,
+          superiorId: parent.charId,
+          subordinateRole: pos.name || "",
+          superiorRole: parent.name || "",
+          orgName: w.name || "Organization",
+          orgId: w.id,
+        });
+      });
+    });
+    return links;
+  }, [worlds, showOrgs]);
+
+  // Character → org role lookup (for showing rank under character name)
+  const charOrgRoles = useMemo(() => {
+    const map = {};
+    worlds.forEach(w => {
+      if (w.category !== "Organization" || !Array.isArray(w.orgHierarchy)) return;
+      w.orgHierarchy.forEach(pos => {
+        if (pos.charId && pos.name) {
+          if (!map[pos.charId]) map[pos.charId] = [];
+          map[pos.charId].push({ role: pos.name, org: w.name || "Org" });
+        }
+      });
+    });
+    return map;
+  }, [worlds]);
+
+  // Filter relationships by category
+  const filteredRels = useMemo(() => {
+    if (filterCategory === "all") return rels;
+    return rels.filter(r => (r.category || "romantic") === filterCategory);
+  }, [rels, filterCategory]);
+
+  const procRels = useMemo(() => { const seen = {}; return (filteredRels || []).map(r => { const key = [r.char1, r.char2].sort().join("::"); if (!seen[key]) seen[key] = 0; seen[key]++; return { ...r, curveIdx: seen[key] - 1 }; }); }, [filteredRels]);
   const curvePath = (x1, y1, x2, y2, ci) => { if (ci === 0) return `M${x1},${y1}L${x2},${y2}`; const mx = (x1 + x2) / 2, my = (y1 + y2) / 2; const d = Math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2) || 1; const nx = -(y2 - y1) / d, ny = (x2 - x1) / d; const off = d * 0.12 * (ci % 2 === 0 ? 1 : -1) * Math.ceil((ci + 1) / 2); return `M${x1},${y1}Q${mx + nx * off},${my + ny * off},${x2},${y2}`; };
-  const resetView = useCallback(() => { setNodes(computeWebLayout(chars, rels)); setPan({ x: 0, y: 0 }); panRef.current = { x: 0, y: 0 }; setZoom(1); zoomRef.current = 1; setSelectedNode(null); setHoveredNode(null); setHoveredRel(null); }, [chars, rels]);
+
+  const svgCoords = useCallback((cx, cy) => {
+    const svg = svgRef.current; if (!svg) return { x: cx, y: cy };
+    const pt = svg.createSVGPoint(); pt.x = cx; pt.y = cy;
+    const ctm = svg.getScreenCTM(); if (!ctm) return { x: cx, y: cy };
+    try { const p = pt.matrixTransform(ctm.inverse()); return { x: p.x, y: p.y }; } catch { return { x: cx, y: cy }; }
+  }, []);
+
+  // ─── OPTIMIZED DRAG: use refs + RAF, not setState per mousemove ───
+  const onNodeDown = useCallback((nid, e) => {
+    e.stopPropagation(); e.preventDefault();
+    const n = nodesRef.current.find(nd => nd.id === nid);
+    if (!n) return;
+    const p = svgCoords(e.clientX, e.clientY);
+    dragRef.current = { id: nid, dx: n.x - p.x, dy: n.y - p.y };
+    setSelectedNode(prev => prev === nid ? null : nid);
+  }, [svgCoords]);
+
+  const onCanvasMove = useCallback(e => {
+    if (dragRef.current) {
+      e.preventDefault();
+      const p = svgCoords(e.clientX, e.clientY);
+      const { id, dx, dy } = dragRef.current;
+      // Direct mutation + single RAF batch
+      const node = nodesRef.current.find(n => n.id === id);
+      if (node) {
+        node.x = p.x + dx;
+        node.y = p.y + dy;
+        if (!rafRef.current) {
+          rafRef.current = requestAnimationFrame(() => {
+            setNodes([...nodesRef.current]);
+            rafRef.current = null;
+          });
+        }
+      }
+    } else if (panStateRef.current) {
+      e.preventDefault();
+      const ps = panStateRef.current;
+      const dx = (e.clientX - ps.startX) / zoomRef.current;
+      const dy = (e.clientY - ps.startY) / zoomRef.current;
+      panRef.current = { x: ps.origPanX + dx, y: ps.origPanY + dy };
+      if (!rafRef.current) {
+        rafRef.current = requestAnimationFrame(() => { forceUpdate(); rafRef.current = null; });
+      }
+    }
+  }, [svgCoords]);
+
+  const onCanvasUp = useCallback(() => { dragRef.current = null; panStateRef.current = null; }, []);
+  const onCanvasDown = useCallback(e => {
+    if (e.target === svgRef.current || e.target.tagName === "rect" || e.target.tagName === "line") {
+      if (!dragRef.current) {
+        panStateRef.current = { startX: e.clientX, startY: e.clientY, origPanX: panRef.current.x, origPanY: panRef.current.y };
+        setSelectedNode(null);
+      }
+    }
+  }, []);
+
+  const onWheel = useCallback(e => {
+    e.preventDefault();
+    const next = e.deltaY < 0 ? zoomRef.current * 1.08 : zoomRef.current / 1.08;
+    zoomRef.current = Math.max(0.25, Math.min(3, next));
+    forceUpdate();
+  }, []);
+
+  const resetView = useCallback(() => {
+    setNodes(computeWebLayout(chars, rels));
+    panRef.current = { x: 0, y: 0 };
+    zoomRef.current = 1;
+    setSelectedNode(null); setHoveredInfo(null);
+    forceUpdate();
+  }, [chars, rels]);
+
+  // Relationship category stats
+  const catCounts = useMemo(() => {
+    const counts = { all: rels.length };
+    rels.forEach(r => { const cat = r.category || "romantic"; counts[cat] = (counts[cat] || 0) + 1; });
+    return counts;
+  }, [rels]);
+
   if (!chars.length) return (<div style={{ position: "fixed", inset: 0, zIndex: 9997, background: "rgba(0,0,0,0.6)", backdropFilter: "blur(8px)", display: "flex", alignItems: "center", justifyContent: "center" }} onClick={onClose}><div onClick={e => e.stopPropagation()} style={{ background: "var(--nf-dialog-bg)", border: "1px solid var(--nf-dialog-border)", borderRadius: 3, padding: 40, textAlign: "center", color: "var(--nf-text-muted)", fontFamily: "var(--nf-font-display)", fontStyle: "italic" }}>Add characters first to see their connections</div></div>);
   return (
     <div style={{ position: "fixed", inset: 0, zIndex: 9997, background: "rgba(0,0,0,0.6)", backdropFilter: "blur(8px)", display: "flex", alignItems: "center", justifyContent: "center", animation: "nf-fadeIn 0.2s ease-out" }} onClick={onClose}>
-      <style>{`.nf-rel-web-node{cursor:grab}.nf-rel-web-node:active{cursor:grabbing}.nf-rel-web-line{transition:opacity .2s}.nf-rel-web-line:hover{opacity:1!important}.nf-rel-web-hit{cursor:pointer}.nf-wl{position:absolute;bottom:14px;right:14px;background:var(--nf-bg-raised);border:1px solid var(--nf-border);border-radius:2px;padding:12px 16px;box-shadow:var(--nf-shadow);z-index:10;font-size:10px;color:var(--nf-text-muted);line-height:1.8;user-select:none}.nf-wl-t{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px;padding-bottom:5px;border-bottom:1px solid var(--nf-border);color:var(--nf-text-dim)}.nf-wl-s{margin-bottom:8px}.nf-wl-s:last-child{margin-bottom:0}.nf-wl-i{display:flex;align-items:center;gap:8px;padding:1px 0}.nf-wl-sw{width:24px;height:2px;flex-shrink:0;border-radius:1px}.nf-wl-d{width:8px;height:8px;border-radius:50%;flex-shrink:0}.nf-rel-web-tip{position:fixed;z-index:10001;pointer-events:none;background:var(--nf-dialog-bg);border:1px solid var(--nf-border);border-radius:3px;padding:12px 16px;box-shadow:var(--nf-shadow-lg);max-width:300px;animation:nf-fadeIn .12s ease-out;font-size:12px;line-height:1.6;color:var(--nf-text)}`}</style>
+      <style>{`.nf-rel-web-node{cursor:grab}.nf-rel-web-node:active{cursor:grabbing}.nf-rel-web-line{transition:opacity .15s}.nf-rel-web-hit{cursor:pointer}.nf-wl{position:absolute;bottom:14px;right:14px;background:var(--nf-bg-raised);border:1px solid var(--nf-border);border-radius:2px;padding:12px 16px;box-shadow:var(--nf-shadow);z-index:10;font-size:10px;color:var(--nf-text-muted);line-height:1.8;user-select:none;max-height:60vh;overflow-y:auto}.nf-wl-t{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px;padding-bottom:5px;border-bottom:1px solid var(--nf-border);color:var(--nf-text-dim)}.nf-wl-s{margin-bottom:8px}.nf-wl-s:last-child{margin-bottom:0}.nf-wl-i{display:flex;align-items:center;gap:8px;padding:1px 0}.nf-wl-sw{width:24px;height:2px;flex-shrink:0;border-radius:1px}.nf-wl-d{width:8px;height:8px;border-radius:50%;flex-shrink:0}.nf-rel-web-tip{position:fixed;z-index:10001;pointer-events:none;background:var(--nf-dialog-bg);border:1px solid var(--nf-border);border-radius:3px;padding:12px 16px;box-shadow:var(--nf-shadow-lg);max-width:300px;animation:nf-fadeIn .12s ease-out;font-size:12px;line-height:1.6;color:var(--nf-text)}`}</style>
       <div onClick={e => e.stopPropagation()} style={{ background: "var(--nf-dialog-bg)", border: "1px solid var(--nf-dialog-border)", borderRadius: 3, width: "95vw", maxWidth: 1100, height: "88vh", maxHeight: 800, display: "flex", flexDirection: "column", boxShadow: "var(--nf-shadow-lg)", overflow: "hidden", animation: "nf-pop 0.25s ease-out" }}>
         {/* Header */}
         <div style={{ padding: "14px 22px", borderBottom: "1px solid var(--nf-border)", display: "flex", justifyContent: "space-between", alignItems: "center", flexShrink: 0, background: "var(--nf-bg-raised)" }}>
           <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
             <span style={{ fontFamily: "var(--nf-font-display)", fontSize: 20, fontWeight: 400, color: "var(--nf-text)", letterSpacing: "0.01em" }}>Relationship Web</span>
-            <span style={{ fontSize: 11, color: "var(--nf-text-muted)", fontFamily: "var(--nf-font-mono)" }}>{chars.length} characters · {rels.length} connections</span>
+            <span style={{ fontSize: 11, color: "var(--nf-text-muted)", fontFamily: "var(--nf-font-mono)" }}>{chars.length} characters · {filteredRels.length} connections{locationZones.length > 0 ? ` · ${locationZones.length} locations` : ""}</span>
           </div>
           <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+            <button onClick={() => setShowLocations(p => !p)} className="nf-btn-micro" style={{
+              borderColor: showLocations ? "var(--nf-accent-2)" : "var(--nf-border)",
+              color: showLocations ? "var(--nf-accent-2)" : "var(--nf-text-muted)",
+              background: showLocations ? "var(--nf-accent-glow-2)" : "transparent",
+            }}>
+              📍 {showLocations ? "Locations" : "Locations"}
+            </button>
+            <button onClick={() => setShowOrgs(p => !p)} className="nf-btn-micro" style={{
+              borderColor: showOrgs ? "rgba(160,140,200,0.5)" : "var(--nf-border)",
+              color: showOrgs ? "rgba(160,140,200,0.9)" : "var(--nf-text-muted)",
+              background: showOrgs ? "rgba(160,140,200,0.08)" : "transparent",
+            }}>
+              ⛨ {showOrgs ? "Hierarchy" : "Hierarchy"}
+            </button>
             <button onClick={resetView} className="nf-btn-micro">↻ Layout</button>
             <button onClick={onClose} className="nf-btn-icon" aria-label="Close"><Icons.X /></button>
           </div>
         </div>
-        {/* Stats bar */}
-        <div style={{ padding: "6px 22px", borderBottom: "1px solid var(--nf-border)", background: "var(--nf-bg-raised)", display: "flex", gap: 12, alignItems: "center", fontSize: 10, color: "var(--nf-text-muted)", flexShrink: 0, flexWrap: "wrap" }}>
-          {Object.entries(TC).map(([k, c]) => (<span key={k} style={{ display: "flex", alignItems: "center", gap: 4 }}><span style={{ width: 6, height: 6, borderRadius: "50%", background: c }} />{k}</span>))}
-          <span style={{ margin: "0 2px", opacity: 0.3 }}>|</span>
-          <span style={{ display: "flex", alignItems: "center", gap: 4 }}><span style={{ width: 20, height: 0, borderTop: "2px solid var(--nf-text-muted)", display: "inline-block" }} /> committed</span>
-          <span style={{ display: "flex", alignItems: "center", gap: 4 }}><span style={{ width: 20, height: 0, borderTop: "2px dashed var(--nf-text-muted)", display: "inline-block" }} /> developing</span>
-          <span style={{ display: "flex", alignItems: "center", gap: 4 }}><span style={{ width: 20, height: 0, borderTop: "2px dotted var(--nf-text-muted)", display: "inline-block" }} /> strangers</span>
+        {/* Filter bar */}
+        <div style={{ padding: "6px 22px", borderBottom: "1px solid var(--nf-border)", background: "var(--nf-bg-raised)", display: "flex", gap: 6, alignItems: "center", fontSize: 10, color: "var(--nf-text-muted)", flexShrink: 0, flexWrap: "wrap" }}>
+          <span style={{ fontSize: 9, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", marginRight: 4 }}>Filter:</span>
+          {["all","romantic","family","friendship","professional","mentor","rivalry"].map(cat => (
+            <button key={cat} onClick={() => setFilterCategory(cat)} style={{
+              padding: "2px 8px", borderRadius: 3, fontSize: 9, border: "1px solid", cursor: "pointer",
+              background: filterCategory === cat ? "var(--nf-accent-glow)" : "transparent",
+              borderColor: filterCategory === cat ? "var(--nf-accent)" : "var(--nf-border)",
+              color: filterCategory === cat ? "var(--nf-accent)" : "var(--nf-text-muted)",
+              fontWeight: filterCategory === cat ? 700 : 400,
+            }}>
+              {cat}{catCounts[cat] ? ` (${catCounts[cat]})` : ""}
+            </button>
+          ))}
           <span style={{ marginLeft: "auto", opacity: 0.6, fontSize: 9 }}>Scroll to zoom · Drag canvas to pan · Drag nodes to reposition</span>
         </div>
         {/* Canvas */}
-        <div style={{ flex: 1, background: "var(--nf-bg-deep)", cursor: panning || dragging ? "grabbing" : "grab", overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center", position: "relative" }}>
+        <div style={{ flex: 1, background: "var(--nf-bg-deep)", cursor: panStateRef.current || dragRef.current ? "grabbing" : "grab", overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center", position: "relative" }}>
           <svg ref={svgRef} style={{ width: "100%", height: "100%", display: "block" }} viewBox={`0 0 ${CANVAS} ${CANVAS}`} onMouseDown={onCanvasDown} onMouseMove={onCanvasMove} onMouseUp={onCanvasUp} onMouseLeave={onCanvasUp} onWheel={onWheel}>
             <defs>
               <pattern id="nw-grid" width="32" height="32" patternUnits="userSpaceOnUse"><circle cx="16" cy="16" r="0.7" fill="rgba(180,140,100,0.06)" /></pattern>
             </defs>
-            <g transform={`translate(${pan.x},${pan.y}) scale(${zoom})`}>
+            <g transform={`translate(${panRef.current.x},${panRef.current.y}) scale(${zoomRef.current})`}>
               <rect width={CANVAS} height={CANVAS} fill="url(#nw-grid)" />
-              {/* Lines */}
-              {procRels.map(r => {
-                const n1 = nodes.find(n => n.id === r.char1); const n2 = nodes.find(n => n.id === r.char2);
-                if (!n1 || !n2) return null;
-                const c = tColor(r.tension); const isHov = hoveredRel === r.id; const isNodeHov = hoveredNode && (hoveredNode === r.char1 || hoveredNode === r.char2); const isSel = selectedNode && (selectedNode === r.char1 || selectedNode === r.char2);
-                const opa = isHov || isNodeHov || isSel ? 1 : 0.22; const sw = isHov ? 3 : isNodeHov || isSel ? 2.2 : 1.4;
-                const path = curvePath(n1.x, n1.y, n2.x, n2.y, r.curveIdx);
-                const mx = (n1.x + n2.x) / 2, my = (n1.y + n2.y) / 2;
-                const dist = Math.sqrt((n2.x - n1.x) ** 2 + (n2.y - n1.y) ** 2) || 1;
-                const curveOff = r.curveIdx > 0 ? dist * 0.12 * (r.curveIdx % 2 === 0 ? 1 : -1) * Math.ceil((r.curveIdx + 1) / 2) : 0;
-                const nx = -(n2.y - n1.y) / dist, ny = (n2.x - n1.x) / dist;
-                const labelX = r.curveIdx > 0 ? mx + nx * curveOff : mx;
-                const labelY = r.curveIdx > 0 ? my + ny * curveOff : my;
+              {/* ─── LOCATION ZONES (Venn-diagram style ellipses) ─── */}
+              {showLocations && locationZones.map(zone => (
+                <g key={`zone-${zone.id}`}>
+                  <ellipse
+                    cx={zone.cx} cy={zone.cy} rx={zone.rx} ry={zone.ry}
+                    fill={ZONE_COLORS[zone.colorIdx]}
+                    stroke={ZONE_BORDER_COLORS[zone.colorIdx]}
+                    strokeWidth="1.5"
+                    strokeDasharray="8 4"
+                    transform={zone.angle ? `rotate(${zone.angle},${zone.cx},${zone.cy})` : undefined}
+                    style={{ pointerEvents: "none" }}
+                  />
+                  {/* Location name label — positioned at top of ellipse */}
+                  <text
+                    x={zone.cx}
+                    y={zone.cy - zone.ry + 14}
+                    textAnchor="middle"
+                    dominantBaseline="central"
+                    fill={ZONE_BORDER_COLORS[zone.colorIdx].replace("0.25", "0.7")}
+                    fontSize="9"
+                    fontWeight="600"
+                    fontFamily="var(--nf-font-body)"
+                    style={{ letterSpacing: "0.08em", textTransform: "uppercase", pointerEvents: "none" }}
+                    transform={zone.angle ? `rotate(${zone.angle},${zone.cx},${zone.cy - zone.ry + 14})` : undefined}
+                  >
+                    📍 {zone.name}
+                  </text>
+                  {/* Member count at bottom */}
+                  <text
+                    x={zone.cx}
+                    y={zone.cy + zone.ry - 10}
+                    textAnchor="middle"
+                    dominantBaseline="central"
+                    fill={ZONE_BORDER_COLORS[zone.colorIdx].replace("0.25", "0.45")}
+                    fontSize="7"
+                    fontFamily="var(--nf-font-mono)"
+                    style={{ pointerEvents: "none" }}
+                    transform={zone.angle ? `rotate(${zone.angle},${zone.cx},${zone.cy + zone.ry - 10})` : undefined}
+                  >
+                    {zone.memberCount} character{zone.memberCount !== 1 ? "s" : ""}
+                  </text>
+                </g>
+              ))}
+              {/* Lines — simplified, fewer elements per edge */}
+              {/* ─── ORG HIERARCHY LINES (reporting chains) ─── */}
+              {showOrgs && orgLinks.map(link => {
+                const nSub = nodes.find(n => n.id === link.subordinateId);
+                const nSup = nodes.find(n => n.id === link.superiorId);
+                if (!nSub || !nSup) return null;
+                const isSel = selectedNode && (selectedNode === link.subordinateId || selectedNode === link.superiorId);
+                const opa = isSel ? 0.8 : 0.2;
+                // Stepped/angular path for org lines (looks like org chart connectors)
+                const midY = (nSup.y + nSub.y) / 2;
+                const path = `M${nSup.x},${nSup.y} L${nSup.x},${midY} L${nSub.x},${midY} L${nSub.x},${nSub.y}`;
                 return (
-                  <g key={r.id}>
-                    <path d={path} fill="none" stroke="transparent" strokeWidth="12" onMouseEnter={() => onRelEnter(r.id)} onMouseLeave={onRelLeave} style={{ cursor: "pointer" }} />
-                    <path d={path} fill="none" stroke={c} strokeWidth={sw} strokeDasharray={lDash(r.status)} strokeLinecap="round" className="nf-rel-web-line" style={{ opacity: opa }} />
-                    {opa > 0.5 && (<path d={path} fill="none" stroke={c} strokeWidth={sw + 1} strokeDasharray="4 18" strokeLinecap="round" opacity="0.25"><animate attributeName="stroke-dashoffset" from="22" to="0" dur="2s" repeatCount="indefinite" /></path>)}
-                    {r.dynamic && opa > 0.5 && (<text x={labelX} y={labelY - 6} textAnchor="middle" dominantBaseline="central" fill={c} fontSize="7" fontWeight="600" fontFamily="var(--nf-font-body)" style={{ letterSpacing: "0.03em" }}>{r.dynamic.split(/[.!?]/)[0]?.trim().slice(0, 35)}{(r.dynamic.split(/[.!?]/)[0]?.trim().length || 0) > 35 ? "…" : ""}</text>)}
-                    {r.tension && r.tension !== "none" && opa > 0.5 && (<><rect x={labelX + 4} y={labelY + 2} width={r.tension.length * 4.5 + 8} height="12" rx="6" fill={c} opacity="0.2" /><text x={labelX + 8} y={labelY + 9.5} fill={c} fontSize="6.5" fontWeight="700" fontFamily="var(--nf-font-mono)" style={{ letterSpacing: "0.04em" }}>{r.tension}</text></>)}
-                    {r.status && opa > 0.5 && (<text x={labelX} y={labelY + 18} textAnchor="middle" dominantBaseline="central" fill="var(--nf-text-muted)" fontSize="6" fontFamily="var(--nf-font-body)" opacity="0.7" style={{ letterSpacing: "0.06em", textTransform: "uppercase" }}>{r.status}</text>)}
+                  <g key={link.id}>
+                    <path d={path} fill="none" stroke="transparent" strokeWidth="10"
+                      onMouseEnter={() => setHoveredInfo({ type: 'org', data: link })}
+                      onMouseLeave={() => setHoveredInfo(prev => prev?.type === 'org' ? null : prev)}
+                      style={{ cursor: "pointer" }} />
+                    <path d={path} fill="none" stroke="rgba(160,140,200,0.5)" strokeWidth={isSel ? 2 : 1}
+                      strokeDasharray="4 3" strokeLinecap="round" style={{ opacity: opa, pointerEvents: "none" }} />
+                    {/* Arrow from superior to subordinate */}
+                    <circle cx={nSub.x} cy={nSub.y - N_R - 3} r="3" fill="rgba(160,140,200,0.5)" style={{ opacity: opa, pointerEvents: "none" }} />
+                    {/* Org label at midpoint */}
+                    {isSel && (
+                      <text x={(nSup.x + nSub.x) / 2} y={midY - 6} textAnchor="middle" fill="rgba(160,140,200,0.7)" fontSize="6.5" fontWeight="600" fontFamily="var(--nf-font-body)" style={{ letterSpacing: "0.04em", pointerEvents: "none" }}>
+                        {link.orgName}
+                      </text>
+                    )}
                   </g>
                 );
               })}
-              {/* Nodes */}
+              {procRels.map(r => {
+                const n1 = nodes.find(n => n.id === r.char1); const n2 = nodes.find(n => n.id === r.char2);
+                if (!n1 || !n2) return null;
+                const c = tColor(r.tension);
+                const isSel = selectedNode && (selectedNode === r.char1 || selectedNode === r.char2);
+                const opa = isSel ? 1 : 0.3;
+                const sw = isSel ? 2.5 : 1.4;
+                const path = curvePath(n1.x, n1.y, n2.x, n2.y, r.curveIdx);
+                return (
+                  <g key={r.id}>
+                    <path d={path} fill="none" stroke="transparent" strokeWidth="14"
+                      onMouseEnter={(e) => {
+                        const c1 = charMap[r.char1]; const c2 = charMap[r.char2];
+                        if (c1 && c2) setHoveredInfo({ type: 'rel', data: r, c1, c2 });
+                      }}
+                      onMouseLeave={() => setHoveredInfo(prev => prev?.type === 'rel' ? null : prev)}
+                      style={{ cursor: "pointer" }} />
+                    <path d={path} fill="none" stroke={c} strokeWidth={sw} strokeDasharray={lDash(r.status)} strokeLinecap="round" style={{ opacity: opa, pointerEvents: "none" }} />
+                    {isSel && r.dynamic && (<text x={(n1.x+n2.x)/2} y={(n1.y+n2.y)/2 - 6} textAnchor="middle" dominantBaseline="central" fill={c} fontSize="7" fontWeight="600" fontFamily="var(--nf-font-body)" style={{ letterSpacing: "0.03em", pointerEvents: "none" }}>{r.dynamic.split(/[.!?]/)[0]?.trim().slice(0, 35)}{(r.dynamic.split(/[.!?]/)[0]?.trim().length||0)>35?"…":""}</text>)}
+                    {isSel && r.category && r.category !== "romantic" && (<text x={(n1.x+n2.x)/2} y={(n1.y+n2.y)/2 + 12} textAnchor="middle" fill="var(--nf-text-muted)" fontSize="6" fontFamily="var(--nf-font-body)" style={{ textTransform: "uppercase", letterSpacing: "0.08em", pointerEvents: "none" }}>{r.category}</text>)}
+                  </g>
+                );
+              })}
+              {/* Nodes — reduced SVG elements per node */}
               {nodes.map(n => {
                 const ch = charMap[n.id]; if (!ch) return null;
-                const isPov = effectivePovChar === n.id; const isHov = hoveredNode === n.id; const isSel = selectedNode === n.id; const isHighlighted = isHov || isSel;
-                const cc = conns[n.id] || 0; const isDead = ch.status === "dead"; const isAbsent = ch.status === "absent";
+                const isPov = effectivePovChar === n.id;
+                const isSel = selectedNode === n.id;
+                const cc = conns[n.id] || 0;
+                const isDead = ch.status === "dead"; const isAbsent = ch.status === "absent";
                 return (
-                  <g key={n.id} className="nf-rel-web-node" onMouseDown={e => onNodeDown(n.id, e)} onMouseEnter={() => onNodeEnter(n.id)} onMouseLeave={onNodeLeave} style={{ cursor: dragging === n.id ? "grabbing" : "grab" }}>
-                    {isPov && (<><circle cx={n.x} cy={n.y} r={N_R + 14} fill="none" stroke="var(--nf-accent)" strokeWidth="0.5" opacity="0.12" strokeDasharray="3 5"><animateTransform attributeName="transform" type="rotate" from={`0 ${n.x} ${n.y}`} to={`360 ${n.x} ${n.y}`} dur="20s" repeatCount="indefinite" /></circle><circle cx={n.x} cy={n.y} r={N_R + 8} fill="none" stroke="var(--nf-accent)" strokeWidth="0.8" opacity="0.2" /></>)}
-                    {(isHighlighted || isPov) && (<circle cx={n.x} cy={n.y} r={N_R + 5} fill="none" stroke="var(--nf-accent)" strokeWidth={isHighlighted ? 1.5 : 0.8} opacity={isHighlighted ? 0.5 : 0.25} style={{ transition: "all 0.2s" }} />)}
+                  <g key={n.id} className="nf-rel-web-node" onMouseDown={e => onNodeDown(n.id, e)}
+                    onMouseEnter={() => setHoveredInfo({ type: 'node', id: n.id })}
+                    onMouseLeave={() => setHoveredInfo(prev => prev?.type === 'node' ? null : prev)}>
+                    {isPov && (<circle cx={n.x} cy={n.y} r={N_R + 8} fill="none" stroke="var(--nf-accent)" strokeWidth="0.8" opacity="0.2" />)}
+                    {isSel && (<circle cx={n.x} cy={n.y} r={N_R + 5} fill="none" stroke="var(--nf-accent)" strokeWidth={1.5} opacity={0.5} />)}
                     <circle cx={n.x} cy={n.y} r={N_R + 8} fill="transparent" />
-                    <circle cx={n.x} cy={n.y} r={N_R} fill={isPov ? "rgba(196,101,58,0.08)" : "rgba(180,140,100,0.03)"} stroke={isHighlighted ? "var(--nf-accent)" : isPov ? "var(--nf-accent)" : "var(--nf-border)"} strokeWidth={isHighlighted || isPov ? 2 : 1.2} style={{ transition: "all 0.2s" }} />
+                    <circle cx={n.x} cy={n.y} r={N_R} fill={isPov ? "rgba(196,101,58,0.08)" : "rgba(180,140,100,0.03)"} stroke={isSel ? "var(--nf-accent)" : isPov ? "var(--nf-accent)" : "var(--nf-border)"} strokeWidth={isSel || isPov ? 2 : 1.2} />
                     {ch.image ? (<><clipPath id={`nc-${n.id}`}><circle cx={n.x} cy={n.y} r={N_R - 1.5} /></clipPath><image href={ch.image} x={n.x - N_R + 1.5} y={n.y - N_R + 1.5} width={(N_R - 1.5) * 2} height={(N_R - 1.5) * 2} clipPath={`url(#nc-${n.id})`} preserveAspectRatio="xMidYMid slice" /></>) : (<text x={n.x} y={n.y + 1} textAnchor="middle" dominantBaseline="central" fill="var(--nf-text-muted)" fontSize="18" fontWeight="300" fontFamily="var(--nf-font-display)" opacity="0.5">{(ch.name || "?")[0].toUpperCase()}</text>)}
                     {(isDead || isAbsent) && (<circle cx={n.x} cy={n.y} r={N_R - 1} fill="rgba(0,0,0,0.45)" />)}
-                    {isDead && (<text x={n.x} y={n.y + 1} textAnchor="middle" dominantBaseline="central" fill="#fff" fontSize="9" fontWeight="600" opacity="0.7" fontFamily="var(--nf-font-body)">†</text>)}
-                    {isAbsent && (<text x={n.x} y={n.y + 1} textAnchor="middle" dominantBaseline="central" fill="#fff" fontSize="8" fontWeight="600" opacity="0.6" fontFamily="var(--nf-font-body)">·</text>)}
-                    <text x={n.x} y={n.y + N_R + 14} textAnchor="middle" dominantBaseline="central" fill={isHighlighted ? "var(--nf-text)" : "var(--nf-text-dim)"} fontSize="10.5" fontWeight="600" fontFamily="var(--nf-font-body)" style={{ letterSpacing: "0.01em", transition: "fill 0.2s" }}>{ch.name || "Unnamed"}</text>
-                    <text x={n.x} y={n.y + N_R + 25} textAnchor="middle" dominantBaseline="central" fill={isPov ? "var(--nf-accent)" : "var(--nf-text-muted)"} fontSize="7.5" fontWeight={isPov ? "700" : "500"} fontFamily="var(--nf-font-body)" style={{ letterSpacing: "0.1em", textTransform: "uppercase" }}>{ch.role || "supporting"}</text>
-                    {isPov && (<text x={n.x} y={n.y + N_R + 35} textAnchor="middle" dominantBaseline="central" fill="var(--nf-accent)" fontSize="7" fontWeight="700" fontFamily="var(--nf-font-mono)" opacity="0.7" style={{ letterSpacing: "0.1em" }}>POV</text>)}
-                    {cc > 0 && (<><circle cx={n.x + N_R - 3} cy={n.y - N_R + 3} r="8" fill={isHighlighted ? "var(--nf-accent)" : "var(--nf-bg-surface)"} stroke="var(--nf-border)" strokeWidth="1" /><text x={n.x + N_R - 3} y={n.y - N_R + 4} textAnchor="middle" dominantBaseline="central" fill={isHighlighted ? "#fff" : "var(--nf-text-muted)"} fontSize="7.5" fontWeight="700" fontFamily="var(--nf-font-mono)">{cc}</text></>)}
-                    {isHighlighted && (<circle cx={n.x} cy={n.y} r={N_R - 1} fill="none" stroke="var(--nf-accent)" strokeWidth="1" strokeDasharray="3 3" opacity="0.6"><animateTransform attributeName="transform" type="rotate" from={`0 ${n.x} ${n.y}`} to={`360 ${n.x} ${n.y}`} dur="8s" repeatCount="indefinite" /></circle>)}
+                    {isDead && (<text x={n.x} y={n.y + 1} textAnchor="middle" dominantBaseline="central" fill="#fff" fontSize="9" fontWeight="600" opacity="0.7">†</text>)}
+                    <text x={n.x} y={n.y + N_R + 14} textAnchor="middle" fill={isSel ? "var(--nf-text)" : "var(--nf-text-dim)"} fontSize="10.5" fontWeight="600" fontFamily="var(--nf-font-body)">{ch.name || "Unnamed"}</text>
+                    <text x={n.x} y={n.y + N_R + 25} textAnchor="middle" fill={isPov ? "var(--nf-accent)" : "var(--nf-text-muted)"} fontSize="7.5" fontWeight={isPov ? "700" : "500"} fontFamily="var(--nf-font-body)" style={{ letterSpacing: "0.1em", textTransform: "uppercase" }}>{ch.role || "supporting"}</text>
+                    {isPov && (<text x={n.x} y={n.y + N_R + 35} textAnchor="middle" fill="var(--nf-accent)" fontSize="7" fontWeight="700" fontFamily="var(--nf-font-mono)" opacity="0.7">POV</text>)}
+                    {/* Org role badge */}
+                    {showOrgs && charOrgRoles[n.id] && charOrgRoles[n.id].length > 0 && (
+                      <text x={n.x} y={n.y + N_R + (isPov ? 44 : 35)} textAnchor="middle" fill="rgba(160,140,200,0.7)" fontSize="6.5" fontWeight="600" fontFamily="var(--nf-font-body)" style={{ letterSpacing: "0.05em", pointerEvents: "none" }}>
+                        ⛨ {charOrgRoles[n.id].map(r => r.role).join(", ")}
+                      </text>
+                    )}
+                    {cc > 0 && (<><circle cx={n.x + N_R - 3} cy={n.y - N_R + 3} r="8" fill={isSel ? "var(--nf-accent)" : "var(--nf-bg-surface)"} stroke="var(--nf-border)" strokeWidth="1" /><text x={n.x + N_R - 3} y={n.y - N_R + 4} textAnchor="middle" dominantBaseline="central" fill={isSel ? "#fff" : "var(--nf-text-muted)"} fontSize="7.5" fontWeight="700" fontFamily="var(--nf-font-mono)">{cc}</text></>)}
                   </g>
                 );
               })}
@@ -3130,21 +3810,49 @@ const RelationshipWebModal = memo(({ characters, relationships, onClose, povChar
           <div className="nf-wl">
             <div className="nf-wl-t">Legend</div>
             <div className="nf-wl-s">{Object.entries(TC).map(([k, c]) => (<div key={k} className="nf-wl-i"><div className="nf-wl-sw" style={{ background: c }} /><span style={{ textTransform: "capitalize" }}>{k}</span></div>))}</div>
-                          <div className="nf-wl-s" style={{ borderTop: "1px solid var(--nf-border)", paddingTop: 6 }}>{[{label: "Committed", dash: ""},{label: "Dating", dash: "14 6"},{label: "Developing", dash: "6 6"},{label: "Strangers", dash: "2 8"},{label: "Enemies", dash: "8 3"}].map(s => <div key={s.label} className="nf-wl-i"><svg width="24" height="4" className="nf-wl-sw"><line x1="0" y1="2" x2="24" y2="2" stroke="var(--nf-text-muted)" strokeWidth="2" strokeDasharray={s.dash} /></svg><span>{s.label}</span></div>)}</div>
+            <div className="nf-wl-s" style={{ borderTop: "1px solid var(--nf-border)", paddingTop: 6 }}>{[{label: "Committed", dash: ""},{label: "Dating", dash: "14 6"},{label: "Developing", dash: "6 6"},{label: "Strangers", dash: "2 8"},{label: "Enemies", dash: "8 3"}].map(s => <div key={s.label} className="nf-wl-i"><svg width="24" height="4" className="nf-wl-sw"><line x1="0" y1="2" x2="24" y2="2" stroke="var(--nf-text-muted)" strokeWidth="2" strokeDasharray={s.dash} /></svg><span>{s.label}</span></div>)}</div>
             <div className="nf-wl-s" style={{ borderTop: "1px solid var(--nf-border)", paddingTop: 6 }}>
               <div className="nf-wl-i"><div className="nf-wl-d" style={{ background: "var(--nf-accent)", boxShadow: "0 0 6px var(--nf-accent)" }} /><span>POV / Protagonist</span></div>
               <div className="nf-wl-i"><div className="nf-wl-d" style={{ background: "var(--nf-border)" }} /><span>Character</span></div>
-              <div className="nf-wl-i"><div className="nf-wl-d" style={{ background: "#c43a3a" }} /><span>Deceased</span></div>
-              <div className="nf-wl-i"><div className="nf-wl-d" style={{ background: "var(--nf-text-muted)", opacity: 0.5 }} /><span>Absent</span></div>
             </div>
+            {/* Location zones in legend */}
+            {showLocations && locationZones.length > 0 && (
+              <div className="nf-wl-s" style={{ borderTop: "1px solid var(--nf-border)", paddingTop: 6 }}>
+                <div style={{ fontSize: 8, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--nf-text-dim)", marginBottom: 4 }}>Locations</div>
+                {locationZones.map(zone => (
+                  <div key={zone.id} className="nf-wl-i">
+                    <div style={{ width: 14, height: 10, borderRadius: "50%", flexShrink: 0, background: ZONE_COLORS[zone.colorIdx], border: `1px dashed ${ZONE_BORDER_COLORS[zone.colorIdx]}` }} />
+                    <span style={{ fontSize: 9 }}>📍 {zone.name} ({zone.memberCount})</span>
+                  </div>
+                ))}
+              </div>
+            )}
+            {/* Org hierarchy in legend */}
+            {showOrgs && orgLinks.length > 0 && (
+              <div className="nf-wl-s" style={{ borderTop: "1px solid var(--nf-border)", paddingTop: 6 }}>
+                <div style={{ fontSize: 8, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--nf-text-dim)", marginBottom: 4 }}>Hierarchy</div>
+                <div className="nf-wl-i">
+                  <svg width="24" height="12" className="nf-wl-sw"><path d="M2,2 L2,6 L22,6 L22,10" fill="none" stroke="rgba(160,140,200,0.6)" strokeWidth="1.5" strokeDasharray="4 3" /></svg>
+                  <span style={{ fontSize: 9 }}>Reports to</span>
+                </div>
+                {(() => {
+                  const orgNames = [...new Set(orgLinks.map(l => l.orgName))];
+                  return orgNames.map(name => (
+                    <div key={name} className="nf-wl-i">
+                      <span style={{ fontSize: 9, color: "rgba(160,140,200,0.7)" }}>⛨ {name} ({orgLinks.filter(l => l.orgName === name).length} links)</span>
+                    </div>
+                  ));
+                })()}
+              </div>
+            )}
           </div>
-          {/* Empty state */}
-          {chars.length === 0 && (<div style={{ position: "absolute", top: "50%", left: "50%", transform: "translate(-50%, -50%)", textAlign: "center" }}><div style={{ fontSize: 28, opacity: 0.12, marginBottom: 10 }}>✦</div><div style={{ color: "var(--nf-text-muted)", fontSize: 14, fontFamily: "var(--nf-font-display)", fontStyle: "italic" }}>Add characters to see their connections</div></div>)}
         </div>
-        {/* Relationship tooltip on hover */}
-        {hoveredRel && (() => { const r = procRels.find(x => x.id === hoveredRel); if (!r) return null; const c1 = charMap[r.char1]; const c2 = charMap[r.char2]; if (!c1 || !c2) return null; return (<div className="nf-rel-web-tip" style={{ bottom: 80, left: "50%", transform: "translateX(-50%)" }}><div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}><span style={{ fontWeight: 700, color: "var(--nf-text)", fontSize: 13 }}>{c1.name}</span><span style={{ color: tColor(r.tension), fontSize: 16 }}>↔</span><span style={{ fontWeight: 700, color: "var(--nf-text)", fontSize: 13 }}>{c2.name}</span></div>{r.dynamic && <div style={{ fontSize: 11, color: "var(--nf-text-dim)", lineHeight: 1.5, marginBottom: 6 }}>{r.dynamic}</div>}<div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>{r.status && <span style={{ fontSize: 9, padding: "1px 6px", background: "var(--nf-bg-surface)", border: "1px solid var(--nf-border)", borderRadius: 3, color: "var(--nf-text-muted)" }}>{r.status}</span>}{r.tension && r.tension !== "none" && <span style={{ fontSize: 9, padding: "1px 6px", background: "var(--nf-bg-surface)", border: `1px solid ${tColor(r.tension)}`, borderRadius: 3, color: tColor(r.tension), fontWeight: 700 }}>{r.tension}</span>}{r.tensionType && <span style={{ fontSize: 9, padding: "1px 6px", background: "var(--nf-bg-surface)", border: "1px solid var(--nf-border)", borderRadius: 3, color: "var(--nf-text-muted)" }}>{r.tensionType}</span>}</div>{r.char1Perspective && <div style={{ marginTop: 6, fontSize: 10, color: "var(--nf-text-muted)", fontStyle: "italic", lineHeight: 1.4 }}>{c1.name}'s view: {r.char1Perspective.slice(0, 100)}{r.char1Perspective.length > 100 ? "…" : ""}</div>}{r.char2Perspective && <div style={{ marginTop: 3, fontSize: 10, color: "var(--nf-text-muted)", fontStyle: "italic", lineHeight: 1.4 }}>{c2.name}'s view: {r.char2Perspective.slice(0, 100)}{r.char2Perspective.length > 100 ? "…" : ""}</div>}</div>); })()}
-        {/* Selected node detail panel */}
-        {selectedNode && (() => { const ch = charMap[selectedNode]; if (!ch) return null; const nodeRels = procRels.filter(r => r.char1 === selectedNode || r.char2 === selectedNode); return (<div className="nf-rel-web-tip" style={{ top: 80, left: 20, transform: "none", maxWidth: 280 }}><div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>{ch.image && <img src={ch.image} alt={ch.name} style={{ width: 28, height: 28, borderRadius: "50%", objectFit: "cover", border: "1px solid var(--nf-border)" }} />}<div><div style={{ fontWeight: 700, fontSize: 13, color: "var(--nf-text)" }}>{ch.name}</div><div style={{ fontSize: 9, color: "var(--nf-text-muted)", textTransform: "uppercase", letterSpacing: "0.1em" }}>{ch.role}</div></div></div>{ch.personality && <div style={{ fontSize: 11, color: "var(--nf-text-dim)", marginBottom: 6, lineHeight: 1.4 }}>{ch.personality.slice(0, 120)}{ch.personality.length > 120 ? "…" : ""}</div>}{nodeRels.length > 0 && (<div style={{ borderTop: "1px solid var(--nf-border)", paddingTop: 6 }}><div style={{ fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", color: "var(--nf-text-muted)", marginBottom: 4 }}>Connections ({nodeRels.length})</div>{nodeRels.map(r => { const otherId = r.char1 === selectedNode ? r.char2 : r.char1; const other = charMap[otherId]; return (<div key={r.id} style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 3, fontSize: 10.5 }}><span style={{ width: 8, height: 2, background: tColor(r.tension), borderRadius: 1, flexShrink: 0 }} /><span style={{ fontWeight: 600, color: "var(--nf-text-dim)" }}>{other?.name || "?"}</span>{r.status && <span style={{ fontSize: 8, color: "var(--nf-text-muted)", opacity: 0.7 }}>{r.status}</span>}{r.tension && r.tension !== "none" && <span style={{ fontSize: 8, color: tColor(r.tension), fontWeight: 700 }}>{r.tension}</span>}</div>); })}</div>)}<div style={{ fontSize: 9, color: "var(--nf-text-muted)", opacity: 0.5, marginTop: 6, fontStyle: "italic" }}>Click again to deselect</div></div>); })()}
+        {/* Hover tooltip */}
+        {hoveredInfo?.type === 'rel' && (() => { const {data: r, c1, c2} = hoveredInfo; return (<div className="nf-rel-web-tip" style={{ bottom: 80, left: "50%", transform: "translateX(-50%)" }}><div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}><span style={{ fontWeight: 700, color: "var(--nf-text)", fontSize: 13 }}>{c1.name}</span><span style={{ color: tColor(r.tension), fontSize: 16 }}>↔</span><span style={{ fontWeight: 700, color: "var(--nf-text)", fontSize: 13 }}>{c2.name}</span></div>{r.dynamic && <div style={{ fontSize: 11, color: "var(--nf-text-dim)", lineHeight: 1.5, marginBottom: 6 }}>{r.dynamic}</div>}<div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>{r.status && <span style={{ fontSize: 9, padding: "1px 6px", background: "var(--nf-bg-surface)", border: "1px solid var(--nf-border)", borderRadius: 3, color: "var(--nf-text-muted)" }}>{r.status}</span>}{r.tension && r.tension !== "none" && <span style={{ fontSize: 9, padding: "1px 6px", background: "var(--nf-bg-surface)", border: `1px solid ${tColor(r.tension)}`, borderRadius: 3, color: tColor(r.tension), fontWeight: 700 }}>{r.tension}</span>}{r.category && <span style={{ fontSize: 9, padding: "1px 6px", background: "var(--nf-bg-surface)", border: "1px solid var(--nf-border)", borderRadius: 3, color: "var(--nf-text-muted)" }}>{r.category}</span>}</div>{r.sharedSecrets && <div style={{ marginTop: 6, fontSize: 10, color: "var(--nf-accent)", lineHeight: 1.4 }}>🤫 Shared secret: {r.sharedSecrets.slice(0, 80)}…</div>}</div>); })()}
+        {/* Org hierarchy tooltip */}
+        {hoveredInfo?.type === 'org' && (() => { const link = hoveredInfo.data; const sup = charMap[link.superiorId]; const sub = charMap[link.subordinateId]; if (!sup || !sub) return null; return (<div className="nf-rel-web-tip" style={{ bottom: 80, left: "50%", transform: "translateX(-50%)" }}><div style={{ fontSize: 10, color: "rgba(160,140,200,0.7)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 6 }}>⛨ {link.orgName}</div><div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}><span style={{ fontWeight: 700, color: "var(--nf-text)", fontSize: 13 }}>{sup.name}</span><span style={{ fontSize: 10, color: "rgba(160,140,200,0.7)" }}>{link.superiorRole}</span></div><div style={{ fontSize: 10, color: "rgba(160,140,200,0.5)", textAlign: "center", margin: "2px 0" }}>▼ reports to</div><div style={{ display: "flex", alignItems: "center", gap: 8 }}><span style={{ fontWeight: 700, color: "var(--nf-text)", fontSize: 13 }}>{sub.name}</span><span style={{ fontSize: 10, color: "rgba(160,140,200,0.7)" }}>{link.subordinateRole}</span></div></div>); })()}
+        {/* Selected node panel */}
+        {selectedNode && (() => { const ch = charMap[selectedNode]; if (!ch) return null; const nodeRels = procRels.filter(r => r.char1 === selectedNode || r.char2 === selectedNode); const nodeLocs = charLocations[selectedNode] || []; const nodeOrgRoles = charOrgRoles[selectedNode] || []; const nodeOrgLinks = orgLinks.filter(l => l.subordinateId === selectedNode || l.superiorId === selectedNode); return (<div className="nf-rel-web-tip" style={{ top: 80, left: 20, transform: "none", maxWidth: 280, pointerEvents: "auto" }}><div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>{ch.image && <img src={ch.image} alt={ch.name} style={{ width: 28, height: 28, borderRadius: "50%", objectFit: "cover", border: "1px solid var(--nf-border)" }} />}<div><div style={{ fontWeight: 700, fontSize: 13, color: "var(--nf-text)" }}>{ch.name}</div><div style={{ fontSize: 9, color: "var(--nf-text-muted)", textTransform: "uppercase", letterSpacing: "0.1em" }}>{ch.role}{ch.occupation ? ` · ${ch.occupation}` : ""}</div></div></div>{ch.personality && <div style={{ fontSize: 11, color: "var(--nf-text-dim)", marginBottom: 6, lineHeight: 1.4 }}>{ch.personality.slice(0, 120)}{ch.personality.length > 120 ? "…" : ""}</div>}{nodeLocs.length > 0 && <div style={{ fontSize: 10, color: "var(--nf-accent-2)", marginBottom: 4 }}>📍 {nodeLocs.join(", ")}</div>}{nodeOrgRoles.length > 0 && <div style={{ fontSize: 10, color: "rgba(160,140,200,0.8)", marginBottom: 4 }}>⛨ {nodeOrgRoles.map(r => `${r.role} (${r.org})`).join(", ")}</div>}{ch.allegiances && <div style={{ fontSize: 10, color: "var(--nf-accent-2)", marginBottom: 4 }}>⚔ {ch.allegiances}</div>}{nodeOrgLinks.length > 0 && (<div style={{ borderTop: "1px solid var(--nf-border)", paddingTop: 6, marginBottom: 4 }}><div style={{ fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", color: "rgba(160,140,200,0.6)", marginBottom: 4 }}>Org Chain</div>{nodeOrgLinks.map(l => { const isSuper = l.superiorId === selectedNode; const otherId = isSuper ? l.subordinateId : l.superiorId; const other = charMap[otherId]; return (<div key={l.id} style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 3, fontSize: 10 }}><span style={{ color: "rgba(160,140,200,0.6)", fontSize: 8 }}>{isSuper ? "▼" : "▲"}</span><span style={{ fontWeight: 600, color: "var(--nf-text-dim)" }}>{other?.name || "?"}</span><span style={{ fontSize: 8, color: "rgba(160,140,200,0.5)" }}>{isSuper ? l.subordinateRole : l.superiorRole}</span><span style={{ fontSize: 8, color: "var(--nf-text-muted)", opacity: 0.5 }}>{l.orgName}</span></div>); })}</div>)}{nodeRels.length > 0 && (<div style={{ borderTop: "1px solid var(--nf-border)", paddingTop: 6 }}><div style={{ fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", color: "var(--nf-text-muted)", marginBottom: 4 }}>Connections ({nodeRels.length})</div>{nodeRels.map(r => { const otherId = r.char1 === selectedNode ? r.char2 : r.char1; const other = charMap[otherId]; return (<div key={r.id} style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 3, fontSize: 10.5 }}><span style={{ width: 8, height: 2, background: tColor(r.tension), borderRadius: 1, flexShrink: 0 }} /><span style={{ fontWeight: 600, color: "var(--nf-text-dim)" }}>{other?.name || "?"}</span><span style={{ fontSize: 8, color: "var(--nf-text-muted)", opacity: 0.7 }}>{r.category || "romantic"}</span>{r.tension && r.tension !== "none" && <span style={{ fontSize: 8, color: tColor(r.tension), fontWeight: 700 }}>{r.tension}</span>}</div>); })}</div>)}<div style={{ fontSize: 9, color: "var(--nf-text-muted)", opacity: 0.5, marginTop: 6, fontStyle: "italic" }}>Click again to deselect</div></div>); })()}
       </div>
     </div>
   );
@@ -4038,18 +4746,37 @@ ${desc}`;
 };
 
 // ─── FIELD COMPONENT ───
-const Field = memo(({ label, value, onChange, multiline, placeholder, small, type }) => (
-  <div className="nf-field">
-    {label && <label className="nf-label">{label}</label>}
-    {multiline ? (
-      <textarea value={value || ""} onChange={e => onChange(e.target.value)} placeholder={placeholder}
-        className={`nf-textarea ${small ? "nf-textarea-sm" : ""}`} />
-    ) : (
-      <input value={value || ""} onChange={e => onChange(e.target.value)} placeholder={placeholder}
-        type={type || "text"} className="nf-input" />
-    )}
-  </div>
-));
+const Field = memo(({ label, value, onChange, multiline, placeholder, small, type }) => {
+  const ref = useRef(null);
+  const lastPropValue = useRef(value || "");
+
+  // Only update DOM when prop value changes externally (not from our own onChange)
+  useEffect(() => {
+    const incoming = value || "";
+    if (incoming !== lastPropValue.current && ref.current && ref.current !== document.activeElement) {
+      ref.current.value = incoming;
+    }
+    lastPropValue.current = incoming;
+  }, [value]);
+
+  const handleChange = useCallback((e) => {
+    lastPropValue.current = e.target.value;
+    onChange(e.target.value);
+  }, [onChange]);
+
+  return (
+    <div className="nf-field">
+      {label && <label className="nf-label">{label}</label>}
+      {multiline ? (
+        <textarea ref={ref} defaultValue={value || ""} onChange={handleChange} placeholder={placeholder}
+          className={`nf-textarea ${small ? "nf-textarea-sm" : ""}`} />
+      ) : (
+        <input ref={ref} defaultValue={value || ""} onChange={handleChange} placeholder={placeholder}
+          type={type || "text"} className="nf-input" />
+      )}
+    </div>
+  );
+});
 
 // Debounced field — keeps local state while typing, only pushes to parent on blur or after 400ms idle
 // Prevents re-rendering entire parent component tree on every keystroke
@@ -4058,21 +4785,34 @@ const DebouncedField = memo(({ label, value, onChange, multiline, placeholder, s
   const timerRef = useRef(null);
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
+  const isFlushing = useRef(false); // tracks whether WE caused the parent update
+  const lastFlushed = useRef(value || ""); // last value we pushed to parent
 
-  // Sync from parent when value changes externally
-  useEffect(() => { setLocal(value || ""); }, [value]);
-
-  const flush = useCallback(() => {
-    clearTimeout(timerRef.current);
-    onChangeRef.current(local);
-  }, [local]);
+  // Sync from parent ONLY when value changed externally (not from our own flush)
+  useEffect(() => {
+    const incoming = value || "";
+    // If this is the value we just flushed, skip — we already have it locally
+    if (incoming === lastFlushed.current) return;
+    // External change (e.g. AI autofill, undo, import) — sync local to match
+    setLocal(incoming);
+    lastFlushed.current = incoming;
+  }, [value]);
 
   const handleChange = useCallback((e) => {
     const v = e.target.value;
     setLocal(v);
     clearTimeout(timerRef.current);
-    timerRef.current = setTimeout(() => onChangeRef.current(v), 400);
+    timerRef.current = setTimeout(() => {
+      lastFlushed.current = v;
+      onChangeRef.current(v);
+    }, 400);
   }, []);
+
+  const flush = useCallback(() => {
+    clearTimeout(timerRef.current);
+    lastFlushed.current = local;
+    onChangeRef.current(local);
+  }, [local]);
 
   useEffect(() => () => clearTimeout(timerRef.current), []);
 
@@ -4363,10 +5103,10 @@ RULES:
 \`\`\`json
 { "type": "${tabName}", "data": { ... } }
 \`\`\`
-- For CHARACTER: name, role, gender, age, pronouns, aliases, appearance, personality, backstory, backstoryRevealChapter, desires, speechPattern, relationships, kinks, arc, canonNotes, firstAppearanceChapter, status
-- For WORLD: name, category, description, keywords, introducedInChapter
-- For PLOT: chapter, title, summary, beats, sceneType, pov, characters
-- For RELATIONSHIP: char1, char2, dynamic, status, tension, tensionType, char1Perspective, char2Perspective, progression, evolutionTimeline, meetsInChapter, notes
+- For CHARACTER: name, role, gender, age, pronouns, aliases, occupation, title, height, build, tags, appearance, personality, backstory, backstoryRevealChapter, desires, shortTermGoals, longTermGoals, speechPattern, voiceSamples, habits, fears, flaws, strengths, skills, internalConflict, externalConflict, signatureItems, secrets, hiddenSecrets, secretRevealChapter, allegiances, kinks, arc, canonNotes, firstAppearanceChapter, status
+- For WORLD: name, category, description, keywords, introducedInChapter, atmosphere, sensoryDetails, subLocations, dangers, rules, population, history, culturalNorms, resources, orgPurpose (for Organization type), frequentCharacters (array of character names)
+- For PLOT: chapter, title, summary, beats, sceneType, pov, characters, locations (array of location names from world entries)
+- For RELATIONSHIP: char1, char2, category (romantic/family/friendship/professional/mentor/rivalry), dynamic, status, tension, tensionType, powerDynamic (equal/char1-dominant/char2-dominant/shifting), trustLevel (none/low/medium/high/absolute), chemistry, conflictSource, sharedSecrets, keyScenes, terms, taboos, isPublic, char1Perspective, char2Perspective, progression, evolutionTimeline, meetsInChapter, notes
 - Be creative, specific, genre-aware.
 - When filling in empty fields, ONLY fill fields listed as [Empty]. Do NOT overwrite existing content.
 - Make sure suggestions are consistent with existing characters and world.
@@ -4460,23 +5200,29 @@ RULES:
     switch (tabName) {
       case "characters": {
         const actions = [
-          { label: "✦ Generate character", msg: "Generate a compelling character for my story considering genre, themes, and existing cast. Include all fields." },
+          { label: "✦ Generate character", msg: "Generate a compelling character for my story considering genre, themes, and existing cast. Include ALL fields: name, role, gender, age, pronouns, occupation, height, build, tags, appearance, personality, backstory, desires, shortTermGoals, longTermGoals, speechPattern, voiceSamples, habits, fears, flaws, strengths, skills, internalConflict, externalConflict, signatureItems, secrets, allegiances, arc, canonNotes." },
         ];
         // D18: Contextual fill — reference which fields are actually empty
         if (editingEntityId && project?.characters) {
           const char = project.characters.find(c => c.id === editingEntityId);
           if (char) {
-            const emptyFields = ["appearance","personality","backstory","desires","speechPattern","arc","canonNotes"].filter(k => !char[k]);
+            const emptyFields = ["appearance","personality","backstory","desires","shortTermGoals","longTermGoals","speechPattern","voiceSamples","habits","fears","flaws","strengths","skills","internalConflict","externalConflict","signatureItems","secrets","allegiances","arc","canonNotes","occupation","tags"].filter(k => !char[k]);
             if (emptyFields.length > 0) {
-              actions.push({ label: `Fill ${emptyFields.length} empty fields`, msg: `Fill in these specific empty fields for "${char.name || "this character"}": ${emptyFields.join(", ")}. Base suggestions on existing details. Return structured JSON.` });
+              actions.push({ label: `Fill ${emptyFields.length} empty fields`, msg: `Fill in these specific empty fields for "${char.name || "this character"}": ${emptyFields.join(", ")}. Base suggestions on existing details and genre. Return structured JSON.` });
+            }
+            // Psychology quick action
+            const psychFields = ["fears","flaws","strengths","internalConflict","externalConflict"].filter(k => !char[k]);
+            if (psychFields.length > 0) {
+              actions.push({ label: "Build psychology", msg: `Develop the psychology of "${char.name || "this character"}": generate fears, flaws, strengths, internal conflict, and external conflict based on their existing personality and backstory. Return structured JSON.` });
             }
           }
         }
         return actions;
       }
       case "world": return [
-        { label: "✦ Generate entry", msg: "Generate an enriching world-building entry that fits the genre and existing world. Include name, category, description, and keywords." },
-        { label: "Expand world", msg: `Suggest 3 new entries that would deepen my world${project?.worldBuilding?.length ? ` (I already have ${project.worldBuilding.length} entries)` : ""}. Explain why each matters for the story.` },
+        { label: "✦ Generate entry", msg: "Generate an enriching world-building entry that fits the genre and existing world. Include name, category, description, keywords, atmosphere, sensoryDetails, dangers, rules, history, culturalNorms, and resources. If it's a Location, also include subLocations and population." },
+        { label: "Expand world", msg: `Suggest 3 new entries that would deepen my world${project?.worldBuilding?.length ? ` (I already have ${project.worldBuilding.length} entries)` : ""}. For each, include all relevant fields. Explain why each matters for the story.` },
+        { label: "Build organization", msg: "Generate a detailed Organization entry with name, category (Organization), description, orgPurpose, and an orgHierarchy with 3-5 positions including titles, roles, and which existing characters could fill them. Return structured JSON." },
       ];
       case "plot": {
         // FIX 3.7: Use max chapter number from existing outline, not count
@@ -4488,9 +5234,10 @@ RULES:
         ];
       }
       case "relationships": return [
-        { label: "✦ Generate dynamic", msg: "Generate a compelling relationship dynamic between two of my characters. Include all fields including perspectives, progression arc, and evolution timeline." },
-        { label: "Deepen tension", msg: "Looking at the existing relationships listed above, suggest specific scenes and turning points to deepen the tension. Be specific about which relationship and what should happen in which chapter." },
-        { label: "Evolution timeline", msg: "For the most prominent relationship above, generate a detailed chapter-by-chapter evolution timeline showing how the dynamic shifts." },
+        { label: "✦ Generate dynamic", msg: "Generate a compelling relationship dynamic between two of my characters. Include ALL fields: char1, char2, category, dynamic, status, tension, tensionType, powerDynamic, trustLevel, chemistry, conflictSource, sharedSecrets, keyScenes, terms, taboos, char1Perspective, char2Perspective, progression, evolutionTimeline, meetsInChapter. Return structured JSON." },
+        { label: "Deepen tension", msg: "Looking at the existing relationships listed above, suggest specific scenes and turning points to deepen the tension. Include keyScenes, conflictSource, and sharedSecrets for each. Be specific about which relationship and what should happen in which chapter." },
+        { label: "Map power dynamics", msg: "Analyze all existing relationships above and suggest powerDynamic, trustLevel, chemistry, and conflictSource for each one. Return as an array of relationship updates in structured JSON." },
+        { label: "Evolution timeline", msg: "For the most prominent relationship above, generate a detailed chapter-by-chapter evolution timeline and keyScenes showing how the dynamic, trust, and power shift over time." },
       ];
       default: return [];
     }
@@ -6773,11 +7520,17 @@ Be specific with character names. Write as a factual reference, not a story reca
               `Name: ${c.name} (${c.role})`,
               `Personality: ${c.personality || "(empty)"}`,
               `Desires: ${c.desires || "(empty)"}`,
+              `Short-term Goals: ${c.shortTermGoals || "(empty)"}`,
+              `Long-term Goals: ${c.longTermGoals || "(empty)"}`,
               `Arc: ${c.arc || "(empty)"}`,
               `Status: ${c.status || "alive"}`,
               `Canon Notes: ${c.canonNotes || "(empty)"}`,
               `Backstory: ${c.backstory || "(empty)"}`,
               `Speech Pattern: ${c.speechPattern || "(empty)"}`,
+              `Internal Conflict: ${c.internalConflict || "(empty)"}`,
+              `External Conflict: ${c.externalConflict || "(empty)"}`,
+              `Allegiances: ${c.allegiances || "(empty)"}`,
+              `Secrets: ${c.secrets || "(empty)"}`,
             ];
             return `--- ${c.name} ---\n${fields.join("\n")}`;
           }).join("\n\n");
@@ -6811,7 +7564,7 @@ For each character who changed, output:
 ] }
 \`\`\`
 
-Fields you can suggest: desires, arc, status, statusChangedChapter, canonNotes, backstory, speechPattern.
+Fields you can suggest: desires, shortTermGoals, longTermGoals, arc, status, statusChangedChapter, canonNotes, backstory, speechPattern, internalConflict, externalConflict, allegiances, secrets.
 If no updates are needed, respond "No character updates needed."` },
             { role: "user", content: `Chapter ${chNum}${chapterDate ? ` (${chapterDate})` : ""} summary: ${summary}\n\nCurrent character profiles:\n${charContext}\n\nChapter number: ${chNum}${chapterDate ? `\nStory date: ${chapterDate}` : ""}` },
           ], { maxTokens: 10000, temperature: 0.4 });
@@ -8057,11 +8810,26 @@ CRITICAL: Every sentence must describe something visible. If a detail cannot be 
     // Support batch: if array, add all entries at once
     const items = Array.isArray(data) ? data : [data];
     const currentWorld = project?.worldBuilding || [];
+    const allChars = project?.characters || [];
     let newWorld = [...currentWorld];
     let added = 0, updated = 0;
 
+    // Helper: resolve character names to IDs for frequentCharacters
+    const resolveCharNames = (raw) => {
+      if (!raw) return [];
+      const names = Array.isArray(raw) ? raw : String(raw).split(",").map(s => s.trim()).filter(Boolean);
+      return names.map(name => {
+        const match = allChars.find(c => c.name && c.name.toLowerCase() === String(name).toLowerCase());
+        return match ? match.id : null;
+      }).filter(Boolean);
+    };
+
     for (const raw of items) {
-      const norm = Object.fromEntries(Object.entries(raw).map(([k, v]) => [k, Array.isArray(v) ? v.join(", ") : v]));
+      const norm = Object.fromEntries(Object.entries(raw).map(([k, v]) => {
+        // Keep arrays as arrays for frequentCharacters, orgMembers, connectedTo, orgHierarchy
+        if (["frequentCharacters","orgMembers","connectedTo","orgHierarchy"].includes(k)) return [k, v];
+        return [k, Array.isArray(v) ? v.join(", ") : v];
+      }));
       const existing = newWorld.find(w => w.name && norm.name && w.name.toLowerCase() === norm.name.toLowerCase());
       if (existing) {
         newWorld = newWorld.map(w => w.id === existing.id ? {
@@ -8070,6 +8838,17 @@ CRITICAL: Every sentence must describe something visible. If a detail cannot be 
           description: norm.description || w.description,
           keywords: norm.keywords || w.keywords,
           introducedInChapter: norm.introducedInChapter || w.introducedInChapter,
+          atmosphere: norm.atmosphere || w.atmosphere || "",
+          sensoryDetails: norm.sensoryDetails || w.sensoryDetails || "",
+          subLocations: norm.subLocations || w.subLocations || "",
+          dangers: norm.dangers || w.dangers || "",
+          rules: norm.rules || w.rules || "",
+          history: norm.history || w.history || "",
+          culturalNorms: norm.culturalNorms || w.culturalNorms || "",
+          resources: norm.resources || w.resources || "",
+          population: norm.population || w.population || "",
+          orgPurpose: norm.orgPurpose || w.orgPurpose || "",
+          frequentCharacters: norm.frequentCharacters ? resolveCharNames(norm.frequentCharacters) : (w.frequentCharacters || []),
         } : w);
         updated++;
       } else {
@@ -8077,6 +8856,21 @@ CRITICAL: Every sentence must describe something visible. If a detail cannot be 
           id: uid(), name: norm.name || "", category: norm.category || "",
           description: norm.description || "", keywords: norm.keywords || "",
           introducedInChapter: norm.introducedInChapter || 0,
+          referenceImages: {}, imagePrompts: {},
+          atmosphere: norm.atmosphere || "",
+          sensoryDetails: norm.sensoryDetails || "",
+          subLocations: norm.subLocations || "",
+          dangers: norm.dangers || "",
+          rules: norm.rules || "",
+          history: norm.history || "",
+          culturalNorms: norm.culturalNorms || "",
+          resources: norm.resources || "",
+          population: norm.population || "",
+          orgPurpose: norm.orgPurpose || "",
+          frequentCharacters: norm.frequentCharacters ? resolveCharNames(norm.frequentCharacters) : [],
+          connectedTo: [],
+          orgHierarchy: Array.isArray(norm.orgHierarchy) ? norm.orgHierarchy : [],
+          orgMembers: [],
         });
         added++;
       }
@@ -8092,6 +8886,7 @@ CRITICAL: Every sentence must describe something visible. If a detail cannot be 
     const items = Array.isArray(data) ? data : [data];
     let currentOutline = [...(project?.plotOutline || [])];
     const allChars = project?.characters || [];
+    const allWorlds = project?.worldBuilding || [];
     let added = 0, updated = 0;
 
     // FIX: Helper to resolve AI-generated character names to IDs
@@ -8104,21 +8899,32 @@ CRITICAL: Every sentence must describe something visible. If a detail cannot be 
       }).filter(Boolean);
     };
 
+    // Helper to resolve location names to IDs
+    const resolveLocList = (raw) => {
+      if (!raw) return [];
+      const names = Array.isArray(raw) ? raw : String(raw).split(",").map(s => s.trim()).filter(Boolean);
+      return names.map(name => {
+        const match = allWorlds.find(w => w.name && w.name.toLowerCase() === String(name).toLowerCase());
+        return match ? match.id : null;
+      }).filter(Boolean);
+    };
+
     for (const raw of items) {
-      const norm = Object.fromEntries(Object.entries(raw).map(([k, v]) => [k, k === "characters" ? v : (Array.isArray(v) ? v.join("\n") : v)]));
+      const norm = Object.fromEntries(Object.entries(raw).map(([k, v]) => [k, (k === "characters" || k === "locations") ? v : (Array.isArray(v) ? v.join("\n") : v)]));
       const chNum = norm.chapter || currentOutline.length + 1;
       const charIds = resolveCharList(norm.characters);
+      const locIds = resolveLocList(norm.locations);
       const existingIdx = currentOutline.findIndex(pl => (pl.chapter || 0) === chNum);
       if (existingIdx >= 0) {
         currentOutline = currentOutline.map((pl, i) => {
           if (i !== existingIdx) return pl;
-          // FIX: Include characters in merge
           const mergedChars = charIds.length > 0 ? charIds : pl.characters;
-          return { ...pl, title: norm.title || pl.title, summary: norm.summary || pl.summary, beats: norm.beats || pl.beats, sceneType: norm.sceneType || pl.sceneType, pov: norm.pov || pl.pov, characters: mergedChars };
+          const mergedLocs = locIds.length > 0 ? locIds : (pl.locations || []);
+          return { ...pl, title: norm.title || pl.title, summary: norm.summary || pl.summary, beats: norm.beats || pl.beats, sceneType: norm.sceneType || pl.sceneType, pov: norm.pov || pl.pov, characters: mergedChars, locations: mergedLocs };
         });
         updated++;
       } else {
-        currentOutline.push({ id: uid(), chapter: chNum, title: norm.title || "", summary: norm.summary || "", beats: norm.beats || "", sceneType: norm.sceneType || "narrative", pov: norm.pov || "", characters: charIds });
+        currentOutline.push({ id: uid(), chapter: chNum, title: norm.title || "", summary: norm.summary || "", beats: norm.beats || "", sceneType: norm.sceneType || "narrative", pov: norm.pov || "", characters: charIds, locations: locIds });
         added++;
       }
     }
@@ -8159,6 +8965,17 @@ CRITICAL: Every sentence must describe something visible. If a detail cannot be 
         notes: norm.notes || "", char1Perspective: norm.char1Perspective || "",
         char2Perspective: norm.char2Perspective || "", progression: norm.progression || "",
         meetsInChapter: norm.meetsInChapter || 0, evolutionTimeline: norm.evolutionTimeline || "",
+        // NEW FIELDS
+        category: norm.category || "romantic",
+        powerDynamic: norm.powerDynamic || "equal",
+        sharedSecrets: norm.sharedSecrets || "",
+        keyScenes: norm.keyScenes || "",
+        chemistry: norm.chemistry || "",
+        conflictSource: norm.conflictSource || "",
+        trustLevel: norm.trustLevel || "medium",
+        isPublic: norm.isPublic !== false,
+        taboos: norm.taboos || "",
+        terms: norm.terms || "",
       });
       addedCount++;
     }
@@ -9922,9 +10739,72 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
         <div className="nf-content-scroll">
           {editingChar ? (<>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
-              <h2 className="nf-page-title" style={{ marginBottom: 0 }}>{editingChar.name || "New Character"}</h2>
-              {/* D3: Clean up relationships and plot refs when deleting character */}
-              <button onClick={() => setConfirmDialog({
+              <div>
+                <h2 className="nf-page-title" style={{ marginBottom: 0 }}>{editingChar.name || "New Character"}</h2>
+                {(() => {
+                  const checkFields = ["appearance","personality","backstory","desires","speechPattern","fears","flaws","strengths","skills","internalConflict","externalConflict","shortTermGoals","longTermGoals","habits","voiceSamples","signatureItems","secrets","arc"];
+                  const emptyCount = checkFields.filter(f => !editingChar[f]).length;
+                  return emptyCount > 0 ? (
+                    <div style={{ fontSize: 10, color: "var(--nf-accent-2)", marginTop: 2 }}>
+                      {emptyCount} empty field{emptyCount !== 1 ? "s" : ""} — use AI chat or click "Fill Empty Fields" to populate
+                    </div>
+                  ) : (
+                    <div style={{ fontSize: 10, color: "var(--nf-success)", marginTop: 2 }}>✓ All key fields populated</div>
+                  );
+                })()}
+              </div>
+              <div style={{ display: "flex", gap: 6 }}>
+                {settings.apiKey && editingChar.name && (
+                  <button onClick={() => {
+                    const fillMsg = `Fill in all empty fields for ${editingChar.name}. Keep it genre-appropriate (${project?.genre || "fiction"}), consistent with their existing personality and role. Be creative and specific. Make sure everything fits together as a coherent, compelling character.`;
+                    showToast("Sending to AI — check the chat panel for results", "info");
+                    // Inject as a user message and trigger the tab chat
+                    const chatMsgs = getTabMessages("characters");
+                    const userMsg = { id: uid(), role: "user", content: fillMsg };
+                    setTabMessages("characters")(prev => [...prev, userMsg]);
+                    // Build context and call API directly
+                    (async () => {
+                      try {
+                        const contextInfo = ContextEngine.buildTabContext(project, activeChapterIdx, "characters", editingCharId);
+                        const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+                          method: "POST",
+                          headers: { "Content-Type": "application/json", "Authorization": `Bearer ${settings.apiKey}`, "HTTP-Referer": window.location.origin, "X-Title": "NovelForge" },
+                          body: JSON.stringify({
+                            model: settings.model,
+                            messages: [
+                              { role: "system", content: `You are an expert fiction writing assistant. You are helping with characters — create, flesh out, or brainstorm character details.\n\n${contextInfo}\n\nRULES:\n- Be conversational and helpful.\n- Use **bold** and *italic* markdown.\n- When generating structured data, wrap in a JSON code block:\n\`\`\`json\n{ "type": "characters", "data": { ... } }\n\`\`\`\n- For CHARACTER: name, role, gender, age, pronouns, aliases, occupation, title, height, build, tags, appearance, personality, backstory, backstoryRevealChapter, desires, shortTermGoals, longTermGoals, speechPattern, voiceSamples, habits, fears, flaws, strengths, skills, internalConflict, externalConflict, signatureItems, secrets, hiddenSecrets, secretRevealChapter, allegiances, kinks, arc, canonNotes, firstAppearanceChapter, status\n- When filling in empty fields, ONLY fill fields listed as [Empty]. Do NOT overwrite existing content.\n- Be creative, specific, genre-aware.\n- Make sure suggestions are consistent with existing characters and world.` },
+                              { role: "user", content: fillMsg },
+                            ],
+                            max_tokens: 3000,
+                            temperature: 0.85,
+                          }),
+                        });
+                        const data = await res.json();
+                        const content = stripThinkingTokens(data.choices?.[0]?.message?.content || "");
+                        let hasAutoFill = false;
+                        try {
+                          const jsonBlocks = [...content.matchAll(/```json\s*([\s\S]*?)```/g)];
+                          for (const match of jsonBlocks) {
+                            try {
+                              const p = JSON.parse(match[1]);
+                              if (typeof p === "object" && p !== null) { hasAutoFill = true; break; }
+                            } catch {}
+                          }
+                        } catch {}
+                        setTabMessages("characters")(prev => [...prev, { id: uid(), role: "assistant", content, hasAutoFill }]);
+                        if (hasAutoFill) showToast("AI generated fill data — click Apply in the chat", "success");
+                        else showToast("AI responded — check the chat panel", "info");
+                      } catch (err) {
+                        setTabMessages("characters")(prev => [...prev, { id: uid(), role: "assistant", content: `Error: ${err.message}`, isError: true }]);
+                        showToast(`Fill failed: ${err.message}`, "error");
+                      }
+                    })();
+                  }} className="nf-btn" style={{ fontSize: 11 }}>
+                    <Icons.Wand /> Fill Empty Fields
+                  </button>
+                )}
+                {/* D3: Clean up relationships and plot refs when deleting character */}
+                <button onClick={() => setConfirmDialog({
                 message: `Delete "${editingChar.name || "this character"}"? This will also remove any relationships and plot references involving them.`,
                 onConfirm: () => {
                   const charId = editingCharId;
@@ -9945,6 +10825,7 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                   showToast(removedRels > 0 ? `Deleted character + ${removedRels} relationship(s)` : "Deleted", "success");
                 },
               })} className="nf-btn nf-btn-danger"><Icons.Trash /> Delete</button>
+              </div>
             </div>
 
             {/* Character Portrait — Polaroid style with AI generation and upload */}
@@ -10044,16 +10925,23 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                 <SelectField label="Gender" value={editingChar.gender} onChange={v => updateCharById(editingCharId, "gender", v)} options={GENDER_OPTIONS} placeholder="Select..." />
                 <SelectField label="Pronouns" value={editingChar.pronouns} onChange={v => updateCharById(editingCharId, "pronouns", v)} options={PRONOUN_OPTIONS} placeholder="Select..." />
               </div>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 12px" }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "0 12px" }}>
                 <Field label="Age" value={editingChar.age} onChange={v => updateCharById(editingCharId, "age", v)} placeholder="Age or age range" />
+                <DebouncedField label="Occupation / Title" value={editingChar.occupation || ""} onChange={v => updateCharById(editingCharId, "occupation", v)} placeholder="e.g. Healer, Detective, CEO" />
                 <Field label="First Appears (Chapter #)" value={editingChar.firstAppearanceChapter || ""} onChange={v => updateCharById(editingCharId, "firstAppearanceChapter", parseInt(v) || 0)} placeholder="0 = from start" type="number" />
               </div>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 12px" }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "0 12px" }}>
                 <SelectField label="Status" value={editingChar.status || "alive"} onChange={v => updateCharById(editingCharId, "status", v)} options={CHARACTER_STATUS_OPTIONS} />
                 {editingChar.status && editingChar.status !== "alive" && (
                   <Field label="Status Changed (Ch#)" value={editingChar.statusChangedChapter || ""} onChange={v => updateCharById(editingCharId, "statusChangedChapter", parseInt(v) || 0)} placeholder="Chapter #" type="number" />
                 )}
+                <Field label="Height" value={editingChar.height || ""} onChange={v => updateCharById(editingCharId, "height", v)} placeholder="e.g. 5'10, 178cm" />
               </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 12px" }}>
+                <SelectField label="Build" value={editingChar.build || ""} onChange={v => updateCharById(editingCharId, "build", v)} options={BUILD_OPTIONS} placeholder="Select..." />
+                <DebouncedField label="Allegiances / Factions" value={editingChar.allegiances || ""} onChange={v => updateCharById(editingCharId, "allegiances", v)} placeholder="e.g. Order of the Phoenix, Team Alpha" small />
+              </div>
+              <DebouncedField label="Tags / Traits" value={editingChar.tags || ""} onChange={v => updateCharById(editingCharId, "tags", v)} placeholder="Comma-separated: sarcastic, loyal, scarred, bookworm, insomniac" small />
             </div>
 
             {/* D4: Section — Character */}
@@ -10062,6 +10950,33 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
               <DebouncedField label="Appearance" value={editingChar.appearance} onChange={v => updateCharById(editingCharId, "appearance", v)} multiline placeholder="Physical description — height, build, coloring, distinguishing features..." />
               <DebouncedField label="Personality" value={editingChar.personality} onChange={v => updateCharById(editingCharId, "personality", v)} multiline placeholder="Core traits, temperament, quirks, contradictions..." />
               <DebouncedField label="Speech & Voice" value={editingChar.speechPattern} onChange={v => updateCharById(editingCharId, "speechPattern", v)} multiline placeholder="Vocabulary, accent, verbal tics, how they sound under stress..." small />
+              <DebouncedField label="Voice Samples (example quotes)" value={editingChar.voiceSamples || ""} onChange={v => updateCharById(editingCharId, "voiceSamples", v)} multiline placeholder={`"I don't trust anyone who smiles that much." / "You think darkness scares me? I was born in it."`} small />
+              <DebouncedField label="Habits & Mannerisms" value={editingChar.habits || ""} onChange={v => updateCharById(editingCharId, "habits", v)} multiline placeholder="Cracks knuckles when nervous, always carries a lighter, hums when cooking..." small />
+            </div>
+
+            {/* Section — Psychology & Conflict */}
+            <div className="nf-char-section">
+              <div className="nf-char-section-label">Psychology & Conflict</div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 12px" }}>
+                <DebouncedField label="Fears" value={editingChar.fears || ""} onChange={v => updateCharById(editingCharId, "fears", v)} multiline placeholder="Deepest fears — abandonment, failure, the dark, losing control..." small />
+                <DebouncedField label="Flaws" value={editingChar.flaws || ""} onChange={v => updateCharById(editingCharId, "flaws", v)} multiline placeholder="Character weaknesses — pride, jealousy, impulsiveness, dishonesty..." small />
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 12px" }}>
+                <DebouncedField label="Strengths" value={editingChar.strengths || ""} onChange={v => updateCharById(editingCharId, "strengths", v)} multiline placeholder="What they're good at — empathy, combat, deception, leadership..." small />
+                <DebouncedField label="Skills & Abilities" value={editingChar.skills || ""} onChange={v => updateCharById(editingCharId, "skills", v)} multiline placeholder="Trained skills, magic, expertise — swordsmanship, hacking, medicine..." small />
+              </div>
+              <DebouncedField label="Internal Conflict" value={editingChar.internalConflict || ""} onChange={v => updateCharById(editingCharId, "internalConflict", v)} multiline placeholder="The war inside them — duty vs. desire, forgiveness vs. revenge, identity crisis..." small />
+              <DebouncedField label="External Conflict" value={editingChar.externalConflict || ""} onChange={v => updateCharById(editingCharId, "externalConflict", v)} multiline placeholder="What opposes them from outside — enemies, society, nature, time..." small />
+            </div>
+
+            {/* Section — Goals */}
+            <div className="nf-char-section">
+              <div className="nf-char-section-label">Goals & Desires</div>
+              <DebouncedField label="Desires & Motivations" value={editingChar.desires} onChange={v => updateCharById(editingCharId, "desires", v)} multiline placeholder="What drives them? Want vs. need? (Note: describe initial desires — they evolve)" />
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 12px" }}>
+                <DebouncedField label="Short-Term Goals" value={editingChar.shortTermGoals || ""} onChange={v => updateCharById(editingCharId, "shortTermGoals", v)} multiline placeholder="Immediate objectives — survive the night, win the trial, get the key..." small />
+                <DebouncedField label="Long-Term Goals" value={editingChar.longTermGoals || ""} onChange={v => updateCharById(editingCharId, "longTermGoals", v)} multiline placeholder="Ultimate aim — overthrow the king, find true love, prove innocence..." small />
+              </div>
             </div>
 
             {/* D4: Section — Story */}
@@ -10069,8 +10984,15 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
               <div className="nf-char-section-label">Story & Backstory</div>
               <DebouncedField label="Backstory" value={editingChar.backstory} onChange={v => updateCharById(editingCharId, "backstory", v)} multiline placeholder="Formative experiences, wounds, what shaped them..." />
               <Field label="Backstory Reveal (Ch#)" value={editingChar.backstoryRevealChapter || ""} onChange={v => updateCharById(editingCharId, "backstoryRevealChapter", parseInt(v) || 0)} placeholder="0 = always visible to AI" type="number" small />
-              <DebouncedField label="Desires & Motivations" value={editingChar.desires} onChange={v => updateCharById(editingCharId, "desires", v)} multiline placeholder="What drives them? Want vs. need? (Note: describe initial desires — they evolve)" />
               <DebouncedField label="Character Arc" value={editingChar.arc} onChange={v => updateCharById(editingCharId, "arc", v)} multiline placeholder="Full trajectory: who they start as → who they become..." small />
+              <DebouncedField label="Signature Items / Possessions" value={editingChar.signatureItems || ""} onChange={v => updateCharById(editingCharId, "signatureItems", v)} multiline placeholder="A locket with a photo, enchanted blade, battered notebook, vintage motorcycle..." small />
+              {/* Secrets — two tiers */}
+              <div style={{ padding: "10px 12px", background: "var(--nf-bg-deep)", border: "1px solid var(--nf-border)", borderRadius: 2, marginTop: 8 }}>
+                <div style={{ fontSize: 9, fontWeight: 500, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--nf-text-muted)", marginBottom: 8 }}>Secrets</div>
+                <DebouncedField label="Known Secrets (reader knows, sent to AI)" value={editingChar.secrets || ""} onChange={v => updateCharById(editingCharId, "secrets", v)} multiline placeholder="Secrets the reader/AI should know — hidden heritage, double identity, forbidden power..." small />
+                <DebouncedField label="Hidden Secrets (NOT sent to AI until reveal)" value={editingChar.hiddenSecrets || ""} onChange={v => updateCharById(editingCharId, "hiddenSecrets", v)} multiline placeholder="Plot twists — keep hidden from AI context until the reveal chapter..." small />
+                <Field label="Secret Reveal (Ch#)" value={editingChar.secretRevealChapter || ""} onChange={v => updateCharById(editingCharId, "secretRevealChapter", parseInt(v) || 0)} placeholder="0 = never auto-reveal" type="number" small />
+              </div>
               {/* FIX 1: Hardcoded relationship stream from Relationships tab — read-only */}
               {(() => {
                 const charRels = (project?.relationships || []).filter(r => r.char1 === editingCharId || r.char2 === editingCharId);
@@ -10137,6 +11059,10 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
   });
   const renderWorld = () => {
     const items = project?.worldBuilding || [];
+    const charOptions = (project?.characters || []).filter(c => c.name).map(c => ({
+      value: c.id,
+      label: `${c.name}${c.role ? ` (${c.role})` : ""}`,
+    }));
     return (
       <div className="nf-write-layout">
         <div className="nf-content-scroll" style={{ maxWidth: 800, flex: 1 }}>
@@ -10150,7 +11076,25 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
               )}
               <button onClick={() => {
                 const newId = uid();
-                updateProject({ worldBuilding: [...items, { id: newId, name: "", category: "", description: "", keywords: "", introducedInChapter: 0, referenceImages: {}, imagePrompts: {} }] });
+                updateProject({ worldBuilding: [...items, { id: newId, name: "", category: "", description: "", keywords: "", introducedInChapter: 0, referenceImages: {}, imagePrompts: {},
+                  // ─── NEW FIELDS ───
+                  frequentCharacters: [], // character IDs who frequent this location
+                  subLocations: "", // child locations / rooms / areas
+                  parentLocation: "", // ID of parent location
+                  atmosphere: "", // mood, vibe, feeling
+                  sensoryDetails: "", // sights, sounds, smells, textures
+                  dangers: "", // threats, conflicts, hazards
+                  rules: "", // laws, customs, restrictions
+                  history: "", // how this place/thing came to be
+                  culturalNorms: "", // social expectations
+                  resources: "", // economy, supplies, valuables
+                  connectedTo: [], // IDs of related world entries
+                  population: "", // demographics
+                  // Organization-specific
+                  orgHierarchy: [], // [{id, name, role, parentId, charId}]
+                  orgPurpose: "", // mission statement / goals
+                  orgMembers: [], // character IDs
+                }] });
                 setExpandedWorldIds(prev => new Set([...prev, newId]));
               }} className="nf-btn-icon-sm"><Icons.Plus /> Add</button>
             </div>
@@ -10193,6 +11137,205 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                         </div>
                         <DebouncedField label="Description" value={item.description} onChange={v => updateProject({ worldBuilding: items.map(it => it.id === item.id ? { ...it, description: v } : it) })} multiline placeholder="Detailed description..." />
                         <Field label="Keywords (for AI detection)" value={item.keywords || ""} onChange={v => updateProject({ worldBuilding: items.map(it => it.id === item.id ? { ...it, keywords: v } : it) })} placeholder="Comma-separated: court, vampires, shadows, ruling council" small />
+
+                        {/* ─── NEW: Location-specific fields ─── */}
+                        {(item.category === "Location" || !item.category) && (
+                          <div style={{ marginTop: 12, padding: "10px 12px", background: "var(--nf-bg-deep)", border: "1px solid var(--nf-border)", borderRadius: 2 }}>
+                            <div style={{ fontSize: 9, fontWeight: 500, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--nf-text-muted)", marginBottom: 8 }}>Location Details</div>
+                            <DebouncedField label="Atmosphere / Mood" value={item.atmosphere || ""} onChange={v => updateProject({ worldBuilding: items.map(it => it.id === item.id ? { ...it, atmosphere: v } : it) })} multiline placeholder="Eerie, warm and inviting, claustrophobic, sacred, oppressive..." small />
+                            <DebouncedField label="Sensory Details" value={item.sensoryDetails || ""} onChange={v => updateProject({ worldBuilding: items.map(it => it.id === item.id ? { ...it, sensoryDetails: v } : it) })} multiline placeholder="Sights: flickering torches. Sounds: dripping water. Smells: old parchment..." small />
+                            <DebouncedField label="Sub-Locations / Rooms" value={item.subLocations || ""} onChange={v => updateProject({ worldBuilding: items.map(it => it.id === item.id ? { ...it, subLocations: v } : it) })} multiline placeholder="The Great Hall, The Secret Passage, The Dungeon, The Rooftop Garden..." small />
+                            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                              <DebouncedField label="Dangers / Threats" value={item.dangers || ""} onChange={v => updateProject({ worldBuilding: items.map(it => it.id === item.id ? { ...it, dangers: v } : it) })} multiline placeholder="Hidden traps, rival gangs, magical wards..." small />
+                              <DebouncedField label="Rules / Restrictions" value={item.rules || ""} onChange={v => updateProject({ worldBuilding: items.map(it => it.id === item.id ? { ...it, rules: v } : it) })} multiline placeholder="No magic allowed, curfew at midnight, must bow to elders..." small />
+                            </div>
+                            <DebouncedField label="Population / Demographics" value={item.population || ""} onChange={v => updateProject({ worldBuilding: items.map(it => it.id === item.id ? { ...it, population: v } : it) })} placeholder="e.g. ~2000 residents, mostly elves and half-bloods" small />
+                          </div>
+                        )}
+
+                        {/* ─── NEW: Characters who frequent this location ─── */}
+                        <div style={{ marginTop: 12 }}>
+                          <div style={{ fontSize: 9, fontWeight: 500, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--nf-text-muted)", marginBottom: 8, fontFamily: "var(--nf-font-body)" }}>
+                            Characters at This Location
+                          </div>
+                          {(project?.characters || []).filter(c => c.name).length > 0 ? (
+                            <div style={{ display: "flex", flexWrap: "wrap", gap: 4, padding: "6px 0" }}>
+                              {(project?.characters || []).filter(c => c.name).map(c => {
+                                const freqChars = Array.isArray(item.frequentCharacters) ? item.frequentCharacters : [];
+                                const isSelected = freqChars.includes(c.id);
+                                return (
+                                  <button key={c.id} type="button" onClick={() => {
+                                    const updated = isSelected ? freqChars.filter(cid => cid !== c.id) : [...freqChars, c.id];
+                                    updateProject({ worldBuilding: items.map(it => it.id === item.id ? { ...it, frequentCharacters: updated } : it) });
+                                  }} style={{
+                                    padding: "3px 10px", borderRadius: 6, fontSize: 11, fontWeight: isSelected ? 600 : 400, cursor: "pointer",
+                                    background: isSelected ? "var(--nf-accent-glow-2)" : "var(--nf-bg-surface)",
+                                    border: `1px solid ${isSelected ? "var(--nf-accent-2)" : "var(--nf-border)"}`,
+                                    color: isSelected ? "var(--nf-accent-2)" : "var(--nf-text-muted)",
+                                    transition: "all 0.15s",
+                                  }}>
+                                    {isSelected ? "✓ " : ""}{c.name}{c.role ? ` (${c.role})` : ""}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          ) : (
+                            <div style={{ fontSize: 11, color: "var(--nf-text-muted)", padding: "6px 0", fontStyle: "italic" }}>Add named characters first</div>
+                          )}
+                          {/* Show selected characters summary */}
+                          {Array.isArray(item.frequentCharacters) && item.frequentCharacters.length > 0 && (
+                            <div style={{ fontSize: 10, color: "var(--nf-text-dim)", marginTop: 4, padding: "4px 8px", background: "var(--nf-bg-deep)", borderRadius: 2 }}>
+                              {item.frequentCharacters.length} character{item.frequentCharacters.length !== 1 ? "s" : ""} assigned: {item.frequentCharacters.map(cid => {
+                                const ch = (project?.characters || []).find(c => c.id === cid);
+                                return ch?.name || "?";
+                              }).join(", ")}
+                            </div>
+                          )}
+                        </div>
+
+                        {/* ─── NEW: Organization Hierarchy ─── */}
+                        {item.category === "Organization" && (
+                          <div style={{ marginTop: 12, padding: "10px 12px", background: "var(--nf-bg-deep)", border: "1px solid var(--nf-border)", borderRadius: 2 }}>
+                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                              <div style={{ fontSize: 9, fontWeight: 500, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--nf-text-muted)" }}>Organization Hierarchy</div>
+                              <button onClick={() => {
+                                const hierarchy = Array.isArray(item.orgHierarchy) ? [...item.orgHierarchy] : [];
+                                hierarchy.push({ id: uid(), name: "", role: "", parentId: "", charId: "" });
+                                updateProject({ worldBuilding: items.map(it => it.id === item.id ? { ...it, orgHierarchy: hierarchy } : it) });
+                              }} className="nf-btn-micro" style={{ fontSize: 9 }}><Icons.Plus /> Add Position</button>
+                            </div>
+                            <DebouncedField label="Purpose / Mission" value={item.orgPurpose || ""} onChange={v => updateProject({ worldBuilding: items.map(it => it.id === item.id ? { ...it, orgPurpose: v } : it) })} multiline placeholder="What does this organization exist to do? Goals, values, ideology..." small />
+
+                            {/* Members from character list */}
+                            <div style={{ marginTop: 8, marginBottom: 8 }}>
+                              <div style={{ fontSize: 9, color: "var(--nf-text-muted)", fontWeight: 500, marginBottom: 4 }}>Members (from characters)</div>
+                              {(project?.characters || []).filter(c => c.name).length > 0 ? (
+                                <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+                                  {(project?.characters || []).filter(c => c.name).map(c => {
+                                    const members = Array.isArray(item.orgMembers) ? item.orgMembers : [];
+                                    const isSelected = members.includes(c.id);
+                                    return (
+                                      <button key={c.id} type="button" onClick={() => {
+                                        const updated = isSelected ? members.filter(cid => cid !== c.id) : [...members, c.id];
+                                        updateProject({ worldBuilding: items.map(it => it.id === item.id ? { ...it, orgMembers: updated } : it) });
+                                      }} style={{
+                                        padding: "2px 8px", borderRadius: 4, fontSize: 10, cursor: "pointer",
+                                        background: isSelected ? "var(--nf-accent-glow)" : "var(--nf-bg-surface)",
+                                        border: `1px solid ${isSelected ? "var(--nf-accent)" : "var(--nf-border)"}`,
+                                        color: isSelected ? "var(--nf-accent)" : "var(--nf-text-muted)",
+                                        fontWeight: isSelected ? 600 : 400,
+                                      }}>
+                                        {isSelected ? "✓ " : ""}{c.name}
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+                              ) : <div style={{ fontSize: 10, color: "var(--nf-text-muted)", fontStyle: "italic" }}>Add characters first</div>}
+                            </div>
+
+                            {/* Hierarchy tree */}
+                            {Array.isArray(item.orgHierarchy) && item.orgHierarchy.length > 0 && (
+                              <div style={{ marginTop: 8 }}>
+                                <div style={{ fontSize: 9, color: "var(--nf-text-muted)", fontWeight: 500, marginBottom: 6 }}>Positions & Ranks</div>
+                                {item.orgHierarchy.map((pos, posIdx) => {
+                                  const parentOptions = item.orgHierarchy.filter(p => p.id !== pos.id && p.name).map(p => ({ value: p.id, label: p.name || `Position ${item.orgHierarchy.indexOf(p) + 1}` }));
+                                  const linkedChar = pos.charId ? (project?.characters || []).find(c => c.id === pos.charId) : null;
+                                  // Depth calculation for indentation
+                                  let depth = 0;
+                                  let parentCheck = pos.parentId;
+                                  const visited = new Set();
+                                  while (parentCheck && depth < 6) {
+                                    if (visited.has(parentCheck)) break;
+                                    visited.add(parentCheck);
+                                    const parent = item.orgHierarchy.find(p => p.id === parentCheck);
+                                    if (parent) { depth++; parentCheck = parent.parentId; } else break;
+                                  }
+                                  return (
+                                    <div key={pos.id} style={{
+                                      marginLeft: depth * 20, marginBottom: 6, padding: "6px 10px",
+                                      background: "var(--nf-bg-surface)", border: "1px solid var(--nf-border)", borderRadius: 2,
+                                      borderLeft: `3px solid ${depth === 0 ? "var(--nf-accent)" : depth === 1 ? "var(--nf-accent-2)" : "var(--nf-border)"}`,
+                                    }}>
+                                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr auto", gap: 8, alignItems: "end" }}>
+                                        <Field label="Title / Position" value={pos.name || ""} onChange={v => {
+                                          const hierarchy = [...item.orgHierarchy];
+                                          hierarchy[posIdx] = { ...hierarchy[posIdx], name: v };
+                                          updateProject({ worldBuilding: items.map(it => it.id === item.id ? { ...it, orgHierarchy: hierarchy } : it) });
+                                        }} placeholder="e.g. Grand Master, Captain, Spy" small />
+                                        <Field label="Role Description" value={pos.role || ""} onChange={v => {
+                                          const hierarchy = [...item.orgHierarchy];
+                                          hierarchy[posIdx] = { ...hierarchy[posIdx], role: v };
+                                          updateProject({ worldBuilding: items.map(it => it.id === item.id ? { ...it, orgHierarchy: hierarchy } : it) });
+                                        }} placeholder="What they do" small />
+                                        <button onClick={() => {
+                                          const hierarchy = item.orgHierarchy.filter((_, i) => i !== posIdx);
+                                          updateProject({ worldBuilding: items.map(it => it.id === item.id ? { ...it, orgHierarchy: hierarchy } : it) });
+                                        }} className="nf-btn-icon" style={{ padding: 2, marginBottom: 6 }}><Icons.X /></button>
+                                      </div>
+                                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 4 }}>
+                                        {parentOptions.length > 0 && (
+                                          <SelectField label="Reports To" value={pos.parentId || ""} onChange={v => {
+                                            const hierarchy = [...item.orgHierarchy];
+                                            hierarchy[posIdx] = { ...hierarchy[posIdx], parentId: v };
+                                            updateProject({ worldBuilding: items.map(it => it.id === item.id ? { ...it, orgHierarchy: hierarchy } : it) });
+                                          }} options={[{ value: "", label: "— Top Level —" }, ...parentOptions]} />
+                                        )}
+                                        <SelectField label="Held By (Character)" value={pos.charId || ""} onChange={v => {
+                                          const hierarchy = [...item.orgHierarchy];
+                                          hierarchy[posIdx] = { ...hierarchy[posIdx], charId: v };
+                                          updateProject({ worldBuilding: items.map(it => it.id === item.id ? { ...it, orgHierarchy: hierarchy } : it) });
+                                        }} options={[{ value: "", label: "— Vacant / NPC —" }, ...charOptions]} />
+                                      </div>
+                                      {linkedChar && (
+                                        <div style={{ marginTop: 4, fontSize: 10, color: "var(--nf-accent-2)" }}>
+                                          ↳ {linkedChar.name} ({linkedChar.role})
+                                        </div>
+                                      )}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
+                        )}
+
+                        {/* ─── Common fields for all types ─── */}
+                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 8 }}>
+                          <DebouncedField label="History / Origin" value={item.history || ""} onChange={v => updateProject({ worldBuilding: items.map(it => it.id === item.id ? { ...it, history: v } : it) })} multiline placeholder="How did this come to be? Key events in its past..." small />
+                          <DebouncedField label="Cultural Norms" value={item.culturalNorms || ""} onChange={v => updateProject({ worldBuilding: items.map(it => it.id === item.id ? { ...it, culturalNorms: v } : it) })} multiline placeholder="Social expectations, traditions, taboos..." small />
+                        </div>
+                        <DebouncedField label="Resources / Economy" value={item.resources || ""} onChange={v => updateProject({ worldBuilding: items.map(it => it.id === item.id ? { ...it, resources: v } : it) })} placeholder="Trade goods, magical resources, currency, wealth..." small />
+
+                        {/* Connected world entries */}
+                        <div style={{ marginTop: 8 }}>
+                          <div style={{ fontSize: 9, fontWeight: 500, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--nf-text-muted)", marginBottom: 6 }}>
+                            Connected To (other world entries)
+                          </div>
+                          {items.filter(it => it.id !== item.id && it.name).length > 0 ? (
+                            <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+                              {items.filter(it => it.id !== item.id && it.name).map(other => {
+                                const connections = Array.isArray(item.connectedTo) ? item.connectedTo : [];
+                                const isConn = connections.includes(other.id);
+                                return (
+                                  <button key={other.id} type="button" onClick={() => {
+                                    const updated = isConn ? connections.filter(cid => cid !== other.id) : [...connections, other.id];
+                                    updateProject({ worldBuilding: items.map(it => it.id === item.id ? { ...it, connectedTo: updated } : it) });
+                                  }} style={{
+                                    padding: "2px 8px", borderRadius: 4, fontSize: 10, cursor: "pointer",
+                                    background: isConn ? "var(--nf-accent-glow-2)" : "var(--nf-bg-surface)",
+                                    border: `1px solid ${isConn ? "var(--nf-accent-2)" : "var(--nf-border)"}`,
+                                    color: isConn ? "var(--nf-accent-2)" : "var(--nf-text-muted)",
+                                    fontWeight: isConn ? 600 : 400,
+                                  }}>
+                                    {isConn ? "✓ " : ""}{other.name}{other.category ? ` [${other.category}]` : ""}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          ) : (
+                            <div style={{ fontSize: 10, color: "var(--nf-text-muted)", fontStyle: "italic" }}>Add more world entries to create connections</div>
+                          )}
+                        </div>
 						
                         {/* Image Prompts — 4 walls of the room */}
                         <div style={{ marginTop: 12 }}>
@@ -10451,7 +11594,7 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                 const existingChNums = (project?.plotOutline || []).map(pl => pl.chapter || 0);
                 const nextChNum = existingChNums.length > 0 ? Math.max(...existingChNums) + 1 : 1;
                 const title = `Chapter ${nextChNum}`;
-                const newPlot = { id: uid(), chapter: nextChNum, title, summary: "", beats: "", sceneType: "narrative", pov: "", characters: [], date: "", povCharacterId: "" };
+                const newPlot = { id: uid(), chapter: nextChNum, title, summary: "", beats: "", sceneType: "narrative", pov: "", characters: [], locations: [], date: "", povCharacterId: "" };
                 // FIX 7: Also create matching chapter if it doesn't exist
                 const chapterExists = (project?.chapters?.length || 0) >= nextChNum;
                 const chapterUpdate = chapterExists ? {} : {
@@ -10609,6 +11752,37 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                       <div style={{ fontSize: 11, color: "var(--nf-text-muted)", padding: "6px 0", fontStyle: "italic" }}>Add named characters first</div>
                     )}
                   </div>
+                  {/* Locations in chapter */}
+                  <div className="nf-field" style={{ marginTop: 4 }}>
+                    <label className="nf-label">Locations in chapter</label>
+                    {(() => {
+                      const locationEntries = (project?.worldBuilding || []).filter(w => w.name && (w.category === "Location" || !w.category));
+                      if (locationEntries.length === 0) return <div style={{ fontSize: 11, color: "var(--nf-text-muted)", padding: "6px 0", fontStyle: "italic" }}>Add locations in the World tab first</div>;
+                      const locIds = Array.isArray(p.locations) ? p.locations : [];
+                      return (
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: 4, padding: "6px 0" }}>
+                          {locationEntries.map(loc => {
+                            const isSelected = locIds.includes(loc.id);
+                            const freqCount = Array.isArray(loc.frequentCharacters) ? loc.frequentCharacters.length : 0;
+                            return (
+                              <button key={loc.id} type="button" onClick={() => {
+                                const updated = isSelected ? locIds.filter(lid => lid !== loc.id) : [...locIds, loc.id];
+                                updateProject({ plotOutline: outline.map(pl => pl.id === p.id ? { ...pl, locations: updated } : pl) });
+                              }} style={{
+                                padding: "3px 10px", borderRadius: 6, fontSize: 11, fontWeight: isSelected ? 600 : 400, cursor: "pointer",
+                                background: isSelected ? "var(--nf-accent-glow)" : "var(--nf-bg-surface)",
+                                border: `1px solid ${isSelected ? "var(--nf-accent)" : "var(--nf-border)"}`,
+                                color: isSelected ? "var(--nf-accent)" : "var(--nf-text-muted)",
+                                transition: "all 0.15s",
+                              }}>
+                                {isSelected ? "✓ " : ""}📍 {loc.name}{freqCount > 0 ? ` (${freqCount})` : ""}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      );
+                    })()}
+                  </div>
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: 2, marginTop: 4 }}>
                   {/* FIX 5: Move up/down buttons — swap chapter numbers */}
@@ -10689,7 +11863,19 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
               )}
               <button onClick={() => {
                 const newId = uid();
-                updateProject({ relationships: [...rels, { id: newId, char1: "", char2: "", dynamic: "", status: "developing", tension: "medium", tensionType: "romantic", notes: "", char1Perspective: "", char2Perspective: "", progression: "", meetsInChapter: 0, evolutionTimeline: "" }] });
+                updateProject({ relationships: [...rels, { id: newId, char1: "", char2: "", dynamic: "", status: "developing", tension: "medium", tensionType: "romantic", notes: "", char1Perspective: "", char2Perspective: "", progression: "", meetsInChapter: 0, evolutionTimeline: "",
+                  // ─── NEW FIELDS ───
+                  category: "romantic", // romantic, family, professional, rivalry, friendship, mentor
+                  powerDynamic: "equal", // equal, char1-dominant, char2-dominant, shifting
+                  sharedSecrets: "", // what they know about each other that others don't
+                  keyScenes: "", // turning points: "Ch3: first kiss, Ch7: betrayal"
+                  chemistry: "", // what makes their dynamic compelling
+                  conflictSource: "", // what causes friction
+                  trustLevel: "medium", // none, low, medium, high, absolute
+                  isPublic: true, // is this relationship known to other characters?
+                  taboos: "", // boundaries, lines they won't cross
+                  terms: "", // how they address each other (pet names, formal titles)
+                }] });
                 setExpandedRelIds(prev => new Set([...prev, newId]));
               }} className="nf-btn-icon-sm"><Icons.Plus /> Add</button>
             </div>
@@ -10715,6 +11901,7 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                       <span style={{ color: "var(--nf-accent)", fontSize: 14 }}>↔</span>
                       <span style={{ fontWeight: 600, fontSize: 13, color: "var(--nf-text)" }}>{c2Name || "?"}</span>
                       {r.status && <span style={{ fontSize: 9, padding: "1px 6px", borderRadius: 4, background: "var(--nf-bg-surface)", border: "1px solid var(--nf-border)", color: "var(--nf-text-muted)" }}>{r.status}</span>}
+                      {r.category && r.category !== "romantic" && <span style={{ fontSize: 9, padding: "1px 6px", borderRadius: 4, background: "var(--nf-accent-glow-2)", border: "1px solid var(--nf-accent-2)", color: "var(--nf-accent-2)", fontWeight: 500 }}>{r.category}</span>}
                       {/* D12: Tension color indicator */}
                       {r.tension && r.tension !== "none" && (
                         <span style={{ fontSize: 9, padding: "1px 6px", borderRadius: 4, background: "var(--nf-bg-surface)", border: `1px solid ${tColor}`, color: tColor, fontWeight: 700 }}>
@@ -10746,10 +11933,15 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                         <Field label="Character 2" value={r.char2} onChange={v => updateProject({ relationships: rels.map(re => re.id === r.id ? { ...re, char2: v } : re) })} placeholder="Name" />
                       )}
                     </div>
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 12 }}>
+                      <SelectField label="Category" value={r.category || "romantic"} onChange={v => updateProject({ relationships: rels.map(re => re.id === r.id ? { ...re, category: v } : re) })} options={RELATIONSHIP_CATEGORY_OPTIONS} />
                       <SelectField label="Status" value={r.status || "developing"} onChange={v => updateProject({ relationships: rels.map(re => re.id === r.id ? { ...re, status: v } : re) })} options={RELATIONSHIP_STATUS_OPTIONS} />
                       <SelectField label="Tension" value={r.tension || "medium"} onChange={v => updateProject({ relationships: rels.map(re => re.id === r.id ? { ...re, tension: v } : re) })} options={TENSION_OPTIONS} />
                       <SelectField label="Tension Type" value={r.tensionType || "romantic"} onChange={v => updateProject({ relationships: rels.map(re => re.id === r.id ? { ...re, tensionType: v } : re) })} options={TENSION_TYPE_OPTIONS} />
+                    </div>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                      <SelectField label="Power Dynamic" value={r.powerDynamic || "equal"} onChange={v => updateProject({ relationships: rels.map(re => re.id === r.id ? { ...re, powerDynamic: v } : re) })} options={POWER_DYNAMIC_OPTIONS} />
+                      <SelectField label="Trust Level" value={r.trustLevel || "medium"} onChange={v => updateProject({ relationships: rels.map(re => re.id === r.id ? { ...re, trustLevel: v } : re) })} options={TRUST_LEVEL_OPTIONS} />
                     </div>
                     <Field label="Dynamic" value={r.dynamic} onChange={v => updateProject({ relationships: rels.map(re => re.id === r.id ? { ...re, dynamic: v } : re) })} multiline placeholder="Power dynamics, emotional patterns..." small />
                     <Field label="Progression Arc" value={r.progression} onChange={v => updateProject({ relationships: rels.map(re => re.id === r.id ? { ...re, progression: v } : re) })} placeholder="e.g. enemies → reluctant allies → lovers" small />
@@ -10792,6 +11984,24 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                       <Field label={`${c2Name || "Char 2"}'s Perspective`} value={r.char2Perspective} onChange={v => updateProject({ relationships: rels.map(re => re.id === r.id ? { ...re, char2Perspective: v } : re) })} multiline placeholder="How they see the other person..." small />
                     </div>
                     <Field label="Evolution Timeline" value={r.evolutionTimeline} onChange={v => updateProject({ relationships: rels.map(re => re.id === r.id ? { ...re, evolutionTimeline: v } : re) })} multiline placeholder="Ch1: strangers → Ch5: first real conversation → Ch8: kiss → Ch12: betrayal..." small />
+                    {/* NEW: Relationship depth fields */}
+                    <div style={{ padding: "10px 12px", background: "var(--nf-bg-deep)", border: "1px solid var(--nf-border)", borderRadius: 2, marginTop: 4 }}>
+                      <div style={{ fontSize: 9, fontWeight: 500, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--nf-text-muted)", marginBottom: 8 }}>Relationship Depth</div>
+                      <Field label="Chemistry / What Makes This Dynamic Compelling" value={r.chemistry || ""} onChange={v => updateProject({ relationships: rels.map(re => re.id === r.id ? { ...re, chemistry: v } : re) })} multiline placeholder="Opposites attract, shared trauma bonds them, intellectual sparring..." small />
+                      <Field label="Source of Conflict" value={r.conflictSource || ""} onChange={v => updateProject({ relationships: rels.map(re => re.id === r.id ? { ...re, conflictSource: v } : re) })} multiline placeholder="Class differences, past betrayal, competing goals, jealousy..." small />
+                      <Field label="Shared Secrets" value={r.sharedSecrets || ""} onChange={v => updateProject({ relationships: rels.map(re => re.id === r.id ? { ...re, sharedSecrets: v } : re) })} multiline placeholder="What do they know about each other that no one else does?" small />
+                      <Field label="Key Scenes / Turning Points" value={r.keyScenes || ""} onChange={v => updateProject({ relationships: rels.map(re => re.id === r.id ? { ...re, keyScenes: v } : re) })} multiline placeholder="Ch3: first fight, Ch7: secret revealed, Ch11: sacrifice..." small />
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                        <Field label="Terms of Address" value={r.terms || ""} onChange={v => updateProject({ relationships: rels.map(re => re.id === r.id ? { ...re, terms: v } : re) })} placeholder="Pet names, formal titles, insults..." small />
+                        <Field label="Taboos / Boundaries" value={r.taboos || ""} onChange={v => updateProject({ relationships: rels.map(re => re.id === r.id ? { ...re, taboos: v } : re) })} placeholder="Topics they avoid, lines they won't cross..." small />
+                      </div>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 4 }}>
+                        <label style={{ fontSize: 10, color: "var(--nf-text-muted)", display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
+                          <input type="checkbox" checked={r.isPublic !== false} onChange={e => updateProject({ relationships: rels.map(re => re.id === r.id ? { ...re, isPublic: e.target.checked } : re) })} style={{ accentColor: "var(--nf-accent)" }} />
+                          Public relationship (known to other characters)
+                        </label>
+                      </div>
+                    </div>
                     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                       <Field label="First Meet (Ch#)" value={r.meetsInChapter || ""} onChange={v => updateProject({ relationships: rels.map(re => re.id === r.id ? { ...re, meetsInChapter: parseInt(v) || 0 } : re) })} placeholder="0 = already met" type="number" small />
                       <Field label="Notes" value={r.notes} onChange={v => updateProject({ relationships: rels.map(re => re.id === r.id ? { ...re, notes: v } : re) })} multiline placeholder="History, turning points..." small />
@@ -10896,12 +12106,47 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
             <div className="nf-card-title" style={{ fontSize: 12, marginBottom: 8 }}>Detected in Current Chapter</div>
             {detectedCharIds.size > 0 && (
               <div style={{ marginBottom: 6 }}>
-                <span style={{ fontSize: 10, color: "var(--nf-text-muted)", fontWeight: 600 }}>Characters: </span>
+                <span style={{ fontSize: 10, color: "var(--nf-text-muted)", fontWeight: 600 }}>Characters (full detail): </span>
                 {(project?.characters || []).filter(c => detectedCharIds.has(c.id)).map(c => (
                   <span key={c.id} style={{ fontSize: 11, padding: "1px 8px", margin: "0 3px 3px 0", borderRadius: 4, background: "var(--nf-success-bg)", border: "1px solid var(--nf-success)", color: "var(--nf-success)", fontWeight: 600, display: "inline-block" }}>{c.name}</span>
                 ))}
               </div>
             )}
+            {/* Ambient characters from locations */}
+            {(() => {
+              const ambientIds = new Set();
+              (project?.worldBuilding || []).forEach(w => {
+                if (detectedWorldIds.has(w.id) && Array.isArray(w.frequentCharacters)) {
+                  w.frequentCharacters.forEach(cid => {
+                    if (!detectedCharIds.has(cid)) ambientIds.add(cid);
+                  });
+                }
+              });
+              // Also check plot-selected locations
+              const curPlotEntry2 = (project?.plotOutline || []).find(pl => (pl.chapter || 0) === currentChNum);
+              if (curPlotEntry2?.locations) {
+                (Array.isArray(curPlotEntry2.locations) ? curPlotEntry2.locations : []).forEach(lid => {
+                  const loc = (project?.worldBuilding || []).find(w => w.id === lid);
+                  if (loc && Array.isArray(loc.frequentCharacters)) {
+                    loc.frequentCharacters.forEach(cid => {
+                      if (!detectedCharIds.has(cid)) ambientIds.add(cid);
+                    });
+                  }
+                });
+              }
+              if (ambientIds.size === 0) return null;
+              return (
+                <div style={{ marginBottom: 6 }}>
+                  <span style={{ fontSize: 10, color: "var(--nf-text-muted)", fontWeight: 600 }}>Nearby at location (compact): </span>
+                  {(project?.characters || []).filter(c => ambientIds.has(c.id)).map(c => (
+                    <span key={c.id} style={{ fontSize: 11, padding: "1px 8px", margin: "0 3px 3px 0", borderRadius: 4, background: "var(--nf-accent-glow-2)", border: "1px dashed var(--nf-accent-2)", color: "var(--nf-accent-2)", fontWeight: 400, display: "inline-block", fontStyle: "italic" }}>{c.name}</span>
+                  ))}
+                  <div style={{ fontSize: 9, color: "var(--nf-text-muted)", marginTop: 2, fontStyle: "italic" }}>
+                    These characters frequent the current location — sent as compact summaries (name + role + one-line personality only)
+                  </div>
+                </div>
+              );
+            })()}
             {detectedWorldIds.size > 0 && (
               <div>
                 <span style={{ fontSize: 10, color: "var(--nf-text-muted)", fontWeight: 600 }}>World entries: </span>
@@ -10910,6 +12155,22 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                 ))}
               </div>
             )}
+            {/* Plot-selected locations */}
+            {(() => {
+              const curPlotEntry3 = (project?.plotOutline || []).find(pl => (pl.chapter || 0) === currentChNum);
+              const plotLocs = Array.isArray(curPlotEntry3?.locations) ? curPlotEntry3.locations : [];
+              if (plotLocs.length === 0) return null;
+              const locNames = plotLocs.map(lid => (project?.worldBuilding || []).find(w => w.id === lid)?.name).filter(Boolean);
+              if (locNames.length === 0) return null;
+              return (
+                <div style={{ marginTop: 6 }}>
+                  <span style={{ fontSize: 10, color: "var(--nf-text-muted)", fontWeight: 600 }}>Plot locations: </span>
+                  {locNames.map((n, i) => (
+                    <span key={i} style={{ fontSize: 11, padding: "1px 8px", margin: "0 3px 3px 0", borderRadius: 4, background: "var(--nf-accent-glow)", border: "1px solid var(--nf-accent)", color: "var(--nf-accent)", fontWeight: 500, display: "inline-block" }}>📍 {n}</span>
+                  ))}
+                </div>
+              );
+            })()}
           </div>
         )}
 
@@ -11838,6 +13099,7 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
           <RelationshipWebModal
             characters={project?.characters || []}
             relationships={project?.relationships || []}
+            worldBuilding={project?.worldBuilding || []}
             povCharId={(() => {
               const chars = project?.characters || [];
               const curChapter = project?.chapters?.[activeChapterIdx];
