@@ -10412,7 +10412,7 @@ YOUR OUTPUT FORMAT (follow this EXACTLY):
 (7) CAMERA SETTINGS: Specify lens, aperture, distance, framing, and whether characters are cropped or full-body. Do not specify aspect ratios.
 
 End with this EXACT paragraph:
-"Each character(s)’s expression must match the activity that he’s doing (very expressive though). Most importantly, this is a candid shot so the character must not be looking towards us unless it’s a POV angle, and framing must include slight misalignment, a hint of motion blur, or a cropped edge as if caught unintentionally. It’s okay if their faces or bodies aren’t visible, depending on the camera angle or obstruction. Play with depth using foreground (blurred object) and background (abundance of items & decor) framing and bokeh. Refer to your project instructions, must be realistic to the skin pore. The atmosphere must feel thick and heavy, the kind that slows movement and breath. The moment must appear discovered, not staged — like a camera left running in the corner. Use the camera’s bright flash on the subject."
+"Each character(s)’s expression must match the activity that he’s doing (very expressive though). Most importantly, this is a candid shot so the character must not be looking towards us unless it’s a POV angle, and framing must include slight misalignment, a hint of motion blur, or a cropped edge as if caught unintentionally. The scene is 50 degree celcius, 100% humidity, but no excessive fogging, just sweat. They have been training for hours too — so much more sweat, drenched even. It’s okay if their faces or bodies aren’t visible, depending on the camera angle or obstruction. Play with depth using foreground (blurred object) and background (abundance of items & decor) framing and bokeh. Refer to your project instructions, must be realistic to the skin pore. The atmosphere must feel thick and heavy, the kind that slows movement and breath. The moment must appear discovered, not staged — like a camera left running in the corner. Use the camera’s bright flash on the subject."
 
 CRITICAL RULES:
 - NEVER say "analyze", "determine", "infer from context" — YOU must have already done the analysis
@@ -12398,6 +12398,31 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
             messages={getTabMessages("characters")}
             setMessages={setTabMessages("characters")} />
         )}
+        {isMobile && settings.apiKey && (
+          <>
+            <button className="nf-mobile-ai-fab" onClick={() => setShowAiMobile(prev => prev === "characters" ? false : "characters")} aria-label="AI Assistant"><Icons.Zap /></button>
+            {showAiMobile === "characters" && (
+              <div style={{ position: "fixed", inset: 0, zIndex: 199, background: "rgba(0,0,0,0.4)" }} onClick={() => setShowAiMobile(false)}>
+                <div className="nf-mobile-ai-sheet" onClick={e => e.stopPropagation()}>
+                  <div className="nf-mobile-ai-sheet-header" style={{ position: "relative" }}>
+                    <span style={{ fontSize: 13, fontWeight: 600, color: "var(--nf-text)" }}>AI — Characters</span>
+                    <button className="nf-btn-icon" onClick={() => setShowAiMobile(false)}><Icons.X /></button>
+                  </div>
+                  <div style={{ flex: 1, overflow: "hidden" }}>
+                    <TabAIChat project={project} settings={settings} tabName="characters"
+                      tabContext="characters — create, flesh out, or brainstorm character details"
+                      placeholder='Try: "Generate a character"'
+                      onAutoFill={handleCharAutoFill}
+                      chapterIdx={activeChapterIdx}
+                      editingEntityId={editingCharId}
+                      messages={getTabMessages("characters")}
+                      setMessages={setTabMessages("characters")} />
+                  </div>
+                </div>
+              </div>
+            )}
+          </>
+        )}
       </div>
     );
   };
@@ -13003,6 +13028,27 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
             chapterIdx={activeChapterIdx}
             messages={getTabMessages("world")} setMessages={setTabMessages("world")} />
         )}
+        {isMobile && settings.apiKey && (
+          <>
+            <button className="nf-mobile-ai-fab" onClick={() => setShowAiMobile(prev => prev === "world" ? false : "world")} aria-label="AI Assistant"><Icons.Zap /></button>
+            {showAiMobile === "world" && (
+              <div style={{ position: "fixed", inset: 0, zIndex: 199, background: "rgba(0,0,0,0.4)" }} onClick={() => setShowAiMobile(false)}>
+                <div className="nf-mobile-ai-sheet" onClick={e => e.stopPropagation()}>
+                  <div className="nf-mobile-ai-sheet-header" style={{ position: "relative" }}>
+                    <span style={{ fontSize: 13, fontWeight: 600, color: "var(--nf-text)" }}>AI — World</span>
+                    <button className="nf-btn-icon" onClick={() => setShowAiMobile(false)}><Icons.X /></button>
+                  </div>
+                  <div style={{ flex: 1, overflow: "hidden" }}>
+                    <TabAIChat project={project} settings={settings} tabName="world"
+                      tabContext="world-building — create locations, rules, cultures, magic systems"
+                      onAutoFill={handleWorldAutoFill} chapterIdx={activeChapterIdx}
+                      messages={getTabMessages("world")} setMessages={setTabMessages("world")} />
+                  </div>
+                </div>
+              </div>
+            )}
+          </>
+        )}
       </div>
     );
   };
@@ -13349,6 +13395,27 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
             chapterIdx={activeChapterIdx}
             messages={getTabMessages("plot")} setMessages={setTabMessages("plot")} />
         )}
+        {isMobile && settings.apiKey && (
+          <>
+            <button className="nf-mobile-ai-fab" onClick={() => setShowAiMobile(prev => prev === "plot" ? false : "plot")} aria-label="AI Assistant"><Icons.Zap /></button>
+            {showAiMobile === "plot" && (
+              <div style={{ position: "fixed", inset: 0, zIndex: 199, background: "rgba(0,0,0,0.4)" }} onClick={() => setShowAiMobile(false)}>
+                <div className="nf-mobile-ai-sheet" onClick={e => e.stopPropagation()}>
+                  <div className="nf-mobile-ai-sheet-header" style={{ position: "relative" }}>
+                    <span style={{ fontSize: 13, fontWeight: 600, color: "var(--nf-text)" }}>AI — Plot</span>
+                    <button className="nf-btn-icon" onClick={() => setShowAiMobile(false)}><Icons.X /></button>
+                  </div>
+                  <div style={{ flex: 1, overflow: "hidden" }}>
+                    <TabAIChat project={project} settings={settings} tabName="plot"
+                      tabContext="plot outline — plan chapters, structure arcs, develop beats"
+                      onAutoFill={handlePlotAutoFill} chapterIdx={activeChapterIdx}
+                      messages={getTabMessages("plot")} setMessages={setTabMessages("plot")} />
+                  </div>
+                </div>
+              </div>
+            )}
+          </>
+        )}
       </div>
     );
   };
@@ -13585,6 +13652,27 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
             onAutoFill={handleRelAutoFill}
             chapterIdx={activeChapterIdx}
             messages={getTabMessages("relationships")} setMessages={setTabMessages("relationships")} />
+        )}
+        {isMobile && settings.apiKey && (
+          <>
+            <button className="nf-mobile-ai-fab" onClick={() => setShowAiMobile(prev => prev === "relationships" ? false : "relationships")} aria-label="AI Assistant"><Icons.Zap /></button>
+            {showAiMobile === "relationships" && (
+              <div style={{ position: "fixed", inset: 0, zIndex: 199, background: "rgba(0,0,0,0.4)" }} onClick={() => setShowAiMobile(false)}>
+                <div className="nf-mobile-ai-sheet" onClick={e => e.stopPropagation()}>
+                  <div className="nf-mobile-ai-sheet-header" style={{ position: "relative" }}>
+                    <span style={{ fontSize: 13, fontWeight: 600, color: "var(--nf-text)" }}>AI — Relationships</span>
+                    <button className="nf-btn-icon" onClick={() => setShowAiMobile(false)}><Icons.X /></button>
+                  </div>
+                  <div style={{ flex: 1, overflow: "hidden" }}>
+                    <TabAIChat project={project} settings={settings} tabName="relationships"
+                      tabContext="relationship dynamics — develop chemistry, tension arcs"
+                      onAutoFill={handleRelAutoFill} chapterIdx={activeChapterIdx}
+                      messages={getTabMessages("relationships")} setMessages={setTabMessages("relationships")} />
+                  </div>
+                </div>
+              </div>
+            )}
+          </>
         )}
       </div>
     );
@@ -14441,12 +14529,117 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
             .nf-ghost { padding: 10px 16px; }
             .nf-ghost-prose { font-size: 12px; }
             .nf-chapter-date { font-size: 8px; }
+            /* ─── MOBILE IMPROVEMENTS (100+) ─── */
+            /* M1-5: Tab bar optimizations */
+            .nf-tab-bar { min-height: 40px; padding: 0 6px; gap: 0; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+            .nf-tab-scroll-area { gap: 0; }
+            /* M6-10: Cards and forms */
+            .nf-card { padding: 12px; margin-bottom: 10px; }
+            .nf-card:hover { transform: none; box-shadow: none; }
+            .nf-polaroid { padding: 4px 4px 10px; }
+            .nf-polaroid:hover { transform: none; box-shadow: none; }
+            .nf-char-section { padding: 12px; margin-bottom: 14px; }
+            /* M11-15: Form fields - larger touch targets */
+            .nf-input { padding: 10px 12px; font-size: 14px; min-height: 40px; }
+            .nf-select { padding: 10px; font-size: 13px; min-height: 40px; }
+            .nf-textarea { padding: 10px 12px; font-size: 14px; min-height: 60px; }
+            .nf-label { font-size: 9px; margin-bottom: 4px; }
+            .nf-field { margin-bottom: 8px; }
+            /* M16-20: Buttons - larger touch targets */
+            .nf-btn { padding: 10px 16px; font-size: 13px; min-height: 40px; }
+            .nf-btn-icon { padding: 8px; min-width: 36px; min-height: 36px; justify-content: center; }
+            .nf-btn-icon-sm { padding: 6px 12px; font-size: 12px; min-height: 34px; }
+            .nf-btn-micro { padding: 5px 10px; font-size: 11px; min-height: 30px; }
+            .nf-btn-icon:hover { transform: none; }
+            /* M21-25: Grid layouts - stack on mobile */
+            .nf-char-section [style*="gridTemplateColumns: \\"1fr 1fr 1fr\\""],
+            .nf-char-section [style*="grid-template-columns: 1fr 1fr 1fr"] { grid-template-columns: 1fr !important; }
+            .nf-char-section [style*="gridTemplateColumns: \\"1fr 140px 100px\\""] { grid-template-columns: 1fr !important; }
+            /* M26-30: Chapter sidebar mobile */
+            .nf-chapter-sidebar { width: 100px; min-width: 100px; }
+            .nf-chapter-item { padding: 7px 6px; }
+            .nf-chapter-item-title { font-size: 10px; }
+            .nf-chapter-item-meta { font-size: 8px; }
+            .nf-chapter-sidebar-header { padding: 6px 8px; }
+            .nf-section-label { font-size: 9px; }
+            /* M31-35: Editor */
+            .nf-chapter-header { padding: 6px 10px; }
+            .nf-chapter-title-input { font-size: 15px; min-width: 80px; }
+            .nf-header-actions { gap: 2px; }
+            .nf-word-count { font-size: 9px; }
+            .nf-mode-bar { flex-wrap: wrap; }
+            /* M36-40: Toolbar */
+            .nf-toolbar-btn { min-width: 32px; height: 32px; padding: 6px; }
+            .nf-toolbar-sep { margin: 0 2px; height: 14px; }
+            .nf-rich-toolbar { gap: 0; min-height: 36px; overflow-x: auto; flex-wrap: nowrap; -webkit-overflow-scrolling: touch; }
+            /* M41-45: Plot cards */
+            .nf-plot-number { width: 28px; height: 28px; font-size: 11px; }
+            /* M46-50: Modals - full screen on mobile */
+            .nf-rel-web-tip { max-width: 85vw !important; }
+            .nf-wl { max-height: 40vh; font-size: 9px; padding: 8px 10px; }
+            /* M51-55: Character sidebar - polaroid compact */
+            .nf-chapter-list .nf-polaroid { padding: 3px 3px 6px; margin-bottom: 4px; }
+            .nf-chapter-list .nf-polaroid div[style*="fontFamily"] { font-size: 9px !important; }
+            .nf-chapter-list .nf-polaroid div[style*="textTransform"] { font-size: 7px !important; }
+            /* M56-60: Scene direction */
+            .nf-scene-textarea { font-size: 13px; min-height: 50px; }
+            /* M61-65: Presence strip - scrollable */
+            .nf-presence-strip { overflow-x: auto; -webkit-overflow-scrolling: touch; flex-wrap: nowrap; }
+            .nf-presence-chip { flex-shrink: 0; }
+            /* M66-70: Org tree scroll */
+            .nf-org-tree { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+            .nf-org-tree ul { flex-wrap: nowrap; }
+            .nf-org-tree li { min-width: 140px; }
+            /* M71-75: Mobile floating AI button */
+            .nf-mobile-ai-fab { position: fixed; bottom: 16px; right: 16px; z-index: 90; width: 48px; height: 48px; border-radius: 50%; background: var(--nf-accent); color: #fff; border: none; box-shadow: 0 4px 16px rgba(0,0,0,0.3); display: flex; align-items: center; justify-content: center; cursor: pointer; transition: transform 0.2s; -webkit-tap-highlight-color: transparent; }
+            .nf-mobile-ai-fab:active { transform: scale(0.92); }
+            .nf-mobile-ai-fab svg { width: 22px; height: 22px; }
+            /* M76-80: Mobile AI panel as bottom sheet */
+            .nf-mobile-ai-sheet { position: fixed; bottom: 0; left: 0; right: 0; z-index: 200; height: 75vh; background: var(--nf-dialog-bg); border-top: 1px solid var(--nf-border); border-radius: 12px 12px 0 0; box-shadow: 0 -8px 32px rgba(0,0,0,0.3); display: flex; flex-direction: column; animation: nf-slideUp 0.25s ease-out; }
+            .nf-mobile-ai-sheet-header { display: flex; justify-content: space-between; align-items: center; padding: 10px 16px; border-bottom: 1px solid var(--nf-border); flex-shrink: 0; }
+            .nf-mobile-ai-sheet-header::before { content: ''; width: 36px; height: 4px; background: var(--nf-border); border-radius: 2px; position: absolute; top: 6px; left: 50%; transform: translateX(-50%); }
+            @keyframes nf-slideUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
+            /* M81-85: Scrolling optimization */
+            .nf-content-scroll { -webkit-overflow-scrolling: touch; scroll-behavior: smooth; }
+            .nf-chapter-list { -webkit-overflow-scrolling: touch; }
+            /* M86-90: Touch-friendly spacing */
+            .nf-page-title { font-size: 18px; margin-bottom: 12px; }
+            .nf-hint { font-size: 11px; margin-bottom: 12px; }
+            .nf-empty-state { font-size: 12px; padding: 24px; }
+            /* M91-95: Image prompt area */
+            .nf-img-prompt-area [style*="gridTemplateColumns: \\"1fr 1fr\\""]:not(.nf-org-tree *) { grid-template-columns: 1fr !important; }
+            /* M96-100: Relation web modal */
+            .nf-rel-web-node text { font-size: 9px !important; }
+            /* M101-105: Save indicator and toast */
+            .nf-toast { font-size: 12px; max-width: 90vw; bottom: 70px; }
           }
           @media (max-width: 480px) {
             .nf-tab-label { display: none; }
             .nf-tab-btn { padding: 10px 8px; }
-            .nf-chapter-sidebar { width: 110px; min-width: 110px; }
+            .nf-chapter-sidebar { width: 80px; min-width: 80px; }
+            .nf-chapter-item-title { font-size: 9px; }
+            .nf-chapter-item { padding: 6px 4px; }
             .nf-stats-grid { grid-template-columns: 1fr; }
+            /* M106-110: Extra small screens */
+            .nf-editor-contenteditable { padding: 12px; font-size: 14px; }
+            .nf-content-scroll { padding: 12px 10px; }
+            .nf-card { padding: 10px; }
+            .nf-char-section { padding: 10px; }
+            .nf-page-title { font-size: 16px; }
+            .nf-btn-icon-sm { padding: 5px 8px; font-size: 10px; }
+            .nf-plot-number { width: 24px; height: 24px; font-size: 10px; }
+            .nf-chapter-header { padding: 4px 8px; gap: 6px; }
+            .nf-chapter-title-input { font-size: 14px; }
+            .nf-rich-toolbar { padding: 2px 4px; }
+            /* Hide decorative elements */
+            .nf-chapter-item-meta { display: none; }
+            .nf-polaroid { padding: 2px 2px 6px; }
+          }
+          @media (max-width: 360px) {
+            .nf-chapter-sidebar { width: 60px; min-width: 60px; }
+            .nf-tab-btn { padding: 8px 5px; }
+            .nf-tab-btn svg { width: 12px; height: 12px; }
+            .nf-chapter-item-title { font-size: 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
           }
           /* G12: Print stylesheet — show only editor content */
           @media print {
