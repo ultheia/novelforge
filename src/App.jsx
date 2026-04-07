@@ -6262,26 +6262,20 @@ const RelWebMinimap = memo(({ characters, relationships, onClick }) => {
 });
 
 // ─── GLYPH RAIL — Nothing Phone-inspired ambient indicators ───
-// ─── EDITOR COLOR OVERLAY: Character Voice & Narrative Mode highlighting ───
+// ─── EDITOR COLOR CODING: Character Voice & Narrative Mode ───
+// Colors the actual TEXT in the editor (non-destructive — stripped on save)
 const VOICE_COLORS = [
   "#c4653a", "#6b9e78", "#7a8bc4", "#c49e3a", "#9e6bc4", "#3ac4a8",
   "#c43a6b", "#8bc43a", "#3a8bc4", "#c47a3a", "#6bc49e", "#c43a9e",
 ];
-const NARRATIVE_COLORS = {
-  dialogue: "rgba(196, 101, 58, 0.12)",    // warm amber
-  thought: "rgba(122, 139, 196, 0.12)",     // cool blue
-  action: "rgba(107, 158, 120, 0.12)",      // green
-  exposition: "rgba(139, 115, 85, 0.08)",   // muted brown
+const NARRATIVE_FONT_COLORS = {
+  dialogue: "#c4653a",   // warm amber
+  thought: "#7a8bc4",    // cool blue
+  action: "#6b9e78",     // green
+  exposition: "#8b7355", // muted earth
 };
 const NARRATIVE_LABELS = { dialogue: "Dialogue", thought: "Thought", action: "Action", exposition: "Exposition" };
-const NARRATIVE_BORDER = {
-  dialogue: "rgba(196, 101, 58, 0.4)",
-  thought: "rgba(122, 139, 196, 0.4)",
-  action: "rgba(107, 158, 120, 0.4)",
-  exposition: "rgba(139, 115, 85, 0.2)",
-};
 
-// Assign a stable color to each character
 const _charColorMap = (characters) => {
   const map = {};
   (characters || []).filter(c => c.name && !c.isBulk).forEach((c, i) => {
@@ -6290,201 +6284,194 @@ const _charColorMap = (characters) => {
   return map;
 };
 
-// Parse dialogue attribution — find who's speaking each quoted segment
-const _parseDialogueVoices = (plainText, charColorMap) => {
-  const segments = [];
-  const chars = Object.values(charColorMap);
-  // Build name→id lookup (names + aliases, case-insensitive)
-  const nameLookup = {};
+// Build name → charId lookup
+const _buildNameLookup = (charColorMap) => {
+  const lookup = {};
   for (const [id, info] of Object.entries(charColorMap)) {
-    nameLookup[info.name.toLowerCase()] = id;
-    // First name only
+    lookup[info.name.toLowerCase()] = id;
     const first = info.name.split(/\s+/)[0];
-    if (first.length > 2) nameLookup[first.toLowerCase()] = id;
-    info.aliases.forEach(a => { if (a.length > 1) nameLookup[a.toLowerCase()] = id; });
+    if (first.length > 2) lookup[first.toLowerCase()] = id;
+    info.aliases.forEach(a => { if (a.length > 1) lookup[a.toLowerCase()] = id; });
   }
-  // Pronoun tracking
-  const pronounMap = {};
-  for (const [id, info] of Object.entries(charColorMap)) {
-    const c = chars.find(cc => cc.name === info.name);
-    // We can't easily get pronouns from charColorMap, so just track names
-  }
-
-  const lines = plainText.split("\n");
-  let lastSpeaker = null;
-
-  for (const line of lines) {
-    // Find all quoted segments in this line
-    const quoteRegex = /[""\u201C]([^""\u201D]*?)[""\u201D]/g;
-    let match;
-    let foundSpeaker = null;
-
-    // Check for character name near dialogue (within 60 chars before/after each quote)
-    const lineLower = line.toLowerCase();
-    while ((match = quoteRegex.exec(line)) !== null) {
-      const quoteStart = match.index;
-      const quoteEnd = match.index + match[0].length;
-      // Search context: 80 chars before quote and 80 chars after
-      const before = lineLower.slice(Math.max(0, quoteStart - 80), quoteStart);
-      const after = lineLower.slice(quoteEnd, Math.min(lineLower.length, quoteEnd + 80));
-      const context = before + " " + after;
-
-      // Find the closest character name in context
-      let bestId = null, bestDist = Infinity;
-      for (const [name, id] of Object.entries(nameLookup)) {
-        const nameIdx = context.indexOf(name);
-        if (nameIdx >= 0 && nameIdx < bestDist) { bestDist = nameIdx; bestId = id; }
-      }
-      if (bestId) foundSpeaker = bestId;
-    }
-
-    // If no speaker found, carry forward the last speaker (continuous dialogue)
-    if (!foundSpeaker && quoteRegex.test(line)) foundSpeaker = lastSpeaker;
-    quoteRegex.lastIndex = 0; // Reset regex
-
-    if (foundSpeaker) lastSpeaker = foundSpeaker;
-
-    segments.push({ text: line, speaker: line.match(/[""\u201C]/) ? foundSpeaker : null });
-  }
-  return segments;
+  return lookup;
 };
 
-// Parse narrative mode — classify each paragraph
-const _parseNarrativeMode = (plainText) => {
-  const lines = plainText.split("\n");
-  return lines.map(line => {
-    const trimmed = line.trim();
-    if (!trimmed) return { text: line, mode: null };
-    // Dialogue: contains quoted text
-    if (/[""\u201C][^""\u201D]+[""\u201D]/.test(trimmed)) return { text: line, mode: "dialogue" };
-    // Thought: italics markers or internal monologue patterns
-    if (/^[*_].*[*_]$/.test(trimmed) || /\b(thought|wondered|realized|felt|knew|remembered|wished)\b/i.test(trimmed)) return { text: line, mode: "thought" };
-    // Action: starts with subject + active verb, shorter sentences, movement verbs
-    if (/^(She|He|They|I|We|The|A)\s+(walked|ran|grabbed|pulled|pushed|jumped|turned|looked|moved|stood|sat|fell|threw|kicked|punched|drew|swung|dodged|ducked|leapt|lunged|dashed|sprinted|crept|crawled|climbed|stepped|reached|opened|closed|slammed)/i.test(trimmed)) return { text: line, mode: "action" };
-    if (trimmed.length < 80 && /\b(grabbed|slammed|rushed|burst|dashed|crashed|leapt|dodged|struck|blocked|swung|fired)\b/i.test(trimmed)) return { text: line, mode: "action" };
-    // Exposition: longer text, descriptive, scene-setting
-    return { text: line, mode: "exposition" };
-  });
+// Find speaker for a paragraph containing dialogue
+const _findSpeaker = (text, nameLookup) => {
+  const textLower = text.toLowerCase();
+  let bestId = null, bestDist = Infinity;
+  for (const [name, id] of Object.entries(nameLookup)) {
+    const idx = textLower.indexOf(name);
+    if (idx >= 0 && idx < bestDist) { bestDist = idx; bestId = id; }
+  }
+  return bestId;
 };
 
-const EditorColorOverlay = memo(({ editorRef, colorMode, characters, scrollTop }) => {
-  const [segments, setSegments] = useState([]);
-  const [hoveredChar, setHoveredChar] = useState(null); // { charId, x, y }
-  const overlayRef = useRef(null);
+// Classify narrative mode of a paragraph
+const _classifyNarrative = (text) => {
+  const t = text.trim();
+  if (!t) return null;
+  if (/[""\u201C][^""\u201D]+[""\u201D]/.test(t)) return "dialogue";
+  if (/\b(thought|wondered|realized|felt|knew|remembered|wished|considered|pondered|mused)\b/i.test(t) || /^[*_].*[*_]$/.test(t)) return "thought";
+  if (/^(She|He|They|I|We|The|A|It)\s+(walked|ran|grabbed|pulled|pushed|jumped|turned|looked|moved|stood|sat|fell|threw|kicked|punched|drew|swung|dodged|ducked|leapt|lunged|dashed|sprinted|crept|crawled|climbed|stepped|reached|opened|closed|slammed|blocked|fired|charged|struck|hurled|bolted|froze)/i.test(t)) return "action";
+  if (t.length < 100 && /\b(grabbed|slammed|rushed|burst|dashed|crashed|leapt|dodged|struck|blocked|swung|fired|charged|bolted|froze)\b/i.test(t)) return "action";
+  return "exposition";
+};
 
+// Hook: apply/remove text colors directly on editor DOM paragraphs
+const useEditorColorCoding = (editorRef, colorMode, characters, contentTrigger) => {
   const charColors = useMemo(() => _charColorMap(characters), [characters]);
+  const nameLookup = useMemo(() => _buildNameLookup(charColors), [charColors]);
+  const lastSpeakerRef = useRef(null);
 
-  // Parse editor content when colorMode or content changes
   useEffect(() => {
-    if (colorMode === "off" || !editorRef.current) { setSegments([]); return; }
     const el = editorRef.current;
-    const plain = el.innerText || "";
-    if (!plain.trim()) { setSegments([]); return; }
+    if (!el) return;
 
-    if (colorMode === "voice") {
-      setSegments(_parseDialogueVoices(plain, charColors));
-    } else if (colorMode === "narrative") {
-      setSegments(_parseNarrativeMode(plain));
+    // Get all block-level children (p, div, or direct text nodes)
+    const blocks = el.querySelectorAll("p, div:not(.nf-img-wrapper):not(figure)");
+    const directChildren = blocks.length > 0 ? blocks : el.childNodes;
+
+    if (colorMode === "off") {
+      // Strip all color styles
+      for (const node of directChildren) {
+        if (node.style) { node.style.color = ""; node.style.borderLeft = ""; node.style.paddingLeft = ""; node.removeAttribute("data-nf-speaker"); }
+      }
+      lastSpeakerRef.current = null;
+      return;
     }
-  }, [colorMode, editorRef, charColors, scrollTop]); // scrollTop as proxy for content change
 
-  if (colorMode === "off" || segments.length === 0) return null;
+    lastSpeakerRef.current = null;
 
-  const charInfo = hoveredChar ? charColors[hoveredChar.charId] : null;
+    for (const node of directChildren) {
+      if (!node.textContent?.trim()) {
+        if (node.style) { node.style.color = ""; node.style.borderLeft = ""; node.style.paddingLeft = ""; }
+        continue;
+      }
+      const text = node.textContent;
 
-  return (
-    <>
-      <style>{`
-        .nf-color-overlay { position: absolute; inset: 0; pointer-events: none; overflow: hidden; z-index: 1; }
-        .nf-color-line { pointer-events: auto; transition: background 0.15s; border-radius: 2px; }
-        .nf-color-line:hover { filter: brightness(1.2); }
-        .nf-voice-popup { position: fixed; z-index: 10000; background: var(--nf-dialog-bg); border: 1px solid var(--nf-border); border-radius: 8px; padding: 6px 10px; display: flex; align-items: center; gap: 8px; box-shadow: var(--nf-shadow); pointer-events: none; animation: nf-fadeIn 0.1s ease-out; }
-      `}</style>
-      {/* Color bar gutter — thin strips on the left margin */}
-      <div style={{
-        position: "absolute", top: 0, left: 0, width: 4, bottom: 0, zIndex: 2, pointerEvents: "none",
-        display: "flex", flexDirection: "column",
-      }}>
-        {segments.map((seg, i) => {
-          if (colorMode === "voice") {
-            const info = seg.speaker ? charColors[seg.speaker] : null;
-            return (
-              <div key={i} style={{
-                flex: "0 0 auto", height: `${100 / Math.max(segments.length, 1)}%`, minHeight: 2,
-                background: info ? info.color : "transparent", opacity: info ? 0.6 : 0,
-                transition: "background 0.2s, opacity 0.2s",
-                pointerEvents: info ? "auto" : "none", cursor: info ? "pointer" : "default",
-              }}
-                onMouseEnter={(e) => info && setHoveredChar({ charId: seg.speaker, x: e.clientX + 12, y: e.clientY - 10 })}
-                onMouseLeave={() => setHoveredChar(null)}
-              />
-            );
-          } else {
-            const color = seg.mode ? NARRATIVE_BORDER[seg.mode] : "transparent";
-            return <div key={i} style={{ flex: "0 0 auto", height: `${100 / Math.max(segments.length, 1)}%`, minHeight: 2, background: color, opacity: seg.mode ? 0.8 : 0 }} />;
-          }
-        })}
-      </div>
-      {/* Character hover popup */}
-      {hoveredChar && charInfo && (
-        <div className="nf-voice-popup" style={{ top: hoveredChar.y, left: hoveredChar.x }}>
-          {charInfo.image ? (
-            <img src={charInfo.image} alt="" style={{ width: 28, height: 28, borderRadius: "50%", objectFit: "cover", border: `2px solid ${charInfo.color}`, flexShrink: 0 }} />
-          ) : (
-            <div style={{ width: 28, height: 28, borderRadius: "50%", background: charInfo.color, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, color: "#fff", fontWeight: 600, flexShrink: 0 }}>
-              {charInfo.name[0]}
-            </div>
-          )}
-          <div>
-            <div style={{ fontSize: 11, fontWeight: 600, color: charInfo.color }}>{charInfo.name}</div>
-            <div style={{ fontSize: 9, color: "var(--nf-text-muted)" }}>speaking</div>
-          </div>
+      if (colorMode === "voice") {
+        const hasQuote = /[""\u201C]/.test(text);
+        let speakerId = null;
+        if (hasQuote) {
+          speakerId = _findSpeaker(text, nameLookup);
+          if (!speakerId) speakerId = lastSpeakerRef.current; // carry forward
+        }
+        if (speakerId) lastSpeakerRef.current = speakerId;
+
+        if (speakerId && charColors[speakerId]) {
+          const c = charColors[speakerId];
+          node.style.color = c.color;
+          node.setAttribute("data-nf-speaker", speakerId);
+        } else {
+          node.style.color = "";
+          node.removeAttribute("data-nf-speaker");
+        }
+        // No border — just font color
+        node.style.borderLeft = "";
+        node.style.paddingLeft = "";
+
+      } else if (colorMode === "narrative") {
+        const mode = _classifyNarrative(text);
+        if (mode && NARRATIVE_FONT_COLORS[mode]) {
+          node.style.color = NARRATIVE_FONT_COLORS[mode];
+        } else {
+          node.style.color = "";
+        }
+        node.style.borderLeft = "";
+        node.style.paddingLeft = "";
+        node.removeAttribute("data-nf-speaker");
+      }
+    }
+  }, [colorMode, editorRef, charColors, nameLookup, contentTrigger]);
+
+  return charColors;
+};
+
+// Character hover popup on colored text
+const VoiceHoverPopup = memo(({ editorRef, charColors }) => {
+  const [popup, setPopup] = useState(null);
+
+  useEffect(() => {
+    const el = editorRef.current;
+    if (!el) return;
+
+    const onMove = (e) => {
+      const target = e.target.closest?.("[data-nf-speaker]") || (e.target.getAttribute?.("data-nf-speaker") ? e.target : null);
+      if (target) {
+        const speakerId = target.getAttribute("data-nf-speaker");
+        const info = charColors[speakerId];
+        if (info) { setPopup({ info, x: e.clientX + 14, y: e.clientY - 8 }); return; }
+      }
+      setPopup(null);
+    };
+    const onLeave = () => setPopup(null);
+
+    el.addEventListener("mousemove", onMove);
+    el.addEventListener("mouseleave", onLeave);
+    return () => { el.removeEventListener("mousemove", onMove); el.removeEventListener("mouseleave", onLeave); };
+  }, [editorRef, charColors]);
+
+  if (!popup) return null;
+
+  return createPortal(
+    <div style={{
+      position: "fixed", top: popup.y, left: popup.x, zIndex: 10000,
+      background: "var(--nf-dialog-bg)", border: "1px solid var(--nf-border)",
+      borderRadius: 8, padding: "5px 10px", display: "flex", alignItems: "center", gap: 8,
+      boxShadow: "var(--nf-shadow)", pointerEvents: "none", animation: "nf-fadeIn 0.1s ease-out",
+    }}>
+      {popup.info.image ? (
+        <img src={popup.info.image} alt="" style={{ width: 26, height: 26, borderRadius: "50%", objectFit: "cover", border: `2px solid ${popup.info.color}`, flexShrink: 0 }} />
+      ) : (
+        <div style={{ width: 26, height: 26, borderRadius: "50%", background: popup.info.color, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, color: "#fff", fontWeight: 600, flexShrink: 0 }}>
+          {popup.info.name[0]}
         </div>
       )}
-    </>
+      <div>
+        <div style={{ fontSize: 11, fontWeight: 600, color: popup.info.color, lineHeight: 1.2 }}>{popup.info.name}</div>
+        <div style={{ fontSize: 8, color: "var(--nf-text-muted)", textTransform: "uppercase", letterSpacing: "0.06em" }}>speaking</div>
+      </div>
+    </div>,
+    document.body
   );
 });
 
-// Color mode toggle bar
+// Color mode legend bar
 const ColorModeBar = memo(({ colorMode, setColorMode, characters }) => {
   const charColors = useMemo(() => _charColorMap(characters), [characters]);
+  if (colorMode === "off") return null;
   return (
     <div style={{
-      display: "flex", alignItems: "center", gap: 4, padding: "3px 12px",
-      borderBottom: colorMode !== "off" ? "1px solid var(--nf-border)" : "none",
-      background: colorMode !== "off" ? "var(--nf-bg-raised)" : "transparent",
-      minHeight: colorMode !== "off" ? 28 : 0, overflow: "hidden",
-      transition: "min-height 0.2s, padding 0.2s, background 0.2s",
+      display: "flex", alignItems: "center", gap: 6, padding: "3px 12px",
+      borderBottom: "1px solid var(--nf-border)", background: "var(--nf-bg-raised)",
+      minHeight: 26, animation: "nf-fadeIn 0.15s ease-out",
     }}>
-      {colorMode !== "off" && (
-        <>
-          {colorMode === "voice" && (
-            <div style={{ display: "flex", alignItems: "center", gap: 6, flex: 1, overflow: "hidden" }}>
-              <span style={{ fontSize: 9, color: "var(--nf-text-muted)", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 600, flexShrink: 0 }}>Voice</span>
-              <div style={{ display: "flex", gap: 4, overflow: "hidden", flexWrap: "nowrap" }}>
-                {Object.entries(charColors).slice(0, 8).map(([id, info]) => (
-                  <div key={id} style={{ display: "flex", alignItems: "center", gap: 3, flexShrink: 0 }}>
-                    <div style={{ width: 8, height: 8, borderRadius: "50%", background: info.color, flexShrink: 0 }} />
-                    <span style={{ fontSize: 9, color: info.color, fontWeight: 500, whiteSpace: "nowrap" }}>{info.name.split(/\s+/)[0]}</span>
-                  </div>
-                ))}
+      {colorMode === "voice" && (
+        <div style={{ display: "flex", alignItems: "center", gap: 6, flex: 1, overflow: "hidden" }}>
+          <span style={{ fontSize: 9, color: "var(--nf-text-muted)", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 600, flexShrink: 0 }}>Voice</span>
+          <div style={{ display: "flex", gap: 6, overflow: "hidden", flexWrap: "nowrap" }}>
+            {Object.entries(charColors).slice(0, 8).map(([id, info]) => (
+              <div key={id} style={{ display: "flex", alignItems: "center", gap: 3, flexShrink: 0 }}>
+                {info.image ? <img src={info.image} alt="" style={{ width: 14, height: 14, borderRadius: "50%", objectFit: "cover", border: `1.5px solid ${info.color}` }} /> : <div style={{ width: 14, height: 14, borderRadius: "50%", background: info.color, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 8, color: "#fff", fontWeight: 600 }}>{info.name[0]}</div>}
+                <span style={{ fontSize: 9, color: info.color, fontWeight: 500, whiteSpace: "nowrap" }}>{info.name.split(/\s+/)[0]}</span>
               </div>
-            </div>
-          )}
-          {colorMode === "narrative" && (
-            <div style={{ display: "flex", alignItems: "center", gap: 8, flex: 1 }}>
-              <span style={{ fontSize: 9, color: "var(--nf-text-muted)", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 600, flexShrink: 0 }}>Mode</span>
-              {Object.entries(NARRATIVE_COLORS).map(([mode, color]) => (
-                <div key={mode} style={{ display: "flex", alignItems: "center", gap: 3 }}>
-                  <div style={{ width: 8, height: 3, borderRadius: 1, background: NARRATIVE_BORDER[mode], flexShrink: 0 }} />
-                  <span style={{ fontSize: 9, color: "var(--nf-text-muted)", textTransform: "capitalize" }}>{mode}</span>
-                </div>
-              ))}
-            </div>
-          )}
-          <button onClick={() => setColorMode("off")} className="nf-btn-icon" style={{ padding: 2, opacity: 0.5 }}><Icons.X /></button>
-        </>
+            ))}
+          </div>
+        </div>
       )}
+      {colorMode === "narrative" && (
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flex: 1 }}>
+          <span style={{ fontSize: 9, color: "var(--nf-text-muted)", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 600, flexShrink: 0 }}>Mode</span>
+          {Object.entries(NARRATIVE_FONT_COLORS).map(([mode, color]) => (
+            <div key={mode} style={{ display: "flex", alignItems: "center", gap: 3 }}>
+              <span style={{ color, fontSize: 11, fontWeight: 600 }}>A</span>
+              <span style={{ fontSize: 9, color: "var(--nf-text-muted)", textTransform: "capitalize" }}>{mode}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      <button onClick={() => setColorMode("off")} className="nf-btn-icon" style={{ padding: 2, opacity: 0.5 }}><Icons.X /></button>
     </div>
   );
 });
@@ -7921,6 +7908,9 @@ export default function NovelForge() {
     if (!editingCharId || !project?.characters) return null;
     return project.characters.find(c => c.id === editingCharId) || null;
   }, [editingCharId, project?.characters]);
+
+  // ─── EDITOR COLOR CODING HOOK ───
+  const _voiceCharColors = useEditorColorCoding(editorRef, colorMode, project?.characters, activeChapter?.content?.length);
   const filteredProjects = useMemo(() => {
     if (!projectSearch.trim()) return projects;
     const q = projectSearch.toLowerCase();
@@ -8196,7 +8186,9 @@ export default function NovelForge() {
     debouncedSyncEditor.cancel();
     const el = editorRef.current;
     if (!el) return;
-    const html = el.innerHTML;
+    let html = el.innerHTML;
+    // Strip color-coding styles injected by useEditorColorCoding (non-destructive)
+    html = html.replace(/\s*style="color: rgb\([^"]*\);?"/g, "").replace(/\s*data-nf-speaker="[^"]*"/g, "");
     const currentContent = activeChapter?.content || "";
     if (html !== lastSyncedContentRef.current || html !== currentContent) {
       lastSyncedContentRef.current = html;
@@ -11986,7 +11978,6 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
               prevChapterSummary={activeChapterIdx > 0 ? project?.chapters?.[activeChapterIdx - 1]?.summary : ""}
               currentContent={activeChapter?.content}
             />
-            <div style={{ position: "relative", flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
             <div ref={editorRef} contentEditable="true" suppressContentEditableWarning
               className="nf-editor-contenteditable"
               spellCheck="true"
@@ -12133,8 +12124,6 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
 				  }
 				}
 			  }} />
-              <EditorColorOverlay editorRef={editorRef} colorMode={colorMode} characters={project?.characters} scrollTop={activeChapter?.content?.length || 0} />
-            </div>
           {/* ─── INLINE IMAGE PROMPT BOX ─── */}
           {imagePromptData && (
             <div style={{
@@ -12337,6 +12326,7 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
           )}
           </div>
           <BeatTooltip editorRef={editorRef} chapterIdx={activeChapterIdx} />
+          {colorMode === "voice" && <VoiceHoverPopup editorRef={editorRef} charColors={_voiceCharColors} />}
 		  {!isMobile && !focusMode && renderAiPanel()}
         </div>
       </div>
