@@ -111,6 +111,7 @@ const THEMES = {
 // ─── DROPDOWN OPTIONS ───
 const GENDER_OPTIONS = ["Female","Male","Non-binary","Genderfluid","Genderqueer","Agender","Bigender","Two-Spirit","Intersex","Trans woman","Trans man","Other"];
 const PRONOUN_OPTIONS = ["she/her","he/him","they/them","she/they","he/they","ze/zir","xe/xem","it/its","any pronouns","no pronouns (use name)"];
+const ORIENTATION_OPTIONS = ["Straight","Gay","Lesbian","Bisexual","Pansexual","Asexual","Demisexual","Queer","Questioning","Fluid","Other","Prefer not to label"];
 const ROLE_OPTIONS = ["protagonist","love interest","deuteragonist","antagonist","mentor","sidekick","foil","confidant","supporting","minor","villain","anti-hero"];
 const CHARACTER_STATUS_OPTIONS = [
   { value: "alive", label: "Alive" }, { value: "dead", label: "Dead" },
@@ -301,6 +302,15 @@ const GDriveImages = {
           }
         }
       }
+      // Org group photo
+      if (w.orgGroupPhoto?.startsWith("data:")) {
+        images.push({ data: w.orgGroupPhoto, path: `worlds/${w.id}/orgGroupPhoto`, key: `${w.id}_orgPhoto`, isNew: true });
+      } else if (w.orgGroupPhoto?.startsWith("GDRIVE_IMAGE:")) {
+        const path = w.orgGroupPhoto.replace("GDRIVE_IMAGE:", "");
+        if (!this._hashToDriveId[path] && !this._pathToDriveId[path] && this._pathToBase64[path]) {
+          images.push({ data: this._pathToBase64[path], path, key: `${w.id}_orgPhoto`, isNew: false });
+        }
+      }
     }
     return images;
   },
@@ -449,6 +459,10 @@ const GDriveImages = {
           }
         }
       }
+      if (w.orgGroupPhoto?.startsWith("GDRIVE_IMAGE:")) {
+        const path = w.orgGroupPhoto.replace("GDRIVE_IMAGE:", "");
+        w.orgGroupPhoto = this._pathToBase64[path] || "";
+      }
     }
     return project;
   },
@@ -473,6 +487,7 @@ const GDriveImages = {
           if (w.referenceImages[key]?.startsWith("data:")) w.referenceImages[key] = `GDRIVE_IMAGE:worlds/${w.id}/${key}`;
         }
       }
+      if (w.orgGroupPhoto?.startsWith("data:")) w.orgGroupPhoto = `GDRIVE_IMAGE:worlds/${w.id}/orgGroupPhoto`;
     }
     return project;
   },
@@ -554,6 +569,7 @@ const Icons = {
   Eye: mkIcon(<><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></>, 14),
   EyeOff: mkIcon(<><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></>, 14),
   FileText: mkIcon(<><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></>, 14),
+  Layers: mkIcon(<><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></>, 14),
 };
 
 const Spinner = memo(() => (
@@ -1072,7 +1088,7 @@ const _deriveCrossRefs = (project, charId, opts = {}) => {
     result.charRelationships = rels.filter(r => r.char1 === charId || r.char2 === charId).map(r => {
       const otherId = r.char1 === charId ? r.char2 : r.char1;
       const other = chars.find(c => c.id === otherId);
-      return { ...r, otherName: other?.name || "?", otherImage: other?.image, otherRole: other?.role, otherStatus: other?.status, otherPersonality: other?.personality?.split(/[.,;]/)[0]?.trim() };
+      return { ...r, otherName: other?.name || "?", otherImage: other?.image, otherRole: other?.role, otherStatus: other?.status, otherPersonality: other?.personality?.split(/[.,;]/)[0]?.trim(), otherOrientation: other?.orientation };
     });
     result.charPlotAppearances = plots.filter(pl => Array.isArray(pl.characters) && pl.characters.includes(charId)).sort((a, b) => (a.chapter || 0) - (b.chapter || 0));
     result.derivedOccupation = result.charOrgPositions.map(o => `${o.position} (${o.orgName})`).join(", ");
@@ -1293,7 +1309,9 @@ const ContextEngine = {
       for (let i = 0; i < limit; i++) {
         const c = sorted[i];
         let desc = `• ${c.name} (${c.role})`;
+        if (c.isBulk) { desc += ` [BULK: ${c.bulkCount || "many"} — ${c.bulkDescription || "background"}]`; p.push(desc); continue; }
         if (c.pronouns) desc += ` [${c.pronouns}]`;
+        if (c.orientation) desc += ` [${c.orientation}]`;
         // A20: Note dead/absent characters
         if (c.status && c.status !== "alive") desc += ` {${c.status}}`;
         // A12: Truncate personality at sentence/clause boundary
@@ -1483,6 +1501,11 @@ const ContextEngine = {
         if (c.gender) fields.push(["Gender", c.gender]);
         if (c.age) fields.push(["Age", `${c.age}${c.firstAppearanceChapter > 0 ? ` (as of story start)` : ""}`]); // A15
         if (c.pronouns) fields.push(["Pronouns", c.pronouns]);
+        if (c.orientation) fields.push(["Orientation", c.orientation]);
+        // Bulk character group — abbreviated output
+        if (c.isBulk) {
+          fields.push(["[BULK GROUP]", `${c.bulkCount || "many"} individuals — ${c.bulkDescription || c.personality || "background characters"}`]);
+        }
         // A16: Note if gender/pronouns mismatch conventionally
         if (c.gender && c.pronouns) {
           const genderLower = c.gender.toLowerCase();
@@ -2271,7 +2294,11 @@ const ContextEngine = {
           if (editing) {
             parts.push(`\n<currently_editing_character>`);
             // G5: Explicitly label which fields are empty vs filled
-            const fields = [["name","Name"],["role","Role"],["gender","Gender"],["age","Age"],["pronouns","Pronouns"],["aliases","Aliases"],["occupation","Occupation"],["height","Height"],["build","Build"],["tags","Tags"],["allegiances","Allegiances"],["appearance","Appearance"],["personality","Personality"],["backstory","Backstory"],["desires","Desires"],["shortTermGoals","Short-term goals"],["longTermGoals","Long-term goals"],["speechPattern","Speech pattern"],["voiceSamples","Voice samples"],["habits","Habits & mannerisms"],["fears","Fears"],["flaws","Flaws"],["strengths","Strengths"],["skills","Skills"],["internalConflict","Internal conflict"],["externalConflict","External conflict"],["signatureItems","Signature items"],["secrets","Known secrets"],["hiddenSecrets","Hidden secrets"],["kinks","Preferences"],["arc","Arc"],["canonNotes","Canon notes"],["notes","Author notes"]];
+            const fields = [["name","Name"],["role","Role"],["gender","Gender"],["age","Age"],["pronouns","Pronouns"],["orientation","Orientation"],["aliases","Aliases"],["occupation","Occupation"],["height","Height"],["build","Build"],["tags","Tags"],["allegiances","Allegiances"],["appearance","Appearance"],["personality","Personality"],["backstory","Backstory"],["desires","Desires"],["shortTermGoals","Short-term goals"],["longTermGoals","Long-term goals"],["speechPattern","Speech pattern"],["voiceSamples","Voice samples"],["habits","Habits & mannerisms"],["fears","Fears"],["flaws","Flaws"],["strengths","Strengths"],["skills","Skills"],["internalConflict","Internal conflict"],["externalConflict","External conflict"],["signatureItems","Signature items"],["secrets","Known secrets"],["hiddenSecrets","Hidden secrets"],["kinks","Preferences"],["arc","Arc"],["canonNotes","Canon notes"],["notes","Author notes"]];
+            if (editing.isBulk) {
+              parts.push(`  [BULK CHARACTER GROUP: ${editing.bulkCount || "many"} individuals]`);
+              if (editing.bulkDescription) parts.push(`  Bulk description: ${editing.bulkDescription}`);
+            }
             const emptyFields = [];
             const filledFields = [];
             fields.forEach(([k, label]) => {
@@ -2549,6 +2576,8 @@ const ContextEngine = {
             if (crossRef.charLocations?.length) line += ` [At: ${crossRef.charLocations.map(l => l.name).join(", ")}]`;
             // Status
             if (c.status && c.status !== "alive") line += ` [${c.status.toUpperCase()}]`;
+            if (c.orientation) line += ` [${c.orientation}]`;
+            if (c.isBulk) line += ` [BULK GROUP: ${c.bulkCount || "many"} — ${c.bulkDescription || "background"}]`;
             parts.push(line);
           });
         }
@@ -2617,28 +2646,43 @@ const createDefaultCharacter = () => ({
   statusChangedChapter: 0,
   canonNotes: "",
   image: "",
-  lookAlike: "", // Famous person look-alike for image prompt consistency
-  // ─── NEW FIELDS ───
+  lookAlike: "",
   occupation: "",
-  title: "", // honorific or rank
-  tags: "", // comma-separated trait tags
+  title: "",
+  tags: "",
   fears: "",
   flaws: "",
   strengths: "",
   skills: "",
-  signatureItems: "", // possessions, weapons, keepsakes
-  secrets: "", // known to reader
-  hiddenSecrets: "", // NOT sent to AI until reveal chapter
+  signatureItems: "",
+  secrets: "",
+  hiddenSecrets: "",
   secretRevealChapter: 0,
   shortTermGoals: "",
   longTermGoals: "",
   internalConflict: "",
   externalConflict: "",
-  habits: "", // mannerisms, tics, routines
-  voiceSamples: "", // example quotes in their voice
-  allegiances: "", // factions, groups, loyalties
+  habits: "",
+  voiceSamples: "",
+  allegiances: "",
   height: "",
   build: "",
+  orientation: "", // Sexual orientation
+  isBulk: false, // Bulk character group flag
+  bulkCount: 0, // How many individuals this group represents
+  bulkDescription: "", // Brief description of the group
+});
+
+// Create a bulk character group (e.g. "Police Officers", "Villagers")
+const createBulkCharacterGroup = (name, count, description, role = "minor") => ({
+  ...createDefaultCharacter(),
+  name,
+  role,
+  isBulk: true,
+  bulkCount: count || 10,
+  bulkDescription: description || "",
+  personality: description || "",
+  tags: "bulk-group",
 });
 
 // ─── IndexedDB STORAGE (replaces localStorage — no 5MB limit) ───
@@ -3026,7 +3070,7 @@ const Toast = memo(({ message, type, onDone }) => {
       padding: "11px 18px", borderRadius: 3,
       background: "var(--nf-toast-bg)", backdropFilter: "blur(16px)",
       border: `1px solid var(--nf-toast-border)`,
-      color: "var(--nf-text)", fontSize: 12.5, fontWeight: 500,
+      color: "var(--nf-text)", fontSize: 12, fontWeight: 500,
       boxShadow: "var(--nf-shadow-lg)", animation: "nf-pop 0.25s ease-out",
       display: "flex", alignItems: "center", gap: 8,
     }}>
@@ -3689,18 +3733,18 @@ function computeWebLayout(characters, relationships, worldBuilding) {
   const rels = relationships || [];
   const worlds = worldBuilding || [];
   if (!chars.length) return [];
-  const CX = 500, CY = 500, CANVAS = 1000;
+  const CX = 500, CY = 500;
+  const NODE_R = 24;
+  const MIN_DIST = NODE_R * 5; // Minimum distance between node centers
 
-  // ─── Step 1: Determine location & org membership for each character ───
-  const charLocMap = {}; // charId → [locationId, ...]
-  const locCharMap = {}; // locationId → [charId, ...]
-  const charOrgMap = {}; // charId → [{ orgId, parentCharId, depth }]
+  // ─── Step 1: Location & org membership ───
+  const charLocMap = {}, locCharMap = {}, charOrgMap = {};
   const locations = worlds.filter(w => (w.category === "Location" || !w.category) && Array.isArray(w.frequentCharacters) && w.frequentCharacters.length > 0 && w.name);
   const orgs = worlds.filter(w => w.category === "Organization" && Array.isArray(w.orgHierarchy) && w.orgHierarchy.length > 0);
 
   locations.forEach(loc => {
     locCharMap[loc.id] = [];
-    loc.frequentCharacters.forEach(cid => {
+    (loc.frequentCharacters || []).forEach(cid => {
       if (!charLocMap[cid]) charLocMap[cid] = [];
       charLocMap[cid].push(loc.id);
       locCharMap[loc.id].push(cid);
@@ -3708,179 +3752,190 @@ function computeWebLayout(characters, relationships, worldBuilding) {
   });
 
   orgs.forEach(org => {
-    const hier = org.orgHierarchy;
-    hier.forEach(pos => {
+    org.orgHierarchy.forEach(pos => {
       if (!pos.charId) return;
-      // Compute depth in org tree
       let depth = 0, parentCheck = pos.parentId;
       const visited = new Set();
       while (parentCheck && depth < 10) {
         if (visited.has(parentCheck)) break;
         visited.add(parentCheck);
-        const parent = hier.find(p => p.id === parentCheck);
+        const parent = org.orgHierarchy.find(p => p.id === parentCheck);
         if (parent) { depth++; parentCheck = parent.parentId; } else break;
       }
-      const parentPos = pos.parentId ? hier.find(p => p.id === pos.parentId) : null;
+      const parentPos = pos.parentId ? org.orgHierarchy.find(p => p.id === pos.parentId) : null;
       if (!charOrgMap[pos.charId]) charOrgMap[pos.charId] = [];
-      charOrgMap[pos.charId].push({ orgId: org.id, parentCharId: parentPos?.charId || null, depth, posName: pos.name });
+      charOrgMap[pos.charId].push({ orgId: org.id, parentCharId: parentPos?.charId || null, depth });
     });
   });
 
-  // ─── Step 2: Build location zone centers (distribute around canvas) ───
+  // ─── Step 2: Location zone centers — spread wider ───
   const locZoneCenters = {};
   const locIds = locations.map(l => l.id);
   if (locIds.length > 0) {
-    const zoneRadius = Math.min(350, 200 + locIds.length * 20);
+    const zoneRadius = Math.min(380, 220 + locIds.length * 25);
     locIds.forEach((lid, i) => {
       const angle = (i / locIds.length) * Math.PI * 2 - Math.PI / 2;
-      locZoneCenters[lid] = {
-        x: CX + Math.cos(angle) * zoneRadius * 0.7,
-        y: CY + Math.sin(angle) * zoneRadius * 0.7,
-      };
+      locZoneCenters[lid] = { x: CX + Math.cos(angle) * zoneRadius, y: CY + Math.sin(angle) * zoneRadius };
     });
   }
 
-  // ─── Step 3: Assign initial positions based on location/org context ───
-  const ROLE_LAYER = { protagonist: 0.15, antagonist: 0.25, "love interest": 0.2, deuteragonist: 0.3, villain: 0.35, "anti-hero": 0.35, mentor: 0.45, sidekick: 0.4, foil: 0.5, confidant: 0.45, supporting: 0.6, minor: 0.75 };
-
-  const placed = new Set();
+  // ─── Step 3: Initial positions ───
+  const ROLE_LAYER = { protagonist: 0.1, antagonist: 0.2, "love interest": 0.15, deuteragonist: 0.25, villain: 0.3, "anti-hero": 0.3, mentor: 0.4, sidekick: 0.35, foil: 0.45, confidant: 0.4, supporting: 0.55, minor: 0.7 };
   let nodes = [];
   const nodeMap = {};
 
-  // Place characters with location assignments first — cluster them near their location center
-  chars.forEach(c => {
+  chars.forEach((c, ci) => {
     if (!c.id) return;
     const locs = charLocMap[c.id] || [];
     const orgInfo = charOrgMap[c.id] || [];
     let x, y;
 
     if (locs.length > 0) {
-      // Average the zone centers of all assigned locations
       let sx = 0, sy = 0;
       locs.forEach(lid => { const zc = locZoneCenters[lid]; if (zc) { sx += zc.x; sy += zc.y; } });
-      x = sx / locs.length;
-      y = sy / locs.length;
-      // Spread within the zone based on role importance
-      const roleRadius = 40 + (ROLE_LAYER[c.role] || 0.5) * 60;
+      x = sx / locs.length; y = sy / locs.length;
       const memberIdx = (locCharMap[locs[0]] || []).indexOf(c.id);
       const memberCount = (locCharMap[locs[0]] || []).length;
-      const localAngle = memberCount > 1 ? (memberIdx / memberCount) * Math.PI * 2 : 0;
-      x += Math.cos(localAngle) * roleRadius * 0.4;
-      y += Math.sin(localAngle) * roleRadius * 0.4;
+      const localAngle = memberCount > 1 ? (memberIdx / memberCount) * Math.PI * 2 : Math.random() * Math.PI * 2;
+      const spreadR = 50 + memberCount * 15;
+      x += Math.cos(localAngle) * spreadR;
+      y += Math.sin(localAngle) * spreadR;
     } else if (orgInfo.length > 0) {
-      // Place by org hierarchy — higher ranks closer to center, subordinates spread outward
       const primary = orgInfo[0];
       const baseAngle = (orgs.findIndex(o => o.id === primary.orgId) / Math.max(orgs.length, 1)) * Math.PI * 2;
-      const depthRadius = 120 + primary.depth * 60;
-      x = CX + Math.cos(baseAngle) * depthRadius * 0.5;
-      y = CY + Math.sin(baseAngle) * depthRadius * 0.5;
+      const depthRadius = 100 + primary.depth * 80;
+      x = CX + Math.cos(baseAngle) * depthRadius;
+      y = CY + Math.sin(baseAngle) * depthRadius;
     } else {
-      // Unassigned characters — place by role importance in rings around center
       const roleFactor = ROLE_LAYER[c.role] || 0.65;
-      const angle = (chars.indexOf(c) / chars.length) * Math.PI * 2 - Math.PI / 2;
-      const r = 120 + roleFactor * 320;
-      x = CX + Math.cos(angle) * r;
-      y = CY + Math.sin(angle) * r;
+      const angle = (ci / chars.length) * Math.PI * 2 - Math.PI / 2;
+      x = CX + Math.cos(angle) * (150 + roleFactor * 300);
+      y = CY + Math.sin(angle) * (150 + roleFactor * 300);
     }
-
     const node = { id: c.id, x, y, vx: 0, vy: 0 };
     nodes.push(node);
     nodeMap[c.id] = node;
-    placed.add(c.id);
   });
 
-  // ─── Step 4: Apply org hierarchy vertical bias (superiors above subordinates) ───
+  // ─── Step 4: Org hierarchy vertical bias ───
   orgs.forEach(org => {
-    const hier = org.orgHierarchy;
-    hier.forEach(pos => {
+    org.orgHierarchy.forEach(pos => {
       if (!pos.charId || !pos.parentId) return;
-      const parent = hier.find(p => p.id === pos.parentId);
+      const parent = org.orgHierarchy.find(p => p.id === pos.parentId);
       if (!parent?.charId) return;
-      const nSub = nodeMap[pos.charId];
-      const nSup = nodeMap[parent.charId];
-      if (nSub && nSup) {
-        // Nudge subordinate below superior
-        if (nSub.y <= nSup.y) nSub.y = nSup.y + 100;
-        // Keep horizontally close
-        const dx = nSub.x - nSup.x;
-        if (Math.abs(dx) > 160) nSub.x = nSup.x + Math.sign(dx) * 100;
-      }
+      const nSub = nodeMap[pos.charId], nSup = nodeMap[parent.charId];
+      if (nSub && nSup && nSub.y <= nSup.y) nSub.y = nSup.y + MIN_DIST;
     });
   });
 
-  // ─── Step 5: Force-directed refinement (respecting initial structure) ───
+  // ─── Step 5: Force-directed simulation ───
   const edgeSet = new Set();
   rels.forEach(r => { if (r.char1 && r.char2) edgeSet.add([r.char1, r.char2].sort().join("::")); });
   const edges = [...edgeSet].map(k => { const [a, b] = k.split("::"); return [a, b]; });
   const n = nodes.length;
-  const ITERS = n > 30 ? 30 : n > 15 ? 45 : 60;
-  const SPRING_K = 0.018, REPULSION = 8000, TARGET_DIST = 200, DAMPING = 0.78;
+  const ITERS = n > 50 ? 60 : n > 20 ? 80 : 100;
+  const SPRING_K = 0.012;
+  const REPULSION = n > 20 ? 15000 : 12000;
+  const TARGET_DIST = Math.max(MIN_DIST + 20, 160);
+  const DAMPING = 0.82;
+  const BOUNDS = { min: 40, max: 960 };
 
   for (let iter = 0; iter < ITERS; iter++) {
     const temp = 1 - iter / ITERS;
-    // Location gravity — pull characters toward their assigned zones
-    const LOC_GRAVITY = 0.015 * (0.3 + temp * 0.7);
+    const LOC_GRAVITY = 0.012 * (0.2 + temp * 0.8);
+
+    for (let i = 0; i < n; i++) { nodes[i].vx = 0; nodes[i].vy = 0; }
+
+    // Location gravity
     for (let i = 0; i < n; i++) {
       const ni = nodes[i];
-      ni.vx = 0; ni.vy = 0;
-      // Gravity toward location center
       const locs = charLocMap[ni.id] || [];
       if (locs.length > 0) {
         let gx = 0, gy = 0, cnt = 0;
         locs.forEach(lid => { const zc = locZoneCenters[lid]; if (zc) { gx += zc.x; gy += zc.y; cnt++; } });
-        if (cnt > 0) {
-          gx /= cnt; gy /= cnt;
-          ni.vx += (gx - ni.x) * LOC_GRAVITY;
-          ni.vy += (gy - ni.y) * LOC_GRAVITY;
-        }
+        if (cnt > 0) { ni.vx += (gx / cnt - ni.x) * LOC_GRAVITY; ni.vy += (gy / cnt - ni.y) * LOC_GRAVITY; }
       } else {
-        // Light center pull for unassigned characters
-        ni.vx += (CX - ni.x) * 0.003;
-        ni.vy += (CY - ni.y) * 0.003;
+        ni.vx += (CX - ni.x) * 0.002 * temp;
+        ni.vy += (CY - ni.y) * 0.002 * temp;
       }
     }
-    // Repulsion
+
+    // Repulsion — all pairs
     for (let i = 0; i < n; i++) {
       for (let j = i + 1; j < n; j++) {
         const ni = nodes[i], nj = nodes[j];
-        const dx = ni.x - nj.x, dy = ni.y - nj.y;
+        let dx = ni.x - nj.x, dy = ni.y - nj.y;
         const distSq = dx * dx + dy * dy || 1;
-        const f = REPULSION / distSq;
-        const d = Math.sqrt(distSq);
-        const fx = (dx / d) * f, fy = (dy / d) * f;
+        const dist = Math.sqrt(distSq);
+        // Extra-strong repulsion when too close
+        const repMult = dist < MIN_DIST ? 3 : 1;
+        const f = (REPULSION * repMult) / distSq;
+        const fx = (dx / dist) * f, fy = (dy / dist) * f;
         ni.vx += fx; ni.vy += fy;
         nj.vx -= fx; nj.vy -= fy;
       }
     }
+
     // Spring attraction for connected characters
     for (const [a, b] of edges) {
       const na = nodeMap[a], nb = nodeMap[b];
       if (!na || !nb) continue;
       const dx = nb.x - na.x, dy = nb.y - na.y;
       const d = Math.sqrt(dx * dx + dy * dy) || 1;
+      if (d < MIN_DIST) continue; // Don't attract if already too close
       const f = (d - TARGET_DIST) * SPRING_K;
       const fx = (dx / d) * f, fy = (dy / d) * f;
       na.vx += fx; na.vy += fy; nb.vx -= fx; nb.vy -= fy;
     }
-    // Org hierarchy vertical constraint — gentle pull to keep subordinates below superiors
+
+    // Org hierarchy vertical constraint
     orgs.forEach(org => {
       org.orgHierarchy.forEach(pos => {
         if (!pos.charId || !pos.parentId) return;
         const parent = org.orgHierarchy.find(p => p.id === pos.parentId);
         if (!parent?.charId) return;
         const nSub = nodeMap[pos.charId], nSup = nodeMap[parent.charId];
-        if (nSub && nSup && nSub.y < nSup.y + 50) {
-          nSub.vy += 0.8 * temp;
-          nSup.vy -= 0.4 * temp;
+        if (nSub && nSup && nSub.y < nSup.y + MIN_DIST * 0.6) {
+          nSub.vy += 1.2 * temp;
+          nSup.vy -= 0.6 * temp;
         }
       });
     });
-    const mult = DAMPING * (0.4 + temp * 0.6);
+
+    // Apply velocities
+    const mult = DAMPING * (0.3 + temp * 0.7);
     for (const nd of nodes) {
-      nd.x += nd.vx * mult; nd.y += nd.vy * mult;
-      nd.x = Math.max(60, Math.min(940, nd.x)); nd.y = Math.max(60, Math.min(940, nd.y));
+      nd.x += nd.vx * mult;
+      nd.y += nd.vy * mult;
+      nd.x = Math.max(BOUNDS.min, Math.min(BOUNDS.max, nd.x));
+      nd.y = Math.max(BOUNDS.min, Math.min(BOUNDS.max, nd.y));
     }
   }
+
+  // ─── Step 6: Final collision resolution pass — push apart any overlapping nodes ───
+  for (let pass = 0; pass < 10; pass++) {
+    let anyOverlap = false;
+    for (let i = 0; i < n; i++) {
+      for (let j = i + 1; j < n; j++) {
+        const ni = nodes[i], nj = nodes[j];
+        const dx = ni.x - nj.x, dy = ni.y - nj.y;
+        const dist = Math.sqrt(dx * dx + dy * dy) || 0.1;
+        if (dist < MIN_DIST) {
+          anyOverlap = true;
+          const overlap = (MIN_DIST - dist) / 2 + 2;
+          const mx = (dx / dist) * overlap, my = (dy / dist) * overlap;
+          ni.x += mx; ni.y += my;
+          nj.x -= mx; nj.y -= my;
+          ni.x = Math.max(BOUNDS.min, Math.min(BOUNDS.max, ni.x));
+          ni.y = Math.max(BOUNDS.min, Math.min(BOUNDS.max, ni.y));
+          nj.x = Math.max(BOUNDS.min, Math.min(BOUNDS.max, nj.x));
+          nj.y = Math.max(BOUNDS.min, Math.min(BOUNDS.max, nj.y));
+        }
+      }
+    }
+    if (!anyOverlap) break;
+  }
+
   return nodes;
 }
 
@@ -4355,7 +4410,7 @@ const RelationshipWebModal = memo(({ characters, relationships, onClose, povChar
         {/* Org hierarchy tooltip */}
         {hoveredInfo?.type === 'org' && (() => { const link = hoveredInfo.data; const sup = charMap[link.superiorId]; const sub = charMap[link.subordinateId]; if (!sup || !sub) return null; return (<div className="nf-rel-web-tip" style={{ bottom: 80, left: "50%", transform: "translateX(-50%)" }}><div style={{ fontSize: 10, color: "rgba(160,140,200,0.7)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 6 }}>⛨ {link.orgName}</div><div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}><span style={{ fontWeight: 700, color: "var(--nf-text)", fontSize: 13 }}>{sup.name}</span><span style={{ fontSize: 10, color: "rgba(160,140,200,0.7)" }}>{link.superiorRole}</span></div><div style={{ fontSize: 10, color: "rgba(160,140,200,0.5)", textAlign: "center", margin: "2px 0" }}>▼ reports to</div><div style={{ display: "flex", alignItems: "center", gap: 8 }}><span style={{ fontWeight: 700, color: "var(--nf-text)", fontSize: 13 }}>{sub.name}</span><span style={{ fontSize: 10, color: "rgba(160,140,200,0.7)" }}>{link.subordinateRole}</span></div></div>); })()}
         {/* Selected node panel */}
-        {selectedNode && (() => { const ch = charMap[selectedNode]; if (!ch) return null; const nodeRels = procRels.filter(r => r.char1 === selectedNode || r.char2 === selectedNode); const nodeLocs = charLocations[selectedNode] || []; const nodeOrgRoles = charOrgRoles[selectedNode] || []; const nodeOrgLinks = orgLinks.filter(l => l.subordinateId === selectedNode || l.superiorId === selectedNode); return (<div className="nf-rel-web-tip" style={{ top: 80, left: 20, transform: "none", maxWidth: 280, pointerEvents: "auto" }}><div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>{ch.image && <img src={ch.image} alt={ch.name} style={{ width: 28, height: 28, borderRadius: "50%", objectFit: "cover", border: "1px solid var(--nf-border)" }} />}<div><div style={{ fontWeight: 700, fontSize: 13, color: "var(--nf-text)" }}>{ch.name}</div><div style={{ fontSize: 9, color: "var(--nf-text-muted)", textTransform: "uppercase", letterSpacing: "0.1em" }}>{ch.role}{ch.occupation ? ` · ${ch.occupation}` : ""}</div></div></div>{ch.personality && <div style={{ fontSize: 11, color: "var(--nf-text-dim)", marginBottom: 6, lineHeight: 1.4 }}>{ch.personality.slice(0, 120)}{ch.personality.length > 120 ? "…" : ""}</div>}{nodeLocs.length > 0 && <div style={{ fontSize: 10, color: "var(--nf-accent-2)", marginBottom: 4 }}>📍 {nodeLocs.join(", ")}</div>}{nodeOrgRoles.length > 0 && <div style={{ fontSize: 10, color: "rgba(160,140,200,0.8)", marginBottom: 4 }}>⛨ {nodeOrgRoles.map(r => `${r.role} (${r.org})`).join(", ")}</div>}{ch.allegiances && <div style={{ fontSize: 10, color: "var(--nf-accent-2)", marginBottom: 4 }}>⚔ {ch.allegiances}</div>}{nodeOrgLinks.length > 0 && (<div style={{ borderTop: "1px solid var(--nf-border)", paddingTop: 6, marginBottom: 4 }}><div style={{ fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", color: "rgba(160,140,200,0.6)", marginBottom: 4 }}>Org Chain</div>{nodeOrgLinks.map(l => { const isSuper = l.superiorId === selectedNode; const otherId = isSuper ? l.subordinateId : l.superiorId; const other = charMap[otherId]; return (<div key={l.id} style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 3, fontSize: 10 }}><span style={{ color: "rgba(160,140,200,0.6)", fontSize: 8 }}>{isSuper ? "▼" : "▲"}</span><span style={{ fontWeight: 600, color: "var(--nf-text-dim)" }}>{other?.name || "?"}</span><span style={{ fontSize: 8, color: "rgba(160,140,200,0.5)" }}>{isSuper ? l.subordinateRole : l.superiorRole}</span><span style={{ fontSize: 8, color: "var(--nf-text-muted)", opacity: 0.5 }}>{l.orgName}</span></div>); })}</div>)}{nodeRels.length > 0 && (<div style={{ borderTop: "1px solid var(--nf-border)", paddingTop: 6 }}><div style={{ fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", color: "var(--nf-text-muted)", marginBottom: 4 }}>Connections ({nodeRels.length})</div>{nodeRels.map(r => { const otherId = r.char1 === selectedNode ? r.char2 : r.char1; const other = charMap[otherId]; return (<div key={r.id} style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 3, fontSize: 10.5 }}><span style={{ width: 8, height: 2, background: tColor(r.tension), borderRadius: 1, flexShrink: 0 }} /><span style={{ fontWeight: 600, color: "var(--nf-text-dim)" }}>{other?.name || "?"}</span><span style={{ fontSize: 8, color: "var(--nf-text-muted)", opacity: 0.7 }}>{r.category || "romantic"}</span>{r.tension && r.tension !== "none" && <span style={{ fontSize: 8, color: tColor(r.tension), fontWeight: 700 }}>{r.tension}</span>}</div>); })}</div>)}<div style={{ fontSize: 9, color: "var(--nf-text-muted)", opacity: 0.5, marginTop: 6, fontStyle: "italic" }}>Click again to deselect</div></div>); })()}
+        {selectedNode && (() => { const ch = charMap[selectedNode]; if (!ch) return null; const nodeRels = procRels.filter(r => r.char1 === selectedNode || r.char2 === selectedNode); const nodeLocs = charLocations[selectedNode] || []; const nodeOrgRoles = charOrgRoles[selectedNode] || []; const nodeOrgLinks = orgLinks.filter(l => l.subordinateId === selectedNode || l.superiorId === selectedNode); return (<div className="nf-rel-web-tip" style={{ top: 80, left: 20, transform: "none", maxWidth: 280, pointerEvents: "auto" }}><div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>{ch.image && <img src={ch.image} alt={ch.name} style={{ width: 28, height: 28, borderRadius: "50%", objectFit: "cover", border: "1px solid var(--nf-border)" }} />}<div><div style={{ fontWeight: 700, fontSize: 13, color: "var(--nf-text)" }}>{ch.name}</div><div style={{ fontSize: 9, color: "var(--nf-text-muted)", textTransform: "uppercase", letterSpacing: "0.1em" }}>{ch.role}{ch.occupation ? ` · ${ch.occupation}` : ""}</div></div></div>{ch.personality && <div style={{ fontSize: 11, color: "var(--nf-text-dim)", marginBottom: 6, lineHeight: 1.4 }}>{ch.personality.slice(0, 120)}{ch.personality.length > 120 ? "…" : ""}</div>}{nodeLocs.length > 0 && <div style={{ fontSize: 10, color: "var(--nf-accent-2)", marginBottom: 4 }}>📍 {nodeLocs.join(", ")}</div>}{nodeOrgRoles.length > 0 && <div style={{ fontSize: 10, color: "rgba(160,140,200,0.8)", marginBottom: 4 }}>⛨ {nodeOrgRoles.map(r => `${r.role} (${r.org})`).join(", ")}</div>}{ch.allegiances && <div style={{ fontSize: 10, color: "var(--nf-accent-2)", marginBottom: 4 }}>⚔ {ch.allegiances}</div>}{nodeOrgLinks.length > 0 && (<div style={{ borderTop: "1px solid var(--nf-border)", paddingTop: 6, marginBottom: 4 }}><div style={{ fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", color: "rgba(160,140,200,0.6)", marginBottom: 4 }}>Org Chain</div>{nodeOrgLinks.map(l => { const isSuper = l.superiorId === selectedNode; const otherId = isSuper ? l.subordinateId : l.superiorId; const other = charMap[otherId]; return (<div key={l.id} style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 3, fontSize: 10 }}><span style={{ color: "rgba(160,140,200,0.6)", fontSize: 8 }}>{isSuper ? "▼" : "▲"}</span><span style={{ fontWeight: 600, color: "var(--nf-text-dim)" }}>{other?.name || "?"}</span><span style={{ fontSize: 8, color: "rgba(160,140,200,0.5)" }}>{isSuper ? l.subordinateRole : l.superiorRole}</span><span style={{ fontSize: 8, color: "var(--nf-text-muted)", opacity: 0.5 }}>{l.orgName}</span></div>); })}</div>)}{nodeRels.length > 0 && (<div style={{ borderTop: "1px solid var(--nf-border)", paddingTop: 6 }}><div style={{ fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", color: "var(--nf-text-muted)", marginBottom: 4 }}>Connections ({nodeRels.length})</div>{nodeRels.map(r => { const otherId = r.char1 === selectedNode ? r.char2 : r.char1; const other = charMap[otherId]; return (<div key={r.id} style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 3, fontSize: 10 }}><span style={{ width: 8, height: 2, background: tColor(r.tension), borderRadius: 1, flexShrink: 0 }} /><span style={{ fontWeight: 600, color: "var(--nf-text-dim)" }}>{other?.name || "?"}</span><span style={{ fontSize: 8, color: "var(--nf-text-muted)", opacity: 0.7 }}>{r.category || "romantic"}</span>{r.tension && r.tension !== "none" && <span style={{ fontSize: 8, color: tColor(r.tension), fontWeight: 700 }}>{r.tension}</span>}</div>); })}</div>)}<div style={{ fontSize: 9, color: "var(--nf-text-muted)", opacity: 0.5, marginTop: 6, fontStyle: "italic" }}>Click again to deselect</div></div>); })()}
       </div>
     </div>
   );
@@ -5606,8 +5661,8 @@ RULES:
 \`\`\`json
 { "type": "${tabName}", "data": { ... } }
 \`\`\`
-- For CHARACTER: name, role, gender, age, pronouns, aliases, occupation, title, height, build, tags, appearance, personality, backstory, backstoryRevealChapter, desires, shortTermGoals, longTermGoals, speechPattern, voiceSamples, habits, fears, flaws, strengths, skills, internalConflict, externalConflict, signatureItems, secrets, hiddenSecrets, secretRevealChapter, allegiances, kinks, arc, canonNotes, firstAppearanceChapter, status
-- For WORLD: name, category, description, keywords, introducedInChapter, atmosphere, sensoryDetails, subLocations, dangers, rules, population, history, culturalNorms, resources, orgPurpose (for Organization type), frequentCharacters (array of character names)
+- For CHARACTER: name, role, gender, age, pronouns, orientation, aliases, occupation, title, height, build, tags, appearance, personality, backstory, backstoryRevealChapter, desires, shortTermGoals, longTermGoals, speechPattern, voiceSamples, habits, fears, flaws, strengths, skills, internalConflict, externalConflict, signatureItems, secrets, hiddenSecrets, secretRevealChapter, allegiances, kinks, arc, canonNotes, firstAppearanceChapter, status, isBulk, bulkCount, bulkDescription
+- For WORLD: name, category, description, keywords, introducedInChapter, atmosphere, sensoryDetails, subLocations, dangers, rules, population, history, culturalNorms, resources, orgPurpose (for Organization type), frequentCharacters (array of character names), orgGroupPhotoPrompt (for Organization type — auto-generated)
 - For PLOT: chapter, title, summary, beats, sceneType, pov, characters, locations (array of location names from world entries)
 - For RELATIONSHIP: char1, char2, category (romantic/family/friendship/professional/mentor/rivalry), dynamic, status, tension, tensionType, powerDynamic (equal/char1-dominant/char2-dominant/shifting), trustLevel (none/low/medium/high/absolute), chemistry, conflictSource, sharedSecrets, keyScenes, terms, taboos, isPublic, char1Perspective, char2Perspective, progression, evolutionTimeline, meetsInChapter, notes
 - Be creative, specific, genre-aware.
@@ -5830,7 +5885,7 @@ RULES:
       )}
       <div style={{ flex: 1, overflowY: "auto", padding: 10 }}>
         {messages.length === 0 && (
-          <div style={{ textAlign: "center", padding: "28px 14px", color: "var(--nf-text-muted)", fontSize: 11.5, lineHeight: 1.7 }}>
+          <div style={{ textAlign: "center", padding: "28px 14px", color: "var(--nf-text-muted)", fontSize: 11, lineHeight: 1.7 }}>
             <div style={{ fontSize: 20, marginBottom: 8, opacity: 0.3 }}>✦</div>
             <div>{placeholder || "Ask me to help create or refine content."}</div>
           </div>
@@ -6207,6 +6262,234 @@ const RelWebMinimap = memo(({ characters, relationships, onClick }) => {
 });
 
 // ─── GLYPH RAIL — Nothing Phone-inspired ambient indicators ───
+// ─── EDITOR COLOR OVERLAY: Character Voice & Narrative Mode highlighting ───
+const VOICE_COLORS = [
+  "#c4653a", "#6b9e78", "#7a8bc4", "#c49e3a", "#9e6bc4", "#3ac4a8",
+  "#c43a6b", "#8bc43a", "#3a8bc4", "#c47a3a", "#6bc49e", "#c43a9e",
+];
+const NARRATIVE_COLORS = {
+  dialogue: "rgba(196, 101, 58, 0.12)",    // warm amber
+  thought: "rgba(122, 139, 196, 0.12)",     // cool blue
+  action: "rgba(107, 158, 120, 0.12)",      // green
+  exposition: "rgba(139, 115, 85, 0.08)",   // muted brown
+};
+const NARRATIVE_LABELS = { dialogue: "Dialogue", thought: "Thought", action: "Action", exposition: "Exposition" };
+const NARRATIVE_BORDER = {
+  dialogue: "rgba(196, 101, 58, 0.4)",
+  thought: "rgba(122, 139, 196, 0.4)",
+  action: "rgba(107, 158, 120, 0.4)",
+  exposition: "rgba(139, 115, 85, 0.2)",
+};
+
+// Assign a stable color to each character
+const _charColorMap = (characters) => {
+  const map = {};
+  (characters || []).filter(c => c.name && !c.isBulk).forEach((c, i) => {
+    map[c.id] = { color: VOICE_COLORS[i % VOICE_COLORS.length], name: c.name, image: c.image, aliases: (c.aliases || "").split(",").map(a => a.trim()).filter(Boolean) };
+  });
+  return map;
+};
+
+// Parse dialogue attribution — find who's speaking each quoted segment
+const _parseDialogueVoices = (plainText, charColorMap) => {
+  const segments = [];
+  const chars = Object.values(charColorMap);
+  // Build name→id lookup (names + aliases, case-insensitive)
+  const nameLookup = {};
+  for (const [id, info] of Object.entries(charColorMap)) {
+    nameLookup[info.name.toLowerCase()] = id;
+    // First name only
+    const first = info.name.split(/\s+/)[0];
+    if (first.length > 2) nameLookup[first.toLowerCase()] = id;
+    info.aliases.forEach(a => { if (a.length > 1) nameLookup[a.toLowerCase()] = id; });
+  }
+  // Pronoun tracking
+  const pronounMap = {};
+  for (const [id, info] of Object.entries(charColorMap)) {
+    const c = chars.find(cc => cc.name === info.name);
+    // We can't easily get pronouns from charColorMap, so just track names
+  }
+
+  const lines = plainText.split("\n");
+  let lastSpeaker = null;
+
+  for (const line of lines) {
+    // Find all quoted segments in this line
+    const quoteRegex = /[""\u201C]([^""\u201D]*?)[""\u201D]/g;
+    let match;
+    let foundSpeaker = null;
+
+    // Check for character name near dialogue (within 60 chars before/after each quote)
+    const lineLower = line.toLowerCase();
+    while ((match = quoteRegex.exec(line)) !== null) {
+      const quoteStart = match.index;
+      const quoteEnd = match.index + match[0].length;
+      // Search context: 80 chars before quote and 80 chars after
+      const before = lineLower.slice(Math.max(0, quoteStart - 80), quoteStart);
+      const after = lineLower.slice(quoteEnd, Math.min(lineLower.length, quoteEnd + 80));
+      const context = before + " " + after;
+
+      // Find the closest character name in context
+      let bestId = null, bestDist = Infinity;
+      for (const [name, id] of Object.entries(nameLookup)) {
+        const nameIdx = context.indexOf(name);
+        if (nameIdx >= 0 && nameIdx < bestDist) { bestDist = nameIdx; bestId = id; }
+      }
+      if (bestId) foundSpeaker = bestId;
+    }
+
+    // If no speaker found, carry forward the last speaker (continuous dialogue)
+    if (!foundSpeaker && quoteRegex.test(line)) foundSpeaker = lastSpeaker;
+    quoteRegex.lastIndex = 0; // Reset regex
+
+    if (foundSpeaker) lastSpeaker = foundSpeaker;
+
+    segments.push({ text: line, speaker: line.match(/[""\u201C]/) ? foundSpeaker : null });
+  }
+  return segments;
+};
+
+// Parse narrative mode — classify each paragraph
+const _parseNarrativeMode = (plainText) => {
+  const lines = plainText.split("\n");
+  return lines.map(line => {
+    const trimmed = line.trim();
+    if (!trimmed) return { text: line, mode: null };
+    // Dialogue: contains quoted text
+    if (/[""\u201C][^""\u201D]+[""\u201D]/.test(trimmed)) return { text: line, mode: "dialogue" };
+    // Thought: italics markers or internal monologue patterns
+    if (/^[*_].*[*_]$/.test(trimmed) || /\b(thought|wondered|realized|felt|knew|remembered|wished)\b/i.test(trimmed)) return { text: line, mode: "thought" };
+    // Action: starts with subject + active verb, shorter sentences, movement verbs
+    if (/^(She|He|They|I|We|The|A)\s+(walked|ran|grabbed|pulled|pushed|jumped|turned|looked|moved|stood|sat|fell|threw|kicked|punched|drew|swung|dodged|ducked|leapt|lunged|dashed|sprinted|crept|crawled|climbed|stepped|reached|opened|closed|slammed)/i.test(trimmed)) return { text: line, mode: "action" };
+    if (trimmed.length < 80 && /\b(grabbed|slammed|rushed|burst|dashed|crashed|leapt|dodged|struck|blocked|swung|fired)\b/i.test(trimmed)) return { text: line, mode: "action" };
+    // Exposition: longer text, descriptive, scene-setting
+    return { text: line, mode: "exposition" };
+  });
+};
+
+const EditorColorOverlay = memo(({ editorRef, colorMode, characters, scrollTop }) => {
+  const [segments, setSegments] = useState([]);
+  const [hoveredChar, setHoveredChar] = useState(null); // { charId, x, y }
+  const overlayRef = useRef(null);
+
+  const charColors = useMemo(() => _charColorMap(characters), [characters]);
+
+  // Parse editor content when colorMode or content changes
+  useEffect(() => {
+    if (colorMode === "off" || !editorRef.current) { setSegments([]); return; }
+    const el = editorRef.current;
+    const plain = el.innerText || "";
+    if (!plain.trim()) { setSegments([]); return; }
+
+    if (colorMode === "voice") {
+      setSegments(_parseDialogueVoices(plain, charColors));
+    } else if (colorMode === "narrative") {
+      setSegments(_parseNarrativeMode(plain));
+    }
+  }, [colorMode, editorRef, charColors, scrollTop]); // scrollTop as proxy for content change
+
+  if (colorMode === "off" || segments.length === 0) return null;
+
+  const charInfo = hoveredChar ? charColors[hoveredChar.charId] : null;
+
+  return (
+    <>
+      <style>{`
+        .nf-color-overlay { position: absolute; inset: 0; pointer-events: none; overflow: hidden; z-index: 1; }
+        .nf-color-line { pointer-events: auto; transition: background 0.15s; border-radius: 2px; }
+        .nf-color-line:hover { filter: brightness(1.2); }
+        .nf-voice-popup { position: fixed; z-index: 10000; background: var(--nf-dialog-bg); border: 1px solid var(--nf-border); border-radius: 8px; padding: 6px 10px; display: flex; align-items: center; gap: 8px; box-shadow: var(--nf-shadow); pointer-events: none; animation: nf-fadeIn 0.1s ease-out; }
+      `}</style>
+      {/* Color bar gutter — thin strips on the left margin */}
+      <div style={{
+        position: "absolute", top: 0, left: 0, width: 4, bottom: 0, zIndex: 2, pointerEvents: "none",
+        display: "flex", flexDirection: "column",
+      }}>
+        {segments.map((seg, i) => {
+          if (colorMode === "voice") {
+            const info = seg.speaker ? charColors[seg.speaker] : null;
+            return (
+              <div key={i} style={{
+                flex: "0 0 auto", height: `${100 / Math.max(segments.length, 1)}%`, minHeight: 2,
+                background: info ? info.color : "transparent", opacity: info ? 0.6 : 0,
+                transition: "background 0.2s, opacity 0.2s",
+                pointerEvents: info ? "auto" : "none", cursor: info ? "pointer" : "default",
+              }}
+                onMouseEnter={(e) => info && setHoveredChar({ charId: seg.speaker, x: e.clientX + 12, y: e.clientY - 10 })}
+                onMouseLeave={() => setHoveredChar(null)}
+              />
+            );
+          } else {
+            const color = seg.mode ? NARRATIVE_BORDER[seg.mode] : "transparent";
+            return <div key={i} style={{ flex: "0 0 auto", height: `${100 / Math.max(segments.length, 1)}%`, minHeight: 2, background: color, opacity: seg.mode ? 0.8 : 0 }} />;
+          }
+        })}
+      </div>
+      {/* Character hover popup */}
+      {hoveredChar && charInfo && (
+        <div className="nf-voice-popup" style={{ top: hoveredChar.y, left: hoveredChar.x }}>
+          {charInfo.image ? (
+            <img src={charInfo.image} alt="" style={{ width: 28, height: 28, borderRadius: "50%", objectFit: "cover", border: `2px solid ${charInfo.color}`, flexShrink: 0 }} />
+          ) : (
+            <div style={{ width: 28, height: 28, borderRadius: "50%", background: charInfo.color, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, color: "#fff", fontWeight: 600, flexShrink: 0 }}>
+              {charInfo.name[0]}
+            </div>
+          )}
+          <div>
+            <div style={{ fontSize: 11, fontWeight: 600, color: charInfo.color }}>{charInfo.name}</div>
+            <div style={{ fontSize: 9, color: "var(--nf-text-muted)" }}>speaking</div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+});
+
+// Color mode toggle bar
+const ColorModeBar = memo(({ colorMode, setColorMode, characters }) => {
+  const charColors = useMemo(() => _charColorMap(characters), [characters]);
+  return (
+    <div style={{
+      display: "flex", alignItems: "center", gap: 4, padding: "3px 12px",
+      borderBottom: colorMode !== "off" ? "1px solid var(--nf-border)" : "none",
+      background: colorMode !== "off" ? "var(--nf-bg-raised)" : "transparent",
+      minHeight: colorMode !== "off" ? 28 : 0, overflow: "hidden",
+      transition: "min-height 0.2s, padding 0.2s, background 0.2s",
+    }}>
+      {colorMode !== "off" && (
+        <>
+          {colorMode === "voice" && (
+            <div style={{ display: "flex", alignItems: "center", gap: 6, flex: 1, overflow: "hidden" }}>
+              <span style={{ fontSize: 9, color: "var(--nf-text-muted)", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 600, flexShrink: 0 }}>Voice</span>
+              <div style={{ display: "flex", gap: 4, overflow: "hidden", flexWrap: "nowrap" }}>
+                {Object.entries(charColors).slice(0, 8).map(([id, info]) => (
+                  <div key={id} style={{ display: "flex", alignItems: "center", gap: 3, flexShrink: 0 }}>
+                    <div style={{ width: 8, height: 8, borderRadius: "50%", background: info.color, flexShrink: 0 }} />
+                    <span style={{ fontSize: 9, color: info.color, fontWeight: 500, whiteSpace: "nowrap" }}>{info.name.split(/\s+/)[0]}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          {colorMode === "narrative" && (
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flex: 1 }}>
+              <span style={{ fontSize: 9, color: "var(--nf-text-muted)", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 600, flexShrink: 0 }}>Mode</span>
+              {Object.entries(NARRATIVE_COLORS).map(([mode, color]) => (
+                <div key={mode} style={{ display: "flex", alignItems: "center", gap: 3 }}>
+                  <div style={{ width: 8, height: 3, borderRadius: 1, background: NARRATIVE_BORDER[mode], flexShrink: 0 }} />
+                  <span style={{ fontSize: 9, color: "var(--nf-text-muted)", textTransform: "capitalize" }}>{mode}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          <button onClick={() => setColorMode("off")} className="nf-btn-icon" style={{ padding: 2, opacity: 0.5 }}><Icons.X /></button>
+        </>
+      )}
+    </div>
+  );
+});
+
+
 const GlyphRail = memo(({ saveStatus, isGenerating, wordProgress, characters, detectedCharIds, relationships, sessionProgress }) => {
   const CW = 22;
   const CH = 125;
@@ -7235,10 +7518,12 @@ export default function NovelForge() {
   const [deleteConfirmText, setDeleteConfirmText] = useState(""); // E7: Type-to-confirm delete
   const [flushConfirm, setFlushConfirm] = useState(false);
   const [charSuggestions, setCharSuggestions] = useState(null);
+  const [fillReview, setFillReview] = useState(null); // { type: 'character'|'world', entityId, original, proposed, fields }
   const [whiteRoom, setWhiteRoom] = useState(null); // { char1Id, char2Id, tension, result, isGenerating }
   const [showTimeline, setShowTimeline] = useState(false);
   const [showRelWeb, setShowRelWeb] = useState(false);
   const [cleanView, setCleanView] = useState(false); // Full-screen reader mode
+  const [colorMode, setColorMode] = useState("off"); // "off" | "voice" | "narrative"
   const [pdfExportMode, setPdfExportMode] = useState(null);
   const [imagePromptData, setImagePromptData] = useState(null); // { prompt, mentionedChars, primaryWorld, worldRefImages }
   const imagePromptAbortRef = useRef(null);
@@ -7273,6 +7558,7 @@ export default function NovelForge() {
   const [undoState, undoDispatch] = useReducer(undoReducer, { past: [], future: [] });
 
   const showToast = useCallback((message, type = "info") => setToast({ message, type, key: Date.now() }), []);
+
   const toggleTheme = useCallback(() => setTheme(prev => prev === "dark" ? "light" : "dark"), []);
 
   const themeVars = useMemo(() => Object.entries(THEMES[theme]).map(([k, v]) => `${k}: ${v};`).join("\n"), [theme]);
@@ -7568,6 +7854,69 @@ export default function NovelForge() {
   // ─── DERIVED STATE ───
   const project = useMemo(() => projects.find(p => p.id === activeProjectId) || null, [projects, activeProjectId]);
   const activeChapter = useMemo(() => project?.chapters?.[activeChapterIdx] || null, [project, activeChapterIdx]);
+
+  // ─── UNIVERSAL AI FILL: works for characters, world entries, relationships ───
+  const handleUniversalFill = useCallback(async (type, entityId) => {
+    if (!settings.apiKey || !project) return;
+    let entity, fields, contextInfo, prompt;
+    if (type === "character") {
+      entity = project.characters?.find(c => c.id === entityId);
+      if (!entity?.name) { showToast("Name the character first", "error"); return; }
+      fields = ["appearance","personality","backstory","desires","shortTermGoals","longTermGoals","speechPattern","voiceSamples","habits","fears","flaws","strengths","skills","internalConflict","externalConflict","signatureItems","secrets","allegiances","arc","canonNotes","occupation","tags","orientation"];
+      contextInfo = ContextEngine.buildTabContext(project, activeChapterIdx, "characters", entityId);
+      const emptyFields = fields.filter(f => !entity[f]);
+      const filledFields = fields.filter(f => entity[f]).map(f => `${f}: ${entity[f]}`);
+      prompt = `Fill in ONLY these empty fields for character "${entity.name}" (${entity.role}): ${emptyFields.join(", ")}.\n\nAlready filled:\n${filledFields.join("\n")}\n\nReturn ONLY a JSON object with the field names as keys. Do NOT include fields that already have content. Be creative, genre-appropriate (${project.genre || "fiction"}), and consistent.`;
+    } else if (type === "world") {
+      entity = project.worldBuilding?.find(w => w.id === entityId);
+      if (!entity?.name) { showToast("Name the entry first", "error"); return; }
+      fields = ["description","keywords","atmosphere","sensoryDetails","subLocations","dangers","rules","population","history","culturalNorms","resources","orgPurpose"];
+      contextInfo = ContextEngine.buildTabContext(project, activeChapterIdx, "world", entityId);
+      const emptyFields = fields.filter(f => !entity[f]);
+      const filledFields = fields.filter(f => entity[f]).map(f => `${f}: ${entity[f]}`);
+      prompt = `Fill in ONLY these empty fields for world entry "${entity.name}" (${entity.category || "Location"}): ${emptyFields.join(", ")}.\n\nAlready filled:\n${filledFields.join("\n")}\n\nReturn ONLY a JSON object. Be creative, consistent with the world.`;
+    } else if (type === "relationship") {
+      entity = project.relationships?.find(r => r.id === entityId);
+      if (!entity) return;
+      const c1 = project.characters?.find(c => c.id === entity.char1);
+      const c2 = project.characters?.find(c => c.id === entity.char2);
+      fields = ["dynamic","chemistry","conflictSource","sharedSecrets","keyScenes","terms","taboos","progression","char1Perspective","char2Perspective","evolutionTimeline"];
+      contextInfo = ContextEngine.buildTabContext(project, activeChapterIdx, "relationships", entityId);
+      const emptyFields = fields.filter(f => !entity[f]);
+      const filledFields = fields.filter(f => entity[f]).map(f => `${f}: ${entity[f]}`);
+      prompt = `Fill in ONLY these empty fields for the relationship between "${c1?.name || "?"}" and "${c2?.name || "?"}" (${entity.category}, ${entity.status}): ${emptyFields.join(", ")}.\n\nAlready filled:\n${filledFields.join("\n")}\n\nReturn ONLY a JSON object. Be creative and consistent.`;
+    } else return;
+    showToast("AI is filling empty fields...", "info");
+    try {
+      const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${settings.apiKey}`, "HTTP-Referer": window.location.origin, "X-Title": "NovelForge" },
+        body: JSON.stringify({
+          model: settings.model,
+          messages: [
+            { role: "system", content: `You are a fiction writing assistant. Fill empty fields with creative, genre-appropriate content.\n\n${contextInfo}\n\nRULES:\n- Return ONLY valid JSON — no markdown, no backticks, no explanation.\n- Only include fields that are currently empty.\n- Be creative and specific.\n- Make content consistent with existing filled fields.` },
+            { role: "user", content: prompt },
+          ],
+          max_tokens: 2500, temperature: 0.85,
+        }),
+      });
+      const data = await res.json();
+      let content = stripThinkingTokens(data.choices?.[0]?.message?.content || "").trim();
+      content = content.replace(/^```json?\s*/i, "").replace(/\s*```$/i, "").trim();
+      const proposed = JSON.parse(content);
+      if (typeof proposed !== "object" || proposed === null) throw new Error("Invalid response");
+      const reviewFields = [];
+      for (const [key, value] of Object.entries(proposed)) {
+        if (!fields.includes(key)) continue;
+        const original = entity[key] || "";
+        const isModification = original && original !== value;
+        reviewFields.push({ key, label: key.replace(/([A-Z])/g, " $1").replace(/^./, s => s.toUpperCase()), original, proposed: value, isModification });
+      }
+      if (reviewFields.length === 0) { showToast("AI found nothing to fill", "info"); return; }
+      setFillReview({ type, entityId, fields: reviewFields });
+    } catch (e) { showToast(`Fill failed: ${e.message}`, "error"); }
+  }, [settings, project, activeChapterIdx, showToast]);
+
   const editingChar = useMemo(() => {
     if (!editingCharId || !project?.characters) return null;
     return project.characters.find(c => c.id === editingCharId) || null;
@@ -9555,8 +9904,11 @@ CRITICAL: Every sentence must describe something visible. If a detail cannot be 
 
       // FIX: Always restore images before creating the Drive copy
       const localProjects = JSON.parse(JSON.stringify(projects));
-      const projectsForDrive = GDriveImages.resolveImages(JSON.parse(JSON.stringify(projects)));
-      GDriveImages.markImages(projectsForDrive);
+      const projectsForDrive = JSON.parse(JSON.stringify(projects)).map(p => {
+        GDriveImages.resolveImages(p);
+        GDriveImages.markImages(p);
+        return p;
+      });
 
       const drivePayload = {
         projects: projectsForDrive,
@@ -9692,8 +10044,11 @@ CRITICAL: Every sentence must describe something visible. If a detail cannot be 
 
           // FIX: Restore images locally, strip for Drive
           const localProjects = JSON.parse(JSON.stringify(projects));
-          const projectsForDrive = GDriveImages.resolveImages(JSON.parse(JSON.stringify(projects)));
-          GDriveImages.markImages(projectsForDrive);
+          const projectsForDrive = JSON.parse(JSON.stringify(projects)).map(p => {
+            GDriveImages.resolveImages(p);
+            GDriveImages.markImages(p);
+            return p;
+          });
 
           await GDrive.saveToDrive({
             projects: projectsForDrive,
@@ -10526,7 +10881,7 @@ CRITICAL: Every sentence must describe something visible. If a detail cannot be 
             <span style={{ fontWeight: 600, fontSize: 10 }}>Selected</span>
             <span style={{ opacity: 0.6, fontSize: 10 }}>({wordCount(selectedText)} words)</span>
           </div>
-          <div style={{ fontSize: 10.5, color: "var(--nf-text-muted)", lineHeight: 1.4, maxHeight: 36, overflow: "hidden" }}>
+          <div style={{ fontSize: 10, color: "var(--nf-text-muted)", lineHeight: 1.4, maxHeight: 36, overflow: "hidden" }}>
             "{selectedText.slice(0, 100)}{selectedText.length > 100 ? "…" : ""}"
           </div>
           <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginTop: 5 }}>
@@ -10773,7 +11128,7 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
           <div className="nf-chat-empty">
             <div style={{ fontSize: 24, marginBottom: 8, opacity: 0.25 }}>✦</div>
             <div>Select a mode and describe what you need.</div>
-            <div style={{ marginTop: 6, fontSize: 10.5, opacity: 0.5 }}>Tap mode buttons for details.</div>
+            <div style={{ marginTop: 6, fontSize: 10, opacity: 0.5 }}>Tap mode buttons for details.</div>
             <div style={{ marginTop: 10, fontSize: 10, opacity: 0.35 }}>
               Enter to send · {navigator.platform?.includes("Mac") ? "⌘" : "Ctrl"}+Enter from anywhere
             </div>
@@ -11535,6 +11890,16 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
               {focusMode ? <Icons.Minimize /> : <Icons.Maximize />}
             </button>
             <button onClick={() => setCleanView(true)} className="nf-btn-icon-sm" title="Clean view — read your chapters"><Icons.Eye /> Read</button>
+            <Tooltip text="Color: Character voices">
+              <button onClick={() => setColorMode(prev => prev === "voice" ? "off" : "voice")} className="nf-btn-icon-sm" style={colorMode === "voice" ? { borderColor: "var(--nf-accent)", color: "var(--nf-accent)" } : {}} aria-label="Character voice colors">
+                <Icons.Users /> {!isMobile && "Voice"}
+              </button>
+            </Tooltip>
+            <Tooltip text="Color: Narrative mode">
+              <button onClick={() => setColorMode(prev => prev === "narrative" ? "off" : "narrative")} className="nf-btn-icon-sm" style={colorMode === "narrative" ? { borderColor: "var(--nf-accent-2)", color: "var(--nf-accent-2)" } : {}} aria-label="Narrative mode colors">
+                <Icons.Layers /> {!isMobile && "Mode"}
+              </button>
+            </Tooltip>
             <Tooltip text="Export to PDF">
               <button onClick={() => setPdfExportMode("menu")} className="nf-btn-icon-sm"><Icons.FileText /></button>
             </Tooltip>
@@ -11580,6 +11945,7 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
           />
         )}
         <RichTextToolbar editorRef={editorRef} onContentChange={syncEditorContent} />
+        <ColorModeBar colorMode={colorMode} setColorMode={setColorMode} characters={project?.characters} />
         <div className="nf-editor-split">
           {!focusMode && (
             <GlyphRail
@@ -11620,6 +11986,7 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
               prevChapterSummary={activeChapterIdx > 0 ? project?.chapters?.[activeChapterIdx - 1]?.summary : ""}
               currentContent={activeChapter?.content}
             />
+            <div style={{ position: "relative", flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
             <div ref={editorRef} contentEditable="true" suppressContentEditableWarning
               className="nf-editor-contenteditable"
               spellCheck="true"
@@ -11766,6 +12133,8 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
 				  }
 				}
 			  }} />
+              <EditorColorOverlay editorRef={editorRef} colorMode={colorMode} characters={project?.characters} scrollTop={activeChapter?.content?.length || 0} />
+            </div>
           {/* ─── INLINE IMAGE PROMPT BOX ─── */}
           {imagePromptData && (
             <div style={{
@@ -11984,7 +12353,15 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
           <div className="nf-chapter-sidebar-header">
             <span className="nf-section-label">Characters ({chars.length})</span>
             <button onClick={() => { const nc = createDefaultCharacter(); updateProject({ characters: [...chars, nc] }); setEditingCharId(nc.id); }}
-              className="nf-btn-icon-sm" aria-label="Add character"><Icons.Plus /></button>
+              className="nf-btn-icon-sm" aria-label="Add character"><Icons.Plus /> Character</button>
+            <button onClick={() => {
+              const name = prompt("Group name (e.g. 'Police Officers', 'Palace Guards'):");
+              if (!name) return;
+              const count = parseInt(prompt("How many individuals? (e.g. 150)") || "10") || 10;
+              const desc = prompt("Brief description (e.g. 'Beat cops at the 15th precinct, mostly jaded veterans'):") || "";
+              const nc = createBulkCharacterGroup(name, count, desc);
+              updateProject({ characters: [...chars, nc] }); setEditingCharId(nc.id);
+            }} className="nf-btn-icon-sm" aria-label="Add bulk group" style={{ color: "var(--nf-accent-2)", borderColor: "var(--nf-accent-2)" }}><Icons.Users /> Group</button>
           </div>
           <div className="nf-chapter-list" style={{ padding: 6 }}>
             {chars.map(c => (
@@ -12005,6 +12382,11 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                 }}>
                   {c.image ? (
                     <img src={c.image} alt={c.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                  ) : c.isBulk ? (
+                    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2, opacity: 0.3 }}>
+                      <Icons.Users />
+                      <span style={{ fontSize: 8, color: "var(--nf-text-muted)" }}>{c.bulkCount || "?"}×</span>
+                    </div>
                   ) : (
                     <span style={{ fontSize: 20, opacity: 0.15, color: "var(--nf-text-muted)" }}>
                       {c.name ? c.name[0].toUpperCase() : "?"}
@@ -12038,8 +12420,15 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
           {editingChar ? (<>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
               <div>
-                <h2 className="nf-page-title" style={{ marginBottom: 0 }}>{editingChar.name || "New Character"}</h2>
-                {(() => {
+                <h2 className="nf-page-title" style={{ marginBottom: 0 }}>
+                  {editingChar.isBulk && <span style={{ fontSize: 12, color: "var(--nf-accent-2)", marginRight: 6 }}>👥</span>}
+                  {editingChar.name || "New Character"}
+                </h2>
+                {editingChar.isBulk ? (
+                  <div style={{ fontSize: 10, color: "var(--nf-accent-2)", marginTop: 2 }}>
+                    Bulk group — {editingChar.bulkCount || "?"} individuals (background characters, not individually developed)
+                  </div>
+                ) : (() => {
                   const checkFields = ["appearance","personality","backstory","desires","speechPattern","fears","flaws","strengths","skills","internalConflict","externalConflict","shortTermGoals","longTermGoals","habits","voiceSamples","signatureItems","secrets","arc"];
                   const emptyCount = checkFields.filter(f => !editingChar[f]).length;
                   return emptyCount > 0 ? (
@@ -12050,54 +12439,11 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                     <div style={{ fontSize: 10, color: "var(--nf-success)", marginTop: 2 }}>✓ All key fields populated</div>
                   );
                 })()}
+                })()}
               </div>
               <div style={{ display: "flex", gap: 6 }}>
-                {settings.apiKey && editingChar.name && (
-                  <button onClick={() => {
-                    const fillMsg = `Fill in all empty fields for ${editingChar.name}. Keep it genre-appropriate (${project?.genre || "fiction"}), consistent with their existing personality and role. Be creative and specific. Make sure everything fits together as a coherent, compelling character.`;
-                    showToast("Sending to AI — check the chat panel for results", "info");
-                    // Inject as a user message and trigger the tab chat
-                    const chatMsgs = getTabMessages("characters");
-                    const userMsg = { id: uid(), role: "user", content: fillMsg };
-                    setTabMessages("characters")(prev => [...prev, userMsg]);
-                    // Build context and call API directly
-                    (async () => {
-                      try {
-                        const contextInfo = ContextEngine.buildTabContext(project, activeChapterIdx, "characters", editingCharId);
-                        const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-                          method: "POST",
-                          headers: { "Content-Type": "application/json", "Authorization": `Bearer ${settings.apiKey}`, "HTTP-Referer": window.location.origin, "X-Title": "NovelForge" },
-                          body: JSON.stringify({
-                            model: settings.model,
-                            messages: [
-                              { role: "system", content: `You are an expert fiction writing assistant. You are helping with characters — create, flesh out, or brainstorm character details.\n\n${contextInfo}\n\nRULES:\n- Be conversational and helpful.\n- Use **bold** and *italic* markdown.\n- When generating structured data, wrap in a JSON code block:\n\`\`\`json\n{ "type": "characters", "data": { ... } }\n\`\`\`\n- For CHARACTER: name, role, gender, age, pronouns, aliases, occupation, title, height, build, tags, appearance, personality, backstory, backstoryRevealChapter, desires, shortTermGoals, longTermGoals, speechPattern, voiceSamples, habits, fears, flaws, strengths, skills, internalConflict, externalConflict, signatureItems, secrets, hiddenSecrets, secretRevealChapter, allegiances, kinks, arc, canonNotes, firstAppearanceChapter, status\n- When filling in empty fields, ONLY fill fields listed as [Empty]. Do NOT overwrite existing content.\n- Be creative, specific, genre-aware.\n- Make sure suggestions are consistent with existing characters and world.` },
-                              { role: "user", content: fillMsg },
-                            ],
-                            max_tokens: 3000,
-                            temperature: 0.85,
-                          }),
-                        });
-                        const data = await res.json();
-                        const content = stripThinkingTokens(data.choices?.[0]?.message?.content || "");
-                        let hasAutoFill = false;
-                        try {
-                          const jsonBlocks = [...content.matchAll(/```json\s*([\s\S]*?)```/g)];
-                          for (const match of jsonBlocks) {
-                            try {
-                              const p = JSON.parse(match[1]);
-                              if (typeof p === "object" && p !== null) { hasAutoFill = true; break; }
-                            } catch {}
-                          }
-                        } catch {}
-                        setTabMessages("characters")(prev => [...prev, { id: uid(), role: "assistant", content, hasAutoFill }]);
-                        if (hasAutoFill) showToast("AI generated fill data — click Apply in the chat", "success");
-                        else showToast("AI responded — check the chat panel", "info");
-                      } catch (err) {
-                        setTabMessages("characters")(prev => [...prev, { id: uid(), role: "assistant", content: `Error: ${err.message}`, isError: true }]);
-                        showToast(`Fill failed: ${err.message}`, "error");
-                      }
-                    })();
-                  }} className="nf-btn" style={{ fontSize: 11 }}>
+                {settings.apiKey && editingChar.name && !editingChar.isBulk && (
+                  <button onClick={() => handleUniversalFill("character", editingCharId)} className="nf-btn" style={{ fontSize: 11 }}>
                     <Icons.Wand /> Fill Empty Fields
                   </button>
                 )}
@@ -12229,6 +12575,7 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
                 <SelectField label="Pronouns" value={editingChar.pronouns} onChange={v => updateCharById(editingCharId, "pronouns", v)} options={PRONOUN_OPTIONS} placeholder="Select..." />
               </div>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "0 12px" }}>
+                <SelectField label="Orientation" value={editingChar.orientation || ""} onChange={v => updateCharById(editingCharId, "orientation", v)} options={ORIENTATION_OPTIONS} placeholder="Select..." />
                 <Field label="Age" value={editingChar.age} onChange={v => updateCharById(editingCharId, "age", v)} placeholder="Age or age range" />
                 {/* Occupation: auto-derived from org hierarchy if assigned, otherwise manual */}
                 {(() => {
@@ -12244,7 +12591,7 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
                     <div className="nf-field" style={{ flex: 1 }}>
                       <label className="nf-label" style={{ display: "flex", alignItems: "center", gap: 6 }}>
                         Occupation / Title
-                        {orgPositions.length > 0 && <span style={{ fontSize: 7, padding: "1px 4px", borderRadius: 2, background: "var(--nf-accent-glow-2)", border: "1px solid var(--nf-accent-2)", color: "var(--nf-accent-2)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em" }}>from org</span>}
+                        {orgPositions.length > 0 && <span style={{ fontSize: 8, padding: "1px 4px", borderRadius: 2, background: "var(--nf-accent-glow-2)", border: "1px solid var(--nf-accent-2)", color: "var(--nf-accent-2)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em" }}>from org</span>}
                       </label>
                       {orgPositions.length > 0 ? (
                         <div>
@@ -12288,7 +12635,7 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
                     <div className="nf-field" style={{ flex: 1 }}>
                       <label className="nf-label" style={{ display: "flex", alignItems: "center", gap: 6 }}>
                         Allegiances / Factions
-                        {derived && <span style={{ fontSize: 7, padding: "1px 4px", borderRadius: 2, background: "var(--nf-accent-glow-2)", border: "1px solid var(--nf-accent-2)", color: "var(--nf-accent-2)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em" }}>from orgs</span>}
+                        {derived && <span style={{ fontSize: 8, padding: "1px 4px", borderRadius: 2, background: "var(--nf-accent-glow-2)", border: "1px solid var(--nf-accent-2)", color: "var(--nf-accent-2)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em" }}>from orgs</span>}
                       </label>
                       {derived && <div style={{ fontSize: 10, color: "var(--nf-accent-2)", padding: "3px 8px", background: "var(--nf-accent-glow-2)", border: "1px solid var(--nf-accent-2)", borderRadius: 2, marginBottom: 3 }}>{derived}</div>}
                       <DebouncedField value={editingChar.allegiances || ""} onChange={v => updateCharById(editingCharId, "allegiances", v)} placeholder={derived ? "Additional allegiances..." : "e.g. Order of the Phoenix, Team Alpha"} small />
@@ -12804,6 +13151,74 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
                         {/* ─── NEW: Organization Hierarchy ─── */}
                         {item.category === "Organization" && (
                           <div style={{ marginTop: 12, padding: "10px 12px", background: "var(--nf-bg-deep)", border: "1px solid var(--nf-border)", borderRadius: 2 }}>
+                            {/* ─── Org Logo + Group Photo (TOP) ─── */}
+                            <div style={{ display: "flex", gap: 12, marginBottom: 10 }}>
+                              {/* Logo */}
+                              <div style={{ flexShrink: 0, textAlign: "center" }}>
+                                <div style={{ fontSize: 8, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--nf-text-muted)", marginBottom: 4 }}>Logo</div>
+                                <div style={{ width: 56, height: 56, borderRadius: 4, background: "var(--nf-bg-surface)", border: `1px ${item.orgLogo ? "solid" : "dashed"} var(--nf-border)`, display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", cursor: "pointer", position: "relative" }}
+                                  onClick={async () => {
+                                    if (!settings.apiKey || !item.name) { showToast("Name the org and set API key first", "error"); return; }
+                                    showToast("Generating logo...", "info");
+                                    try {
+                                      const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+                                        method: "POST",
+                                        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${settings.apiKey}`, "HTTP-Referer": window.location.origin, "X-Title": "NovelForge" },
+                                        body: JSON.stringify({ model: "google/gemini-3.1-flash-image-preview", messages: [{ role: "user", content: `Create a simple, clean logo/emblem/crest for an organization called "${item.name}". ${item.orgPurpose ? `Purpose: ${item.orgPurpose}. ` : ""}Style: minimalist Japandi aesthetic, clean lines, muted earth tones, on a plain dark background. Square format, icon-only, no text.` }], modalities: ["image", "text"], max_tokens: 4096 }),
+                                      });
+                                      const data = await res.json();
+                                      const img = data.choices?.[0]?.message?.images?.[0]?.image_url?.url;
+                                      if (img) { updateProject({ worldBuilding: items.map(it => it.id === item.id ? { ...it, orgLogo: img } : it) }); showToast("Logo generated", "success"); }
+                                      else showToast("No image returned", "error");
+                                    } catch (e) { showToast(`Failed: ${e.message}`, "error"); }
+                                  }}>
+                                  {item.orgLogo ? (
+                                    <img src={item.orgLogo} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                                  ) : (
+                                    <span style={{ fontSize: 10, color: "var(--nf-text-muted)", opacity: 0.4 }}>✦</span>
+                                  )}
+                                  {item.orgLogo && <button onClick={(e) => { e.stopPropagation(); updateProject({ worldBuilding: items.map(it => it.id === item.id ? { ...it, orgLogo: "" } : it) }); }} style={{ position: "absolute", top: 1, right: 1, background: "rgba(0,0,0,0.6)", border: "none", color: "#fff", borderRadius: 2, padding: "0 3px", fontSize: 9, cursor: "pointer", lineHeight: 1.4 }}>×</button>}
+                                </div>
+                              </div>
+                              {/* Group Photo (moved to top) */}
+                              {Array.isArray(item.orgHierarchy) && item.orgHierarchy.some(p => p.charId) && (
+                                <div style={{ flex: 1 }}>
+                                  {item.orgGroupPhoto ? (
+                                    <div style={{ position: "relative", borderRadius: 3, overflow: "hidden" }}>
+                                      <img src={item.orgGroupPhoto} alt={`${item.name} group`} style={{ width: "100%", maxHeight: 120, objectFit: "cover", borderRadius: 3, border: "1px solid var(--nf-border)" }} />
+                                      <button onClick={() => updateProject({ worldBuilding: items.map(it => it.id === item.id ? { ...it, orgGroupPhoto: "" } : it) })} style={{ position: "absolute", top: 3, right: 3, background: "rgba(0,0,0,0.6)", border: "none", color: "#fff", borderRadius: 2, padding: "1px 4px", fontSize: 9, cursor: "pointer" }}>×</button>
+                                    </div>
+                                  ) : (
+                                    <div style={{ display: "flex", gap: 4, flexWrap: "wrap", alignItems: "center" }}>
+                                      <button onClick={async () => {
+                                        if (!settings.apiKey) { showToast("Set API key", "error"); return; }
+                                        showToast("Generating group photo prompt...", "info");
+                                        try {
+                                          const members = item.orgHierarchy.filter(p => p.charId).map(p => { const ch = (project?.characters || []).find(c => c.id === p.charId); if (!ch || ch.isBulk) return null; return { name: ch.name, role: p.name, appearance: ch.appearance || "", lookAlike: ch.lookAlike || "", gender: ch.gender || "", build: ch.build || "" }; }).filter(Boolean);
+                                          if (!members.length) { showToast("No non-bulk members", "error"); return; }
+                                          const memberDescs = members.map(m => `- ${m.name} (${m.role}): ${m.appearance || "no desc"}${m.lookAlike ? ` [looks like ${m.lookAlike}]` : ""}`).join("\n");
+                                          const res = await fetch("https://openrouter.ai/api/v1/chat/completions", { method: "POST", headers: { "Content-Type": "application/json", "Authorization": `Bearer ${settings.apiKey}`, "HTTP-Referer": window.location.origin, "X-Title": "NovelForge" }, body: JSON.stringify({ model: settings.model, messages: [{ role: "system", content: "Create a COMPLETE image generation prompt for a formal group portrait. Every person fully described. Output ONLY the prompt." }, { role: "user", content: `Group photo for "${item.name}".\nMembers:\n${memberDescs}\n\nFormal group portrait, higher ranks center/front, appropriate setting.` }], max_tokens: 1500, temperature: 0.8 }) });
+                                          const data = await res.json();
+                                          const prompt = stripThinkingTokens(data.choices?.[0]?.message?.content || "").trim();
+                                          if (prompt) { updateProject({ worldBuilding: items.map(it => it.id === item.id ? { ...it, orgGroupPhotoPrompt: prompt } : it) }); showToast("Prompt ready — click Render", "success"); }
+                                        } catch (e) { showToast(`Failed: ${e.message}`, "error"); }
+                                      }} className="nf-btn-micro" style={{ fontSize: 9 }}><Icons.Wand /> {item.orgGroupPhotoPrompt ? "Regen Prompt" : "Group Photo"}</button>
+                                      {item.orgGroupPhotoPrompt && <button onClick={async () => {
+                                        showToast("Rendering...", "info");
+                                        try {
+                                          const res = await fetch("https://openrouter.ai/api/v1/chat/completions", { method: "POST", headers: { "Content-Type": "application/json", "Authorization": `Bearer ${settings.apiKey}`, "HTTP-Referer": window.location.origin, "X-Title": "NovelForge" }, body: JSON.stringify({ model: "google/gemini-3.1-flash-image-preview", messages: [{ role: "user", content: item.orgGroupPhotoPrompt }], modalities: ["image", "text"], max_tokens: 4096 }) });
+                                          const data = await res.json();
+                                          const img = data.choices?.[0]?.message?.images?.[0]?.image_url?.url;
+                                          if (img) { updateProject({ worldBuilding: items.map(it => it.id === item.id ? { ...it, orgGroupPhoto: img } : it) }); showToast("Photo rendered", "success"); }
+                                          else showToast("No image", "error");
+                                        } catch (e) { showToast(`Failed: ${e.message}`, "error"); }
+                                      }} className="nf-btn-micro" style={{ fontSize: 9, borderColor: "var(--nf-accent)", color: "var(--nf-accent)" }}><Icons.Sparkle /> Render</button>}
+                                      {item.orgGroupPhotoPrompt && <button onClick={() => { navigator.clipboard.writeText(item.orgGroupPhotoPrompt); showToast("Copied", "success"); }} className="nf-btn-micro" style={{ fontSize: 9 }}><Icons.Copy /></button>}
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+                            </div>
                             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
                               <div style={{ fontSize: 9, fontWeight: 500, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--nf-text-muted)" }}>Organization Hierarchy</div>
                               <button onClick={() => {
@@ -12879,15 +13294,15 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
                                       return d === 0 ? "var(--nf-accent)" : d === 1 ? "var(--nf-accent-2)" : "rgba(160,140,200,0.6)";
                                     })();
                                     return (
-                                      <div style={{ background: "var(--nf-bg-surface)", border: `1px solid var(--nf-border)`, borderTop: `3px solid ${depthColor}`, borderRadius: 3, padding: "8px 8px 6px", width: 170, position: "relative" }}>
+                                      <div style={{ background: "var(--nf-bg-surface)", border: `1px solid var(--nf-border)`, borderTop: `3px solid ${depthColor}`, borderRadius: 3, padding: "8px 8px 6px", width: 180, position: "relative" }}>
                                         <button onClick={() => {
                                           updateProject({ worldBuilding: items.map(it => it.id === item.id ? { ...it, orgHierarchy: item.orgHierarchy.filter((_, i) => i !== posIdx) } : it) });
                                         }} className="nf-btn-icon" style={{ padding: 1, position: "absolute", top: 2, right: 2, opacity: 0.3 }}><Icons.X /></button>
-                                        <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
+                                        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
                                           {linkedChar?.image ? (
-                                            <img src={linkedChar.image} alt="" style={{ width: 32, height: 32, borderRadius: "50%", objectFit: "cover", border: `2px solid ${depthColor}`, flexShrink: 0 }} />
+                                            <img src={linkedChar.image} alt="" style={{ width: 44, height: 44, borderRadius: "50%", objectFit: "cover", border: `2px solid ${depthColor}`, flexShrink: 0 }} />
                                           ) : (
-                                            <div style={{ width: 32, height: 32, borderRadius: "50%", background: "var(--nf-bg-hover)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, color: "var(--nf-text-muted)", border: `2px dashed var(--nf-border)`, flexShrink: 0 }}>
+                                            <div style={{ width: 44, height: 44, borderRadius: "50%", background: "var(--nf-bg-hover)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, color: "var(--nf-text-muted)", border: `2px dashed var(--nf-border)`, flexShrink: 0 }}>
                                               {linkedChar ? (linkedChar.name || "?")[0] : "?"}
                                             </div>
                                           )}
@@ -12896,12 +13311,12 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
                                             <div style={{ fontSize: 9, color: linkedChar ? depthColor : "var(--nf-text-muted)", fontWeight: 500 }}>{linkedChar ? linkedChar.name : "vacant"}</div>
                                           </div>
                                         </div>
-                                        <Field label="" value={pos.name || ""} onChange={v => { const h = [...item.orgHierarchy]; h[posIdx] = { ...h[posIdx], name: v }; updateProject({ worldBuilding: items.map(it => it.id === item.id ? { ...it, orgHierarchy: h } : it) }); }} placeholder="Title" small />
-                                        <SelectField label="" value={pos.charId || ""} onChange={v => { const h = [...item.orgHierarchy]; h[posIdx] = { ...h[posIdx], charId: v }; updateProject({ worldBuilding: items.map(it => it.id === item.id ? { ...it, orgHierarchy: h } : it) }); }} options={[{ value: "", label: "— Vacant —" }, ...charOptions]} />
+                                        <Field label="" value={pos.name || ""} onChange={v => { const h = [...item.orgHierarchy]; h[posIdx] = { ...h[posIdx], name: v }; updateProject({ worldBuilding: items.map(it => it.id === item.id ? { ...it, orgHierarchy: h } : it) }); }} placeholder="Title" small style={{ fontSize: 10 }} />
+                                        <SelectField label="" value={pos.charId || ""} onChange={v => { const h = [...item.orgHierarchy]; h[posIdx] = { ...h[posIdx], charId: v }; updateProject({ worldBuilding: items.map(it => it.id === item.id ? { ...it, orgHierarchy: h } : it) }); }} options={[{ value: "", label: "— Vacant —" }, ...charOptions]} style={{ fontSize: 10 }} />
                                         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4 }}>
-                                          <Field label="" value={pos.role || ""} onChange={v => { const h = [...item.orgHierarchy]; h[posIdx] = { ...h[posIdx], role: v }; updateProject({ worldBuilding: items.map(it => it.id === item.id ? { ...it, orgHierarchy: h } : it) }); }} placeholder="Role desc" small />
+                                          <Field label="" value={pos.role || ""} onChange={v => { const h = [...item.orgHierarchy]; h[posIdx] = { ...h[posIdx], role: v }; updateProject({ worldBuilding: items.map(it => it.id === item.id ? { ...it, orgHierarchy: h } : it) }); }} placeholder="Role desc" small style={{ fontSize: 10 }} />
                                           {hier.filter(p => p.id !== pos.id && p.name).length > 0 ? (
-                                            <SelectField label="" value={pos.parentId || ""} onChange={v => { const h = [...item.orgHierarchy]; h[posIdx] = { ...h[posIdx], parentId: v }; updateProject({ worldBuilding: items.map(it => it.id === item.id ? { ...it, orgHierarchy: h } : it) }); }} options={[{ value: "", label: "Top level" }, ...hier.filter(p => p.id !== pos.id && p.name).map(p => ({ value: p.id, label: p.name }))]} />
+                                            <SelectField label="" value={pos.parentId || ""} onChange={v => { const h = [...item.orgHierarchy]; h[posIdx] = { ...h[posIdx], parentId: v }; updateProject({ worldBuilding: items.map(it => it.id === item.id ? { ...it, orgHierarchy: h } : it) }); }} options={[{ value: "", label: "Top level" }, ...hier.filter(p => p.id !== pos.id && p.name).map(p => ({ value: p.id, label: p.name }))]} style={{ fontSize: 10 }} />
                                           ) : <div />}
                                         </div>
                                       </div>
@@ -13229,6 +13644,9 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
                         </div>
                       )}
                       </div>
+                      {settings.apiKey && item.name && (
+                        <button onClick={() => handleUniversalFill("world", item.id)} className="nf-btn-icon" style={{ marginTop: 20, color: "var(--nf-accent-2)" }} aria-label="Fill empty fields"><Icons.Wand /></button>
+                      )}
                       <button onClick={() => updateProject({ worldBuilding: items.filter(it => it.id !== item.id) })} className="nf-btn-icon" style={{ marginTop: 20 }} aria-label="Delete entry"><Icons.Trash /></button>
                     </div>
                   </div>
@@ -13853,7 +14271,8 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
                       <Field label="First Meet (Ch#)" value={r.meetsInChapter || ""} onChange={v => updateProject({ relationships: rels.map(re => re.id === r.id ? { ...re, meetsInChapter: parseInt(v) || 0 } : re) })} placeholder="0 = already met" type="number" small />
                       <Field label="Notes" value={r.notes} onChange={v => updateProject({ relationships: rels.map(re => re.id === r.id ? { ...re, notes: v } : re) })} multiline placeholder="History, turning points..." small />
                     </div>
-                    <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                    <div style={{ display: "flex", justifyContent: "flex-end", gap: 6 }}>
+                      {settings.apiKey && <button onClick={() => handleUniversalFill("relationship", r.id)} className="nf-btn-micro" style={{ borderColor: "var(--nf-accent-2)", color: "var(--nf-accent-2)" }}><Icons.Wand /> Fill Empty</button>}
                       <button onClick={() => updateProject({ relationships: rels.filter(re => re.id !== r.id) })} className="nf-btn-micro nf-btn-micro-danger"><Icons.Trash /> Remove</button>
                     </div>
                   </div>
@@ -14552,53 +14971,72 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
           .nf-project-item:hover { background: var(--nf-bg-hover); transform: translateX(3px); }
           .nf-project-item.active { background: var(--nf-bg-surface); border-color: var(--nf-accent); border-left: 2px solid var(--nf-accent); }
           .nf-project-title { font-size: 13px; font-weight: 500; color: var(--nf-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 2px; font-family: var(--nf-font-display); }
-          .nf-project-meta { font-size: 10.5px; color: var(--nf-text-muted); }
+          .nf-project-meta { font-size: 10px; color: var(--nf-text-muted); }
           
-          .nf-btn { display: inline-flex; align-items: center; gap: 6px; padding: 8px 15px; border-radius: 3px; font-size: 12px; font-weight: 500; cursor: pointer; border: 1px solid var(--nf-border); background: transparent; color: var(--nf-text-dim); transition: all 0.15s; font-family: var(--nf-font-body); letter-spacing: 0.02em; }
+          .nf-btn { display: inline-flex; align-items: center; gap: 6px; padding: 8px 15px; border-radius: 3px; font-size: 12px; font-weight: 500; cursor: pointer; border: 1px solid var(--nf-border); background: transparent; color: var(--nf-text-dim); transition: all 0.2s cubic-bezier(0.4,0,0.2,1); font-family: var(--nf-font-body); letter-spacing: 0.02em; }
           .nf-btn:hover { background: var(--nf-bg-hover); border-color: var(--nf-accent); }
+          .nf-btn:active { transform: scale(0.96); transition-duration: 0.06s; }
           .nf-btn:focus-visible { outline: 2px solid var(--nf-accent); outline-offset: 2px; }
-          .nf-btn-primary { background: var(--nf-accent); border-color: var(--nf-accent); color: #fff; }
+          .nf-btn-primary { background: var(--nf-accent); border-color: var(--nf-accent); color: #fff; position: relative; overflow: hidden; }
           .nf-btn-primary:hover { opacity: 0.9; }
+          .nf-btn-primary:active { transform: scale(0.96); opacity: 0.85; }
+          .nf-btn-primary::after { content: ''; position: absolute; inset: 0; background: linear-gradient(135deg, transparent 40%, rgba(255,255,255,0.12) 50%, transparent 60%); transform: translateX(-100%); transition: transform 0.5s; }
+          .nf-btn-primary:hover::after { transform: translateX(100%); }
           .nf-btn-ghost { background: var(--nf-bg-surface); border-color: var(--nf-border); color: var(--nf-text-dim); }
           .nf-btn-danger { background: var(--nf-danger-bg); border-color: var(--nf-error-border); color: var(--nf-accent); }
           .nf-btn-danger:hover { background: var(--nf-danger-hover); }
-          .nf-btn-icon { background: none; border: none; color: var(--nf-text-muted); cursor: pointer; padding: 4px; display: flex; align-items: center; transition: color 0.15s; }
-          .nf-btn-icon:hover { color: var(--nf-text); transform: rotate(-5deg); }
+          .nf-btn-icon { background: none; border: none; color: var(--nf-text-muted); cursor: pointer; padding: 4px; display: flex; align-items: center; transition: color 0.15s, transform 0.15s; }
+          .nf-btn-icon:hover { color: var(--nf-text); }
+          .nf-btn-icon:active { transform: scale(0.88); transition-duration: 0.06s; }
           .nf-btn-icon:focus-visible { outline: 2px solid var(--nf-accent); outline-offset: 2px; border-radius: 2px; }
-          .nf-btn-icon-sm { background: none; border: 1px solid var(--nf-border); border-radius: var(--nf-radius-sm); color: var(--nf-text-dim); cursor: pointer; padding: 4px 10px; font-size: 11px; font-weight: 500; display: inline-flex; align-items: center; gap: 4px; transition: all 0.15s; font-family: var(--nf-font-body); }
+          .nf-btn-icon-sm { background: none; border: 1px solid var(--nf-border); border-radius: var(--nf-radius-sm); color: var(--nf-text-dim); cursor: pointer; padding: 4px 10px; font-size: 11px; font-weight: 500; display: inline-flex; align-items: center; gap: 4px; transition: all 0.2s cubic-bezier(0.4,0,0.2,1); font-family: var(--nf-font-body); }
           .nf-btn-icon-sm:hover { border-color: var(--nf-accent); background: var(--nf-bg-hover); }
+          .nf-btn-icon-sm:active { transform: scale(0.95); transition-duration: 0.06s; }
           .nf-btn-icon-sm:disabled { opacity: 0.3; cursor: default; pointer-events: none; }
           .nf-btn-icon-sm:focus-visible { outline: 2px solid var(--nf-accent); outline-offset: 2px; }
           .nf-btn-icon-danger:hover { border-color: var(--nf-accent); color: var(--nf-accent); }
-          .nf-btn-micro { background: var(--nf-bg-surface); border: 1px solid var(--nf-border); border-radius: 3px; color: var(--nf-text-dim); cursor: pointer; padding: 3px 8px; font-size: 10px; font-weight: 500; display: inline-flex; align-items: center; gap: 3px; transition: all 0.15s; font-family: var(--nf-font-body); }
-          .nf-btn-micro:hover { border-color: var(--nf-accent); transform: scale(1.04); }
+          .nf-btn-micro { background: var(--nf-bg-surface); border: 1px solid var(--nf-border); border-radius: 3px; color: var(--nf-text-dim); cursor: pointer; padding: 3px 8px; font-size: 10px; font-weight: 500; display: inline-flex; align-items: center; gap: 3px; transition: all 0.2s cubic-bezier(0.4,0,0.2,1); font-family: var(--nf-font-body); }
+          .nf-btn-micro:hover { border-color: var(--nf-accent); }
+          .nf-btn-micro:active { transform: scale(0.95); transition-duration: 0.06s; }
           .nf-btn-micro:disabled { opacity: 0.3; cursor: default; }
           .nf-btn-micro-danger:hover { color: var(--nf-accent); border-color: var(--nf-accent); }
 
           
           /* Physical card interactions — Japandi paper feel */
-          .nf-card { margin-bottom: 14px; padding: 16px; background: var(--nf-bg-raised); border-radius: 2px; border: 1px solid var(--nf-border); transition: transform 0.2s ease, box-shadow 0.2s ease; }
-          .nf-card:hover { transform: rotate(-0.3deg) translateY(-1px); box-shadow: var(--nf-shadow); }
-          .nf-polaroid { background: var(--nf-bg-raised); border: 1px solid var(--nf-border); border-radius: 2px; padding: 8px 8px 16px; transition: transform 0.25s ease, box-shadow 0.25s ease; cursor: pointer; }
-          .nf-polaroid:hover { transform: rotate(-1.5deg) translateY(-3px); box-shadow: var(--nf-shadow-lg); }
+          .nf-card { margin-bottom: 14px; padding: 16px; background: var(--nf-bg-raised); border-radius: 2px; border: 1px solid var(--nf-border); transition: transform 0.25s cubic-bezier(0.34,1.56,0.64,1), box-shadow 0.25s ease, border-color 0.2s; position: relative; }
+          .nf-card:hover { transform: rotate(-0.2deg) translateY(-1px); box-shadow: var(--nf-shadow); }
+          .nf-card:active { transform: scale(0.995); transition-duration: 0.1s; }
+          .nf-card-title { font-size: 14px; font-family: var(--nf-font-display); font-weight: 500; color: var(--nf-text); margin-bottom: 12px; letter-spacing: 0.01em; }
+          .nf-polaroid { background: var(--nf-bg-raised); border: 1px solid var(--nf-border); border-radius: 2px; padding: 8px 8px 16px; transition: transform 0.3s cubic-bezier(0.34,1.56,0.64,1), box-shadow 0.3s, border-color 0.2s; cursor: pointer; }
+          .nf-polaroid:hover { transform: rotate(-1deg) translateY(-2px); box-shadow: var(--nf-shadow-lg); }
+          .nf-polaroid:active { transform: scale(0.97) rotate(0deg); transition-duration: 0.1s; }
+          .nf-polaroid.active { border-color: var(--nf-accent); }
           
           .nf-field { margin-bottom: 10px; }
           .nf-label { display: block; font-size: 10px; font-weight: 700; color: var(--nf-text-dim); margin-bottom: 5px; text-transform: uppercase; letter-spacing: 0.1em; font-family: var(--nf-font-body); }
-          .nf-input { width: 100%; padding: 9px 12px; background: var(--nf-bg-surface); border: 1px solid var(--nf-border); border-radius: var(--nf-radius-sm); color: var(--nf-text); font-size: 13px; outline: none; font-family: var(--nf-font-body); transition: border-color 0.15s; }
-          .nf-textarea { width: 100%; min-height: 76px; padding: 10px 12px; background: var(--nf-bg-surface); border: 1px solid var(--nf-border); border-radius: var(--nf-radius-sm); color: var(--nf-text); font-size: 13px; line-height: 1.6; resize: vertical; outline: none; font-family: var(--nf-font-prose); transition: border-color 0.15s; }
+          .nf-input { width: 100%; padding: 9px 12px; background: var(--nf-bg-surface); border: 1px solid var(--nf-border); border-radius: var(--nf-radius-sm); color: var(--nf-text); font-size: 13px; outline: none; font-family: var(--nf-font-body); transition: border-color 0.2s, background 0.2s; }
+          .nf-input:hover { border-color: var(--nf-text-muted); }
+          .nf-input:focus { border-color: var(--nf-border-focus); background: var(--nf-bg); }
+          .nf-textarea { width: 100%; min-height: 76px; padding: 10px 12px; background: var(--nf-bg-surface); border: 1px solid var(--nf-border); border-radius: var(--nf-radius-sm); color: var(--nf-text); font-size: 13px; line-height: 1.6; resize: vertical; outline: none; font-family: var(--nf-font-prose); transition: border-color 0.2s, background 0.2s; }
+          .nf-textarea:hover { border-color: var(--nf-text-muted); }
+          .nf-textarea:focus { border-color: var(--nf-border-focus); background: var(--nf-bg); }
           .nf-textarea-sm { min-height: 56px; }
-          .nf-select { width: 100%; padding: 9px 10px; background: var(--nf-bg-surface); border: 1px solid var(--nf-border); border-radius: var(--nf-radius-sm); color: var(--nf-text); font-size: 12px; outline: none; font-family: var(--nf-font-body); transition: border-color 0.15s; }
+          .nf-select { width: 100%; padding: 9px 10px; background: var(--nf-bg-surface); border: 1px solid var(--nf-border); border-radius: var(--nf-radius-sm); color: var(--nf-text); font-size: 13px; outline: none; font-family: var(--nf-font-body); transition: border-color 0.2s; }
+          .nf-select:hover { border-color: var(--nf-text-muted); }
+          .nf-select:focus { border-color: var(--nf-border-focus); }
           .nf-range { width: 100%; accent-color: var(--nf-accent); }
-          .nf-hint { color: var(--nf-text-muted); font-size: 12px; margin-bottom: 20px; line-height: 1.6; }
-          .nf-char-section { margin-bottom: 20px; padding: 16px; background: var(--nf-bg-raised); border: 1px solid var(--nf-border); border-radius: var(--nf-radius); }
+          .nf-hint { color: var(--nf-text-muted); font-size: 11px; margin-bottom: 20px; line-height: 1.6; }
+          .nf-char-section { margin-bottom: 20px; padding: 16px; background: var(--nf-bg-raised); border: 1px solid var(--nf-border); border-radius: var(--nf-radius); transition: border-color 0.3s; }
+          .nf-char-section:focus-within { border-color: var(--nf-border-focus); }
           .nf-char-section-label { font-size: 10px; font-weight: 700; color: var(--nf-accent); text-transform: uppercase; letter-spacing: 0.1em; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--nf-border); font-family: var(--nf-font-body); }
           
           .nf-tab-bar { display: flex; align-items: center; border-bottom: 1px solid var(--nf-border); background: var(--nf-bg); padding: 0 12px; min-height: 46px; }
-          .nf-tab-scroll-area { display: flex; align-items: center; overflow-x: auto; scrollbar-width: none; -webkit-mask-image: linear-gradient(to right, black 90%, transparent 100%); }
+          .nf-tab-scroll-area { display: flex; align-items: center; overflow-x: auto; scrollbar-width: none; -webkit-mask-image: linear-gradient(to right, black 92%, transparent 100%); }
           .nf-tab-scroll-area::-webkit-scrollbar { display: none; }
-          .nf-tab-btn { display: flex; align-items: center; gap: 6px; padding: 12px 14px; background: none; border: none; border-bottom: 3px solid transparent; color: var(--nf-text-muted); cursor: pointer; font-size: 12px; font-weight: 600; font-family: var(--nf-font-body); transition: all 0.15s; white-space: nowrap; }
-          .nf-tab-btn:hover { color: var(--nf-text-dim); background: var(--nf-bg-hover); transform: translateY(-1px); }
+          .nf-tab-btn { display: flex; align-items: center; gap: 6px; padding: 12px 14px; background: none; border: none; border-bottom: 3px solid transparent; color: var(--nf-text-muted); cursor: pointer; font-size: 12px; font-weight: 600; font-family: var(--nf-font-body); transition: color 0.2s, background 0.2s, transform 0.15s; white-space: nowrap; }
+          .nf-tab-btn:hover { color: var(--nf-text-dim); background: var(--nf-bg-hover); }
           .nf-tab-btn.active { border-bottom-color: transparent; color: var(--nf-text); background: var(--nf-bg-raised); }
+          .nf-tab-btn:active { transform: scale(0.96); transition-duration: 0.08s; }
           .nf-tab-btn:focus-visible { outline: 2px solid var(--nf-accent-2); outline-offset: -2px; }
           .nf-tab-label { }
           .nf-tab-title { font-size: 11px; color: var(--nf-text-muted); font-style: italic; font-family: var(--nf-font-display); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 150px; flex-shrink: 0; }
@@ -14608,17 +15046,20 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
           .nf-chapter-sidebar-header { padding: 10px 12px; border-bottom: 1px solid var(--nf-border); display: flex; justify-content: space-between; align-items: center; }
           .nf-section-label { font-size: 11px; font-weight: 700; color: var(--nf-text-dim); text-transform: uppercase; letter-spacing: 0.1em; }
           .nf-chapter-list { flex: 1; overflow-y: auto; padding: 4px; }
-          .nf-chapter-item { padding: 9px 10px; border-radius: var(--nf-radius-sm); cursor: pointer; margin-bottom: 2px; border-left: 3px solid transparent; transition: all 0.15s; }
-          .nf-chapter-item:hover { background: var(--nf-bg-hover); transform: translateX(2px); }
-          .nf-chapter-item.active { background: var(--nf-bg-surface); border-left-color: var(--nf-accent); box-shadow: inset 0 0 0 1px var(--nf-border-focus); }
-          .nf-chapter-item-title { font-size: 12px; color: var(--nf-text-muted); font-weight: 400; transition: color 0.15s; font-family: var(--nf-font-display); }
+          .nf-chapter-item { padding: 9px 10px; border-radius: var(--nf-radius-sm); cursor: pointer; margin-bottom: 2px; border-left: 3px solid transparent; transition: all 0.2s cubic-bezier(0.4,0,0.2,1); }
+          .nf-chapter-item:hover { background: var(--nf-bg-hover); }
+          .nf-chapter-item:active { transform: scale(0.97); transition-duration: 0.08s; }
+          .nf-chapter-item.active { background: var(--nf-bg-surface); border-left-color: var(--nf-accent); }
+          .nf-chapter-item-title { font-size: 12px; color: var(--nf-text-muted); font-weight: 400; transition: color 0.2s; font-family: var(--nf-font-display); }
           .nf-chapter-item.active .nf-chapter-item-title { color: var(--nf-text); font-weight: 600; }
           .nf-chapter-item-meta { font-size: 10px; color: var(--nf-text-muted); margin-top: 2px; opacity: 0.6; }
           
           .nf-editor-area { flex: 1; display: flex; flex-direction: column; overflow: hidden; position: relative; }
           .nf-chapter-header { padding: 8px 18px; border-bottom: 1px solid var(--nf-border); display: flex; align-items: center; gap: 10px; background: var(--nf-bg-raised); flex-wrap: wrap; }
           .nf-header-actions { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
-          .nf-chapter-title-input { flex: 1; min-width: 120px; background: none; border: none; color: var(--nf-text); font-size: 18px; font-weight: 400; font-family: var(--nf-font-display); outline: none; letter-spacing: 0.01em; }
+          .nf-chapter-title-input { flex: 1; min-width: 120px; background: none; border: none; border-bottom: 1px solid transparent; color: var(--nf-text); font-size: 18px; font-weight: 400; font-family: var(--nf-font-display); outline: none; letter-spacing: 0.01em; transition: border-color 0.2s; padding-bottom: 2px; }
+          .nf-chapter-title-input:hover { border-bottom-color: var(--nf-border); }
+          .nf-chapter-title-input:focus { border-bottom-color: var(--nf-accent-2); }
           .nf-word-count { font-size: 10px; color: var(--nf-text-muted); white-space: nowrap; font-family: var(--nf-font-mono); }
           .nf-editor-split { flex: 1; display: flex; overflow: hidden; }
           .nf-text-editor { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-width: 0; }
@@ -14631,17 +15072,20 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
           .nf-toolbar-btn {
             background: transparent; border: none; color: var(--nf-text-dim); cursor: pointer;
             padding: 4px 6px; border-radius: 4px; display: flex; align-items: center; justify-content: center;
-            transition: all 0.1s; min-width: 26px; height: 26px;
+            transition: all 0.12s cubic-bezier(0.4,0,0.2,1); min-width: 26px; height: 26px; position: relative;
           }
-          .nf-toolbar-btn:hover { background: var(--nf-toolbar-btn-hover); color: var(--nf-text); transform: scale(1.12); }
-          .nf-toolbar-sep { width: 1px; height: 16px; background: var(--nf-border); margin: 0 4px; flex-shrink: 0; }
+          .nf-toolbar-btn:hover { background: var(--nf-toolbar-btn-hover); color: var(--nf-text); }
+          .nf-toolbar-btn:active { transform: scale(0.88); transition-duration: 0.06s; }
+          .nf-toolbar-btn.active { color: var(--nf-accent); background: var(--nf-accent-glow); }
+          .nf-toolbar-sep { width: 1px; height: 16px; background: var(--nf-border); margin: 0 4px; flex-shrink: 0; opacity: 0.4; }
           
           .nf-editor-contenteditable {
             flex: 1; padding: 32px 44px; background: var(--nf-bg-deep); border: none;
             color: var(--nf-editor-text); line-height: 1.75; outline: none;
-            font-family: var(--nf-font-prose); font-size: 16.5px; letter-spacing: 0.01em;
+            font-family: var(--nf-font-prose); font-size: 16px; letter-spacing: 0.01em;
             overflow-y: auto; min-height: 0; max-width: 860px;
             transition: background 0.35s, color 0.35s;
+            caret-color: var(--nf-accent);
           }
           .nf-editor-contenteditable:not(.nf-has-content):empty::before,
           .nf-editor-contenteditable:not(.nf-has-content) p:empty::before {
@@ -14651,7 +15095,7 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
             pointer-events: none;
             display: block;
           }
-          .nf-editor-contenteditable:focus { outline: 2px solid var(--nf-border-focus); outline-offset: -2px; }
+          .nf-editor-contenteditable:focus { outline: none; }
           .nf-editor-contenteditable::selection { background: var(--nf-selection-bg); }
           .nf-editor-contenteditable p { margin-bottom: 0.8em; }
           .nf-editor-contenteditable h1, .nf-editor-contenteditable h2, .nf-editor-contenteditable h3 { 
@@ -14659,7 +15103,7 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
           }
           .nf-editor-contenteditable h3 { font-size: 1.2em; }
           .nf-editor-contenteditable ul, .nf-editor-contenteditable ol { padding-left: 1.5em; margin-bottom: 0.8em; }
-          .nf-editor-contenteditable hr { border: none; border-top: 1px solid var(--nf-border); margin: 16px 0; }
+          .nf-editor-contenteditable hr { border: none; border-top: 1px solid var(--nf-border); margin: 16px 0; opacity: 0.5; }
           
           /* ─── 1. Character Presence Strip ─── */
           .nf-presence-strip { display: flex; align-items: center; gap: 2px; padding: 0 14px; border-bottom: 1px solid var(--nf-border); background: var(--nf-bg-raised); overflow-x: auto; scrollbar-width: none; height: 52px; flex-shrink: 0; }
@@ -14695,7 +15139,7 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
           .nf-pc-tag-status { background: var(--nf-error-bg); color: var(--nf-accent); border: 1px solid var(--nf-error-border); }
           .nf-pc-section { padding: 0 16px 10px; }
           .nf-pc-section-label { font-size: 9px; font-weight: 700; color: var(--nf-accent-2); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 3px; }
-          .nf-pc-body { font-size: 11.5px; color: var(--nf-text-dim); line-height: 1.55; }
+          .nf-pc-body { font-size: 11px; color: var(--nf-text-dim); line-height: 1.55; }
           .nf-pc-italic { font-style: italic; }
           .nf-pc-rel-section { padding: 8px 16px 12px; margin: 0; border-top: 1px solid var(--nf-border); background: var(--nf-bg-raised); border-radius: 0 0 6px 6px; }
           .nf-pc-rel-header { display: flex; align-items: center; gap: 5px; margin-bottom: 4px; font-size: 10px; }
@@ -14747,7 +15191,7 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
           .nf-focus-mode .nf-ai-panel { display: none; }
           .nf-focus-mode .nf-rich-toolbar { opacity: 0; transition: opacity 0.2s; }
           .nf-focus-mode .nf-rich-toolbar:hover { opacity: 1; }
-          .nf-focus-mode .nf-editor-contenteditable { padding: 48px 80px; max-width: 780px; margin: 0 auto; font-size: 17.5px; line-height: 1.9; }
+          .nf-focus-mode .nf-editor-contenteditable { padding: 48px 80px; max-width: 780px; margin: 0 auto; font-size: 18px; line-height: 1.9; }
           .nf-focus-exit-btn {
             position: fixed; top: 16px; right: 16px; z-index: 60;
             padding: 6px 14px; background: var(--nf-bg-surface); border: 1px solid var(--nf-border);
@@ -14764,43 +15208,52 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
             font-size: 10px; color: var(--nf-accent-2); animation: nf-fadeIn 0.12s ease-out;
           }
           .nf-ai-panel { width: 370px; min-width: 320px; max-width: 420px; border-left: 1px solid var(--nf-border); display: flex; flex-direction: column; background: var(--nf-bg); flex-shrink: 0; }
-          .nf-ai-mobile-overlay { position: absolute; inset: 0; z-index: 50; display: flex; flex-direction: column; background: var(--nf-bg); animation: nf-fadeIn 0.12s ease-out; }
+          .nf-ai-mobile-overlay { position: absolute; inset: 0; z-index: 50; display: flex; flex-direction: column; background: var(--nf-bg); animation: nf-fadeIn 0.15s ease-out; }
           .nf-tab-ai-panel { width: 340px; min-width: 300px; border-left: 1px solid var(--nf-border); display: flex; flex-direction: column; background: var(--nf-bg); flex-shrink: 0; }
           .nf-mode-bar { padding: 6px 8px; border-bottom: 1px solid var(--nf-border); display: flex; flex-wrap: wrap; gap: 3px; justify-content: center; }
-          .nf-mode-btn { padding: 4px 9px; border-radius: 20px; font-size: 10.5px; font-weight: 600; cursor: pointer; border: 1px solid var(--nf-border); background: transparent; color: var(--nf-text-muted); text-transform: capitalize; transition: all 0.15s; font-family: var(--nf-font-body); white-space: nowrap; }
-          .nf-mode-btn:hover { border-color: var(--nf-accent); color: var(--nf-text-dim); transform: translateY(-1px); }
+          .nf-mode-btn { padding: 4px 9px; border-radius: 20px; font-size: 10px; font-weight: 600; cursor: pointer; border: 1px solid var(--nf-border); background: transparent; color: var(--nf-text-muted); text-transform: capitalize; transition: all 0.2s cubic-bezier(0.4,0,0.2,1); font-family: var(--nf-font-body); white-space: nowrap; }
+          .nf-mode-btn:hover { border-color: var(--nf-accent); color: var(--nf-text-dim); }
+          .nf-mode-btn:active { transform: scale(0.94); transition-duration: 0.06s; }
           .nf-mode-btn.active { border-color: var(--nf-accent); color: var(--nf-accent); background: var(--nf-accent-glow); }
-          .nf-chat-messages { flex: 1; overflow-y: auto; padding: 10px; }
-          .nf-chat-empty { text-align: center; padding: 36px 18px; color: var(--nf-text-muted); font-size: 12.5px; line-height: 1.7; }
-          .nf-chat-msg { margin-bottom: 10px; display: flex; flex-direction: column; align-items: flex-start; animation: nf-pop 0.2s ease-out; }
+          .nf-chat-messages { flex: 1; overflow-y: auto; padding: 10px; scroll-behavior: smooth; }
+          .nf-chat-empty { text-align: center; padding: 36px 18px; color: var(--nf-text-muted); font-size: 12px; line-height: 1.7; }
+          @keyframes nf-msg-enter { from { opacity: 0; transform: translateY(8px) scale(0.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
+          .nf-chat-msg { margin-bottom: 10px; display: flex; flex-direction: column; align-items: flex-start; animation: nf-msg-enter 0.25s ease-out; }
           .nf-chat-msg-user { align-items: flex-end; }
-          .nf-chat-bubble { max-width: 95%; padding: 10px 14px; border-radius: 3px; background: var(--nf-chat-bubble-bg); border: 1px solid var(--nf-border); color: var(--nf-text); font-size: 13px; line-height: 1.75; font-family: var(--nf-font-prose); word-break: break-word; }
+          .nf-chat-bubble { max-width: 95%; padding: 10px 14px; border-radius: 8px 8px 8px 2px; background: var(--nf-chat-bubble-bg); border: 1px solid var(--nf-border); color: var(--nf-text); font-size: 13px; line-height: 1.75; font-family: var(--nf-font-prose); word-break: break-word; }
           .nf-chat-bubble strong { font-weight: 700; }
           .nf-chat-bubble em { font-style: italic; }
           .nf-chat-bubble del { text-decoration: line-through; opacity: 0.7; }
-          .nf-chat-bubble-user { background: var(--nf-chat-bubble-user-bg); border-color: var(--nf-chat-bubble-user-border); }
+          .nf-chat-bubble-user { background: var(--nf-chat-bubble-user-bg); border-color: var(--nf-chat-bubble-user-border); border-radius: 8px 8px 2px 8px; }
           .nf-chat-bubble-error { background: var(--nf-error-bg); border-color: var(--nf-error-border); }
           .nf-chat-actions { display: flex; gap: 4px; margin-top: 4px; flex-wrap: wrap; }
           .nf-generating { display: flex; align-items: center; gap: 8px; color: var(--nf-text-dim); font-size: 12px; padding: 8px; }
+          @keyframes nf-typing-dots { 0%, 80%, 100% { opacity: 0.2; transform: scale(0.8); } 40% { opacity: 1; transform: scale(1); } }
+          .nf-typing-dot { display: inline-block; width: 4px; height: 4px; border-radius: 50%; background: var(--nf-accent); margin: 0 1px; animation: nf-typing-dots 1.4s infinite; }
+          .nf-typing-dot:nth-child(2) { animation-delay: 0.2s; }
+          .nf-typing-dot:nth-child(3) { animation-delay: 0.4s; }
           .nf-chat-input-area { padding: 10px; border-top: 1px solid var(--nf-border); }
           .nf-scene-direction-box { margin-bottom: 8px; padding: 8px 10px; background: var(--nf-bg-surface); border: 1px solid var(--nf-border); border-radius: 3px; }
           .nf-scene-textarea {
             width: 100%; min-height: 44px; max-height: 90px; padding: 7px 10px;
             background: var(--nf-bg-deep); border: 1px solid var(--nf-border); border-radius: 6px;
-            color: var(--nf-text); font-size: 11.5px; line-height: 1.5; resize: vertical; outline: none;
+            color: var(--nf-text); font-size: 12px; line-height: 1.5; resize: vertical; outline: none;
             font-family: var(--nf-font-body);
           }
-          .nf-chat-textarea { flex: 1; min-height: 40px; max-height: 110px; padding: 9px 12px; background: var(--nf-bg-surface); border: 1px solid var(--nf-border); border-radius: 3px; color: var(--nf-text); font-size: 13px; resize: vertical; outline: none; font-family: var(--nf-font-body); line-height: 1.5; width: 100%; }
-          .nf-send-btn { align-self: flex-end; padding: 9px 12px; background: var(--nf-accent); border: none; border-radius: 3px; color: #fff; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: opacity 0.15s; ; }
-          .nf-send-btn:hover { opacity: 0.9; transform: rotate(-2deg) scale(1.05); }
-          .nf-send-btn:disabled { opacity: 0.3; cursor: default; background: var(--nf-bg-surface); box-shadow: none; }
+          .nf-chat-textarea { flex: 1; min-height: 40px; max-height: 110px; padding: 9px 12px; background: var(--nf-bg-surface); border: 1px solid var(--nf-border); border-radius: 6px; color: var(--nf-text); font-size: 13px; resize: vertical; outline: none; font-family: var(--nf-font-body); line-height: 1.5; width: 100%; transition: border-color 0.2s; }
+          .nf-chat-textarea:focus { border-color: var(--nf-border-focus); }
+          .nf-send-btn { align-self: flex-end; padding: 9px 12px; background: var(--nf-accent); border: none; border-radius: 6px; color: #fff; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.15s cubic-bezier(0.4,0,0.2,1); }
+          .nf-send-btn:hover { opacity: 0.9; }
+          .nf-send-btn:active { transform: scale(0.92); transition-duration: 0.06s; }
+          .nf-send-btn:disabled { opacity: 0.3; cursor: default; background: var(--nf-bg-surface); }
           
-          .nf-content-scroll { flex: 1; overflow-y: auto; padding: 28px 36px; }
+          .nf-content-scroll { flex: 1; overflow-y: auto; padding: 28px 36px; scroll-behavior: smooth; }
           .nf-page-title { font-family: var(--nf-font-display); font-size: 28px; font-weight: 400; color: var(--nf-text); margin: 0 0 20px; letter-spacing: 0.01em; }
           .nf-card-title { font-size: 14px; color: var(--nf-text); margin: 0 0 14px; font-weight: 500; font-family: var(--nf-font-display); }
           .nf-empty-state { display: flex; align-items: center; justify-content: center; height: 200px; color: var(--nf-text-muted); font-size: 15px; font-family: var(--nf-font-display); font-style: italic; animation: nf-float 3s ease-in-out infinite; }
-          .nf-plot-number { width: 46px; height: 46px; border-radius: 2px; background: var(--nf-bg-surface); display: flex; align-items: center; justify-content: center; color: var(--nf-accent); font-weight: 400; font-size: 18px; font-family: var(--nf-font-display); flex-shrink: 0; transition: transform 0.15s ease; cursor: pointer; }
-          .nf-plot-number:hover { transform: rotate(-2deg) scale(1.05); }
+          .nf-plot-number { width: 46px; height: 46px; border-radius: 2px; background: var(--nf-bg-surface); display: flex; align-items: center; justify-content: center; color: var(--nf-accent); font-weight: 400; font-size: 18px; font-family: var(--nf-font-display); flex-shrink: 0; transition: all 0.2s cubic-bezier(0.34,1.56,0.64,1); cursor: pointer; }
+          .nf-plot-number:hover { transform: scale(1.06); }
+          .nf-plot-number:active { transform: scale(0.95); transition-duration: 0.06s; }
           .nf-stats-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 24px; }
           .nf-stat-card { padding: 16px; background: var(--nf-bg-raised); border-radius: 2px; border: 1px solid var(--nf-border); text-align: center; transition: transform 0.2s ease; }
           .nf-stat-card:hover { transform: translateY(-2px) rotate(-0.5deg); }
@@ -14925,33 +15378,169 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
             .nf-toast { font-size: 12px; max-width: 90vw; bottom: 70px; }
           }
           @media (max-width: 480px) {
+            /* ═══════════════════════════════════════════
+               iPHONE 14 PRO OPTIMIZED (393×852 logical px)
+               Design: full-width content, collapsible sidebars,
+               bottom-reachable actions, addictive micro-interactions
+            ═══════════════════════════════════════════ */
+            /* Tab bar — icon-only, centered, compact */
             .nf-tab-label { display: none; }
-            .nf-tab-btn { padding: 10px 8px; }
-            .nf-chapter-sidebar { width: 80px; min-width: 80px; }
-            .nf-chapter-item-title { font-size: 9px; }
-            .nf-chapter-item { padding: 6px 4px; }
-            .nf-stats-grid { grid-template-columns: 1fr; }
-            /* M106-110: Extra small screens */
-            .nf-editor-contenteditable { padding: 12px; font-size: 14px; }
-            .nf-content-scroll { padding: 12px 10px; }
-            .nf-card { padding: 10px; }
-            .nf-char-section { padding: 10px; }
-            .nf-page-title { font-size: 16px; }
-            .nf-btn-icon-sm { padding: 5px 8px; font-size: 10px; }
-            .nf-plot-number { width: 24px; height: 24px; font-size: 10px; }
-            .nf-chapter-header { padding: 4px 8px; gap: 6px; }
-            .nf-chapter-title-input { font-size: 14px; }
-            .nf-rich-toolbar { padding: 2px 4px; }
-            /* Hide decorative elements */
+            .nf-tab-btn { padding: 10px 10px; min-width: 44px; justify-content: center; }
+            .nf-tab-btn svg { width: 16px; height: 16px; }
+            .nf-tab-bar { justify-content: center; gap: 0; min-height: 44px; }
+            /* Chapter sidebar — narrow but usable */
+            .nf-chapter-sidebar { width: 72px; min-width: 72px; }
+            .nf-chapter-sidebar-header { padding: 6px 6px; flex-direction: column; gap: 4px; }
+            .nf-chapter-sidebar-header .nf-section-label { font-size: 8px; }
+            .nf-chapter-sidebar-header .nf-btn-icon-sm { padding: 4px; font-size: 0; min-height: 28px; width: 28px; justify-content: center; }
+            .nf-chapter-item { padding: 8px 6px; min-height: 40px; }
+            .nf-chapter-item-title { font-size: 9px; line-height: 1.2; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
             .nf-chapter-item-meta { display: none; }
-            .nf-polaroid { padding: 2px 2px 6px; }
+            /* Editor — full width, comfortable reading */
+            .nf-editor-contenteditable { padding: 16px 14px; font-size: 15px; max-width: 100%; line-height: 1.8; }
+            .nf-chapter-header { padding: 6px 10px; gap: 6px; }
+            .nf-chapter-title-input { font-size: 15px; min-width: 60px; }
+            .nf-header-actions { gap: 2px; }
+            .nf-header-actions .nf-btn-icon-sm { padding: 4px 6px; font-size: 9px; min-height: 30px; }
+            .nf-word-count { font-size: 9px; }
+            /* Toolbar — horizontal scroll, no wrap */
+            .nf-rich-toolbar { padding: 2px 6px; min-height: 36px; flex-wrap: nowrap; overflow-x: auto; -webkit-overflow-scrolling: touch; gap: 0; }
+            .nf-toolbar-btn { min-width: 36px; height: 36px; padding: 8px; flex-shrink: 0; }
+            .nf-toolbar-sep { margin: 0 1px; }
+            /* Content scroll — edge-to-edge */
+            .nf-content-scroll { padding: 14px 12px; }
+            .nf-page-title { font-size: 18px; margin-bottom: 10px; }
+            /* Cards — compact, no hover effects */
+            .nf-card { padding: 10px; margin-bottom: 8px; }
+            .nf-card:hover { transform: none; box-shadow: none; }
+            .nf-card:active { transform: scale(0.98); }
+            .nf-char-section { padding: 10px; margin-bottom: 10px; }
+            .nf-polaroid { padding: 3px 3px 8px; }
+            .nf-polaroid:hover { transform: none; box-shadow: none; }
+            .nf-polaroid:active { transform: scale(0.96); }
+            /* Form fields — full width, proper touch targets */
+            .nf-input { min-height: 42px; font-size: 15px; padding: 10px 12px; border-radius: 6px; }
+            .nf-select { min-height: 42px; font-size: 14px; padding: 10px; border-radius: 6px; }
+            .nf-textarea { min-height: 60px; font-size: 15px; padding: 10px 12px; border-radius: 6px; }
+            .nf-label { font-size: 9px; margin-bottom: 3px; }
+            .nf-field { margin-bottom: 6px; }
+            /* Buttons — thumb-friendly */
+            .nf-btn { min-height: 42px; padding: 10px 16px; font-size: 13px; border-radius: 6px; }
+            .nf-btn-icon { min-width: 40px; min-height: 40px; padding: 10px; }
+            .nf-btn-icon-sm { min-height: 34px; padding: 6px 10px; font-size: 11px; border-radius: 6px; }
+            .nf-btn-micro { min-height: 30px; padding: 5px 10px; font-size: 10px; border-radius: 4px; }
+            /* Grids — single column */
+            .nf-stats-grid { grid-template-columns: 1fr; }
+            [style*="gridTemplateColumns"] { grid-template-columns: 1fr !important; }
+            /* Plot numbers */
+            .nf-plot-number { width: 32px; height: 32px; font-size: 12px; }
+            /* Presence strip — scrollable, compact */
+            .nf-presence-strip { height: 36px; padding: 0 6px; }
+            .nf-presence-img, .nf-presence-initial { width: 22px; height: 22px; font-size: 9px; }
+            .nf-presence-avatar-wrap { width: 22px; height: 22px; }
+            .nf-presence-name { font-size: 8px; max-width: 28px; }
+            /* Mode bar */
+            .nf-mode-bar { padding: 4px 6px; gap: 2px; }
+            .nf-mode-btn { padding: 5px 8px; font-size: 9px; min-height: 28px; }
+            /* Chat */
+            .nf-chat-textarea { min-height: 36px; font-size: 14px; border-radius: 8px; }
+            .nf-send-btn { padding: 8px 10px; border-radius: 8px; }
+            .nf-chat-bubble { font-size: 13px; padding: 8px 12px; border-radius: 12px 12px 12px 3px; }
+            .nf-chat-bubble-user { border-radius: 12px 12px 3px 12px; }
+            /* Mobile AI FAB — larger, more prominent */
+            .nf-mobile-ai-fab { width: 52px; height: 52px; bottom: 20px; right: 14px; }
+            .nf-mobile-ai-fab svg { width: 24px; height: 24px; }
+            /* Bottom sheet */
+            .nf-mobile-ai-sheet { height: 80vh; border-radius: 16px 16px 0 0; }
+            .nf-mobile-ai-sheet-header { padding: 12px 16px; }
+            /* Toast above FAB */
+            .nf-toast { bottom: 80px; max-width: 85vw; font-size: 12px; border-radius: 8px; }
+            /* Empty state */
+            .nf-empty-state { font-size: 13px; height: 150px; }
+            .nf-empty-state::before { font-size: 28px; }
+            /* Org tree */
+            .nf-org-tree li { min-width: 160px; }
+            /* Scene direction */
+            .nf-scene-textarea { font-size: 14px; min-height: 44px; border-radius: 6px; }
+            /* Hint */
+            .nf-hint { font-size: 11px; margin-bottom: 10px; }
+            /* Ghost */
+            .nf-ghost { padding: 8px 14px; }
+            .nf-ghost-prose { font-size: 13px; }
+            /* Focus mode */
+            .nf-focus-mode .nf-editor-contenteditable { padding: 16px 14px; font-size: 16px; }
+            .nf-focus-exit-btn { top: 8px; right: 8px; padding: 8px 14px; border-radius: 8px; opacity: 0.5; }
+            /* Modals — full screen */
+            .nf-rel-web-tip { max-width: 90vw !important; }
+            /* Sidebar overlay */
+            .nf-sidebar-open { width: 80vw; max-width: 300px; }
+            /* Beat rail hidden */
+            .nf-beat-rail { display: none; }
+            /* Glyph rail hidden on mobile */
+            .nf-glyph-rail { display: none; }
           }
           @media (max-width: 360px) {
-            .nf-chapter-sidebar { width: 60px; min-width: 60px; }
-            .nf-tab-btn { padding: 8px 5px; }
-            .nf-tab-btn svg { width: 12px; height: 12px; }
-            .nf-chapter-item-title { font-size: 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+            .nf-chapter-sidebar { width: 56px; min-width: 56px; }
+            .nf-tab-btn { padding: 8px 7px; min-width: 38px; }
+            .nf-tab-btn svg { width: 14px; height: 14px; }
+            .nf-chapter-item-title { font-size: 8px; -webkit-line-clamp: 1; }
+            .nf-editor-contenteditable { padding: 12px 10px; font-size: 14px; }
           }
+
+          /* ═══════════════════════════════════════════
+             ADDICTIVE DESIGN PATTERNS
+             Dopamine triggers, progress feedback, 
+             satisfying interactions, achievement feel
+          ═══════════════════════════════════════════ */
+          /* AD1: Word count milestone flash */
+          @keyframes nf-milestone { 0% { color: var(--nf-text-muted); } 30% { color: var(--nf-accent); transform: scale(1.15); } 100% { color: var(--nf-text-muted); transform: scale(1); } }
+          .nf-word-count-milestone { animation: nf-milestone 0.6s ease-out; }
+          /* AD2: Chapter complete celebration */
+          @keyframes nf-celebrate { 0% { transform: scale(1); } 20% { transform: scale(1.08) rotate(-1deg); } 40% { transform: scale(1.04) rotate(0.5deg); } 100% { transform: scale(1) rotate(0deg); } }
+          /* AD3: Smooth content entrance on tab switch */
+          .nf-content-scroll > * { animation: nf-content-enter 0.2s ease-out backwards; }
+          @keyframes nf-content-enter { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+          .nf-content-scroll > *:nth-child(1) { animation-delay: 0.02s; }
+          .nf-content-scroll > *:nth-child(2) { animation-delay: 0.04s; }
+          .nf-content-scroll > *:nth-child(3) { animation-delay: 0.06s; }
+          .nf-content-scroll > *:nth-child(4) { animation-delay: 0.08s; }
+          .nf-content-scroll > *:nth-child(5) { animation-delay: 0.10s; }
+          .nf-content-scroll > *:nth-child(n+6) { animation-delay: 0.12s; }
+          /* AD4: Satisfying checkbox/toggle snap */
+          input[type="checkbox"] { accent-color: var(--nf-accent); width: 16px; height: 16px; cursor: pointer; transition: transform 0.1s; }
+          input[type="checkbox"]:active { transform: scale(0.85); }
+          /* AD5: Progress indicators with smooth fill */
+          .nf-progress-bar { height: 3px; background: var(--nf-border); border-radius: 2px; overflow: hidden; position: relative; }
+          .nf-progress-fill { height: 100%; background: var(--nf-accent); border-radius: 2px; transition: width 0.8s cubic-bezier(0.4,0,0.2,1); }
+          /* AD6: Card expand/collapse smoothness */
+          .nf-collapse-body { overflow: hidden; transition: max-height 0.3s cubic-bezier(0.4,0,0.2,1), opacity 0.2s ease; }
+          /* AD7: Pull-to-refresh feel on scroll top bounce */
+          .nf-content-scroll { overscroll-behavior-y: contain; }
+          .nf-chapter-list { overscroll-behavior-y: contain; }
+          /* AD8: Satisfying delete with shrink */
+          @keyframes nf-shrink-out { to { transform: scaleY(0); opacity: 0; max-height: 0; margin: 0; padding: 0; } }
+          /* AD9: Auto-save indicator — subtle but reassuring */
+          @keyframes nf-save-dot { 0%, 100% { opacity: 0.3; } 50% { opacity: 0.8; } }
+          /* AD10: Streak counter visual */
+          .nf-streak { display: inline-flex; align-items: center; gap: 3px; padding: 2px 6px; border-radius: 10px; background: var(--nf-accent-glow); color: var(--nf-accent); font-size: 9px; font-weight: 700; }
+          /* AD11: Micro-reward on character creation */
+          @keyframes nf-new-char { 0% { transform: scale(0.8) rotate(-5deg); opacity: 0; } 50% { transform: scale(1.05) rotate(1deg); } 100% { transform: scale(1) rotate(0deg); opacity: 1; } }
+          /* AD12: Chapter sidebar scroll snap */
+          .nf-chapter-list { scroll-snap-type: y proximity; }
+          .nf-chapter-item { scroll-snap-align: start; }
+          /* AD13: Writing session pulse — ambient life in the editor */
+          @keyframes nf-writing-pulse { 0%, 100% { border-left-color: transparent; } 50% { border-left-color: var(--nf-accent); } }
+          /* AD14: Stats card number counter feel */
+          .nf-stat-value { transition: color 0.3s; font-variant-numeric: tabular-nums; }
+          /* AD15: Hover state consistency — all interactive elements have subtle feedback */
+          button:not(:disabled):not(.nf-toolbar-btn):hover { transition-duration: 0.12s; }
+          /* AD16: Text selection color matches brand */
+          ::selection { background: var(--nf-selection-bg); }
+          /* AD17: Safe area support for notch phones */
+          .nf-root { padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom); }
+          .nf-tab-bar { padding-left: max(6px, env(safe-area-inset-left)); padding-right: max(6px, env(safe-area-inset-right)); }
+          /* AD18: Smooth sidebar transition */
+          .nf-sidebar { transition: width 0.25s cubic-bezier(0.4,0,0.2,1), min-width 0.25s cubic-bezier(0.4,0,0.2,1); }
           /* G12: Print stylesheet — show only editor content */
           @media print {
             .nf-root { display: block; height: auto; overflow: visible; }
@@ -15158,6 +15747,66 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
         )}
         {diffReview && <DiffReviewModal original={diffReview.original} proposed={diffReview.proposed} onAccept={diffReview.onAccept} onReject={diffReview.onReject} onInsertAtCursor={diffReview.onInsertAtCursor} />}
         {charSuggestions && <CharacterSuggestionsModal suggestions={charSuggestions} onAccept={handleAcceptSuggestion} onReject={handleRejectSuggestion} onAcceptAll={handleAcceptAllSuggestions} onRejectAll={handleRejectAllSuggestions} onAcceptRel={handleAcceptRelSuggestion} onRejectRel={handleRejectRelSuggestion} onClose={() => setCharSuggestions(null)} />}
+        {/* Universal Fill Review Modal */}
+        {fillReview && (
+          <div style={{ position: "fixed", inset: 0, zIndex: 9999, background: "rgba(0,0,0,0.55)", backdropFilter: "blur(4px)", display: "flex", alignItems: "center", justifyContent: "center", animation: "nf-fadeIn 0.12s ease-out" }} onClick={() => setFillReview(null)}>
+            <div onClick={e => e.stopPropagation()} style={{ background: "var(--nf-dialog-bg)", border: "1px solid var(--nf-dialog-border)", borderRadius: 3, padding: "20px 24px", maxWidth: 640, width: "95%", maxHeight: "80vh", overflow: "auto", boxShadow: "var(--nf-shadow-lg)" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+                <span style={{ fontFamily: "var(--nf-font-display)", fontSize: 18, fontWeight: 400, color: "var(--nf-text)" }}>Review AI Suggestions</span>
+                <button onClick={() => setFillReview(null)} className="nf-btn-icon"><Icons.X /></button>
+              </div>
+              <p style={{ fontSize: 11, color: "var(--nf-text-muted)", marginBottom: 14 }}>
+                Check each field below. <span style={{ color: "var(--nf-accent)" }}>Orange</span> fields would modify existing content.
+                Uncheck any you don't want, then click Apply.
+              </p>
+              {fillReview.fields.map(f => (
+                <div key={f.key} style={{ marginBottom: 10, padding: "8px 10px", background: f.isModification ? "var(--nf-error-bg)" : "var(--nf-bg-raised)", border: `1px solid ${f.isModification ? "var(--nf-error-border)" : "var(--nf-border)"}`, borderRadius: 2 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+                    <input type="checkbox" defaultChecked={!f.isModification} id={`fill-${f.key}`} style={{ accentColor: "var(--nf-accent)" }} />
+                    <label htmlFor={`fill-${f.key}`} style={{ fontSize: 10, fontWeight: 700, color: f.isModification ? "var(--nf-accent)" : "var(--nf-text-dim)", textTransform: "uppercase", letterSpacing: "0.08em", cursor: "pointer" }}>
+                      {f.label} {f.isModification && "⚠ WILL MODIFY"}
+                    </label>
+                  </div>
+                  {f.isModification && f.original && (
+                    <div style={{ fontSize: 10, color: "var(--nf-text-muted)", padding: "4px 8px", background: "var(--nf-bg-deep)", borderRadius: 2, marginBottom: 4, borderLeft: "2px solid var(--nf-border)" }}>
+                      <span style={{ fontSize: 8, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em" }}>Current: </span>{String(f.original).slice(0, 200)}{String(f.original).length > 200 ? "..." : ""}
+                    </div>
+                  )}
+                  <div style={{ fontSize: 11, color: "var(--nf-text)", padding: "4px 8px", background: "var(--nf-bg-surface)", borderRadius: 2, lineHeight: 1.5, borderLeft: "2px solid var(--nf-success)" }}>
+                    <span style={{ fontSize: 8, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--nf-success)" }}>Proposed: </span>{String(f.proposed).slice(0, 300)}{String(f.proposed).length > 300 ? "..." : ""}
+                  </div>
+                </div>
+              ))}
+              <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 16 }}>
+                <button onClick={() => setFillReview(null)} className="nf-btn nf-btn-ghost">Cancel</button>
+                <button onClick={() => {
+                  // Collect checked fields
+                  const accepted = {};
+                  fillReview.fields.forEach(f => {
+                    const checkbox = document.getElementById(`fill-${f.key}`);
+                    if (checkbox?.checked) accepted[f.key] = f.proposed;
+                  });
+                  if (Object.keys(accepted).length === 0) { setFillReview(null); return; }
+                  // Apply
+                  if (fillReview.type === "character") {
+                    const chars = project.characters.map(c => c.id === fillReview.entityId ? { ...c, ...accepted } : c);
+                    updateProject({ characters: chars });
+                  } else if (fillReview.type === "world") {
+                    const worlds = project.worldBuilding.map(w => w.id === fillReview.entityId ? { ...w, ...accepted } : w);
+                    updateProject({ worldBuilding: worlds });
+                  } else if (fillReview.type === "relationship") {
+                    const rels = project.relationships.map(r => r.id === fillReview.entityId ? { ...r, ...accepted } : r);
+                    updateProject({ relationships: rels });
+                  }
+                  showToast(`Applied ${Object.keys(accepted).length} field(s)`, "success");
+                  setFillReview(null);
+                }} className="nf-btn nf-btn-primary">
+                  <Icons.Check /> Apply Selected
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
         {whiteRoom && <WhiteRoomModal char1={whiteRoom.char1Id} char2={whiteRoom.char2Id} tension={whiteRoom.tension} result={whiteRoom.result} isGenerating={whiteRoom.isGenerating} onGenerate={handleWhiteRoomGenerate} onClose={() => setWhiteRoom(null)} settings={settings} characters={project?.characters} />}
         {showTimeline && <TimelineView plotOutline={project?.plotOutline} chapters={project?.chapters} characters={project?.characters} onClose={() => setShowTimeline(false)} restoreImages={restoreImagesForTimeline} />}
         {cleanView && <CleanViewModal project={project} startChapter={activeChapterIdx} onClose={() => setCleanView(false)} />}
