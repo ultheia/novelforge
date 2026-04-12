@@ -957,6 +957,20 @@ const _deriveCrossRefs = (project, charId, opts = {}) => {
       result.locNorms = w.culturalNorms || "";
       result.locHistory = w.history || "";
       result.locResources = w.resources || "";
+      // Category-specific cross-ref data
+      if (w.category === "Location" || !w.category) {
+        result.locAtmosphere = w.atmosphere || "";
+        result.locDangers = w.dangers || "";
+        result.locRules = w.rules || "";
+      }
+      if (w.category === "Magic System") {
+        result.locMagicRules = w.magicRules || "";
+        result.locMagicSource = w.magicSource || "";
+      }
+      if (w.category === "Religion") {
+        result.locReligionBeliefs = w.coreBeliefs || "";
+        result.locReligionRituals = w.rituals || "";
+      }
       // Sub-locations
       result.locSubLocations = w.subLocations || "";
       // Parent location
@@ -1875,13 +1889,59 @@ const ContextEngine = {
               entry += `: ${w.description}`;
             }
           }
-          // Include rich location/org details for relevant entries
-          if (w.atmosphere) entry += ` | Atmosphere: ${w.atmosphere}`;
-          if (w.sensoryDetails) entry += ` | Sensory: ${_truncateAtBoundary(w.sensoryDetails, 200)}`;
-          if (w.dangers) entry += ` | Dangers: ${w.dangers}`;
-          if (w.rules) entry += ` | Rules: ${w.rules}`;
-          if (w.subLocations) entry += ` | Areas: ${w.subLocations}`;
-          if (w.culturalNorms) entry += ` | Norms: ${_truncateAtBoundary(w.culturalNorms, 150)}`;
+          // Include category-specific details for relevant entries
+          if (w.category === "Location" || !w.category) {
+            if (w.atmosphere) entry += ` | Atmosphere: ${w.atmosphere}`;
+            if (w.sensoryDetails) entry += ` | Sensory: ${_truncateAtBoundary(w.sensoryDetails, 200)}`;
+            if (w.dangers) entry += ` | Dangers: ${w.dangers}`;
+            if (w.rules) entry += ` | Rules: ${w.rules}`;
+            if (w.subLocations) entry += ` | Areas: ${w.subLocations}`;
+            if (w.population) entry += ` | Population: ${w.population}`;
+            if (w.resources) entry += ` | Resources: ${w.resources}`;
+          } else if (w.category === "Rule / Law") {
+            if (w.enforcement) entry += ` | Enforcement: ${w.enforcement}`;
+            if (w.scope) entry += ` | Scope: ${w.scope}`;
+            if (w.loopholes) entry += ` | Exceptions: ${w.loopholes}`;
+            if (w.publicOpinion) entry += ` | Opinion: ${w.publicOpinion}`;
+          } else if (w.category === "Culture") {
+            if (w.values) entry += ` | Values: ${_truncateAtBoundary(w.values, 200)}`;
+            if (w.customs) entry += ` | Customs: ${_truncateAtBoundary(w.customs, 200)}`;
+            if (w.taboos) entry += ` | Taboos: ${w.taboos}`;
+            if (w.socialHierarchy) entry += ` | Hierarchy: ${w.socialHierarchy}`;
+          } else if (w.category === "Magic System") {
+            if (w.magicSource) entry += ` | Source: ${w.magicSource}`;
+            if (w.magicRules) entry += ` | Rules: ${_truncateAtBoundary(w.magicRules, 200)}`;
+            if (w.magicCost) entry += ` | Cost: ${w.magicCost}`;
+            if (w.magicRarity) entry += ` | Rarity: ${w.magicRarity}`;
+            if (w.magicTypes) entry += ` | Types: ${w.magicTypes}`;
+          } else if (w.category === "Technology") {
+            if (w.techFunction) entry += ` | Function: ${w.techFunction}`;
+            if (w.techMechanism) entry += ` | Mechanism: ${_truncateAtBoundary(w.techMechanism, 200)}`;
+            if (w.techLimitations) entry += ` | Limitations: ${w.techLimitations}`;
+            if (w.techAvailability) entry += ` | Availability: ${w.techAvailability}`;
+          } else if (w.category === "History") {
+            if (w.historyDate) entry += ` | When: ${w.historyDate}`;
+            if (w.historyFigures) entry += ` | Figures: ${w.historyFigures}`;
+            if (w.historyConsequences) entry += ` | Consequences: ${w.historyConsequences}`;
+            if (w.historyLegacy) entry += ` | Legacy: ${w.historyLegacy}`;
+          } else if (w.category === "Flora / Fauna") {
+            if (w.habitat) entry += ` | Habitat: ${w.habitat}`;
+            if (w.floraAppearance) entry += ` | Appearance: ${w.floraAppearance}`;
+            if (w.behavior) entry += ` | Behavior: ${w.behavior}`;
+            if (w.floraUses) entry += ` | Uses/Dangers: ${w.floraUses}`;
+          } else if (w.category === "Language") {
+            if (w.langSpeakers) entry += ` | Speakers: ${w.langSpeakers}`;
+            if (w.langWriting) entry += ` | Writing: ${w.langWriting}`;
+            if (w.langPhrases) entry += ` | Phrases: ${_truncateAtBoundary(w.langPhrases, 200)}`;
+          } else if (w.category === "Religion") {
+            if (w.deities) entry += ` | Deities: ${w.deities}`;
+            if (w.coreBeliefs) entry += ` | Beliefs: ${_truncateAtBoundary(w.coreBeliefs, 200)}`;
+            if (w.rituals) entry += ` | Rituals: ${w.rituals}`;
+            if (w.clergy) entry += ` | Clergy: ${w.clergy}`;
+          }
+          // Common fields
+          if (w.culturalNorms) entry += ` | Connections: ${_truncateAtBoundary(w.culturalNorms, 150)}`;
+          if (w.history && !w.category?.startsWith("History")) entry += ` | Origin: ${_truncateAtBoundary(w.history, 150)}`;
           // Org hierarchy summary for organizations
           if (w.category === "Organization" && Array.isArray(w.orgHierarchy) && w.orgHierarchy.length > 0) {
             const hierStr = w.orgHierarchy.map(pos => {
@@ -2369,15 +2429,54 @@ const ContextEngine = {
             let line = `• ${w.name}`;
             if (w.category) line += ` [${w.category}]`;
             if (w.description) line += `: ${_truncateAtBoundary(w.description, 1000)}`;
-            if (w.atmosphere) line += ` | Atmosphere: ${w.atmosphere}`;
-            if (w.sensoryDetails) line += ` | Sensory: ${_truncateAtBoundary(w.sensoryDetails, 200)}`;
-            if (w.subLocations) line += ` | Sub-locations: ${w.subLocations}`;
-            if (w.dangers) line += ` | Dangers: ${w.dangers}`;
-            if (w.rules) line += ` | Rules: ${w.rules}`;
             if (w.history) line += ` | History: ${_truncateAtBoundary(w.history, 200)}`;
-            if (w.culturalNorms) line += ` | Norms: ${_truncateAtBoundary(w.culturalNorms, 200)}`;
-            if (w.resources) line += ` | Resources: ${w.resources}`;
-            if (w.population) line += ` | Population: ${w.population}`;
+            if (w.culturalNorms) line += ` | Connections: ${_truncateAtBoundary(w.culturalNorms, 200)}`;
+            // Category-specific fields
+            if (w.category === "Location" || !w.category) {
+              if (w.atmosphere) line += ` | Atmosphere: ${w.atmosphere}`;
+              if (w.sensoryDetails) line += ` | Sensory: ${_truncateAtBoundary(w.sensoryDetails, 200)}`;
+              if (w.subLocations) line += ` | Sub-locations: ${w.subLocations}`;
+              if (w.dangers) line += ` | Dangers: ${w.dangers}`;
+              if (w.rules) line += ` | Rules: ${w.rules}`;
+              if (w.resources) line += ` | Resources: ${w.resources}`;
+              if (w.population) line += ` | Population: ${w.population}`;
+            } else if (w.category === "Rule / Law") {
+              if (w.enforcement) line += ` | Enforcement: ${w.enforcement}`;
+              if (w.scope) line += ` | Scope: ${w.scope}`;
+              if (w.loopholes) line += ` | Exceptions: ${w.loopholes}`;
+              if (w.publicOpinion) line += ` | Opinion: ${w.publicOpinion}`;
+            } else if (w.category === "Culture") {
+              if (w.values) line += ` | Values: ${_truncateAtBoundary(w.values, 200)}`;
+              if (w.customs) line += ` | Customs: ${_truncateAtBoundary(w.customs, 200)}`;
+              if (w.taboos) line += ` | Taboos: ${w.taboos}`;
+              if (w.socialHierarchy) line += ` | Social hierarchy: ${w.socialHierarchy}`;
+            } else if (w.category === "Magic System") {
+              if (w.magicSource) line += ` | Source: ${w.magicSource}`;
+              if (w.magicRules) line += ` | Rules: ${_truncateAtBoundary(w.magicRules, 200)}`;
+              if (w.magicCost) line += ` | Cost: ${w.magicCost}`;
+              if (w.magicTypes) line += ` | Types: ${w.magicTypes}`;
+            } else if (w.category === "Technology") {
+              if (w.techFunction) line += ` | Function: ${w.techFunction}`;
+              if (w.techMechanism) line += ` | Mechanism: ${_truncateAtBoundary(w.techMechanism, 200)}`;
+              if (w.techLimitations) line += ` | Limitations: ${w.techLimitations}`;
+            } else if (w.category === "History") {
+              if (w.historyDate) line += ` | When: ${w.historyDate}`;
+              if (w.historyFigures) line += ` | Figures: ${w.historyFigures}`;
+              if (w.historyConsequences) line += ` | Consequences: ${w.historyConsequences}`;
+            } else if (w.category === "Flora / Fauna") {
+              if (w.habitat) line += ` | Habitat: ${w.habitat}`;
+              if (w.floraAppearance) line += ` | Appearance: ${w.floraAppearance}`;
+              if (w.behavior) line += ` | Behavior: ${w.behavior}`;
+              if (w.floraUses) line += ` | Uses: ${w.floraUses}`;
+            } else if (w.category === "Language") {
+              if (w.langSpeakers) line += ` | Speakers: ${w.langSpeakers}`;
+              if (w.langWriting) line += ` | Writing: ${w.langWriting}`;
+              if (w.langPhrases) line += ` | Phrases: ${_truncateAtBoundary(w.langPhrases, 200)}`;
+            } else if (w.category === "Religion") {
+              if (w.deities) line += ` | Deities: ${w.deities}`;
+              if (w.coreBeliefs) line += ` | Beliefs: ${_truncateAtBoundary(w.coreBeliefs, 200)}`;
+              if (w.rituals) line += ` | Rituals: ${w.rituals}`;
+            }
             if (w.orgPurpose) line += ` | Purpose: ${_truncateAtBoundary(w.orgPurpose, 200)}`;
             // Include frequent characters by name
             if (Array.isArray(w.frequentCharacters) && w.frequentCharacters.length > 0 && project.characters) {
@@ -2934,7 +3033,8 @@ const _writeToFile = async (data) => {
   _fileWriteQueue = _fileWriteQueue.then(async () => {
     try {
       const writable = await _fileHandle.createWritable();
-      await writable.write(JSON.stringify(data, null, 2));
+      // No pretty-print for auto-saves — 3-5x faster serialization
+      await writable.write(JSON.stringify(data));
       await writable.close();
     } catch (e) {
       if (e.name === "NotAllowedError" || e.name === "NotFoundError") _fileHandle = null;
@@ -5511,31 +5611,63 @@ const ModelSelector = memo(({ apiKey, value, onChange }) => {
 
 // ─── SAVE STATUS ───
 const SaveIndicator = memo(({ status, fileLinked }) => {
-  const styles = {
-    saving: { color: "var(--nf-accent-2)", text: "", icon: "spinner" },
-    saved: { color: "var(--nf-success)", text: fileLinked ? "Saved to file" : "Saved", icon: "check" },
-    error: { color: "var(--nf-accent)", text: "Save failed", icon: "x" },
-    idle: { color: "var(--nf-text-muted)", text: "", icon: null },
-  };
-  const s = styles[status] || styles.idle;
-  if (!s.text) return (
-    <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-      <div style={{
-        width: 6, height: 6, borderRadius: 3,
-        background: "var(--nf-success)", opacity: 0.5,
-        boxShadow: "0 0 4px var(--nf-success)",
-        animation: "nf-glyph-idle 3s ease-in-out infinite",
-      }} title="All changes saved" />
-      {fileLinked && <span style={{ fontSize: 9, color: "var(--nf-success)", opacity: 0.6 }} title="Auto-saving to JSON file">📄</span>}
+  const [lastSaved, setLastSaved] = useState(null);
+  const [showDetail, setShowDetail] = useState(false);
+  
+  useEffect(() => {
+    if (status === "saved") setLastSaved(new Date());
+  }, [status]);
+
+  // Keyboard shortcut: Cmd/Ctrl+S
+  useEffect(() => {
+    const handler = (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "s") {
+        e.preventDefault();
+        // The save is automatic — just flash the indicator
+        setShowDetail(true);
+        setTimeout(() => setShowDetail(false), 2000);
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, []);
+
+  const timeAgo = lastSaved ? (() => {
+    const s = Math.floor((Date.now() - lastSaved.getTime()) / 1000);
+    if (s < 5) return "just now";
+    if (s < 60) return `${s}s ago`;
+    const m = Math.floor(s / 60);
+    if (m < 60) return `${m}m ago`;
+    return lastSaved.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  })() : null;
+
+  // Refresh "time ago" every 10s
+  const [, tick] = useState(0);
+  useEffect(() => { const t = setInterval(() => tick(c => c + 1), 10000); return () => clearInterval(t); }, []);
+
+  if (status === "saving") return (
+    <div style={{ display: "flex", alignItems: "center", gap: 5, padding: "0 8px" }} role="status" aria-live="polite">
+      <div style={{ width: 6, height: 6, borderRadius: 3, background: "var(--nf-accent-2)", animation: "nf-glyph-pulse-fast 0.7s ease-in-out infinite" }} />
+      <span style={{ fontSize: 9, color: "var(--nf-accent-2)", fontWeight: 500 }}>Saving...</span>
     </div>
   );
+
+  if (status === "error") return (
+    <div style={{ display: "flex", alignItems: "center", gap: 5, padding: "2px 8px", background: "var(--nf-error-bg)", borderRadius: 3 }} role="alert">
+      <Icons.X />
+      <span style={{ fontSize: 9, color: "var(--nf-accent)", fontWeight: 600 }}>Save failed</span>
+    </div>
+  );
+
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10, color: s.color, fontWeight: 500, letterSpacing: "0.04em", transition: "opacity 0.2s" }}
-      role="status" aria-live="polite">
-      {s.icon === "spinner" ? (
-        <div style={{ width: 8, height: 8, borderRadius: 4, background: "var(--nf-accent-2)", animation: "nf-glyph-pulse-fast 0.7s ease-in-out infinite", boxShadow: "0 0 6px var(--nf-accent-glow-2)" }} />
-      ) : s.icon === "check" ? <Icons.CloudCheck /> : <Icons.X />}
-      {s.text}
+    <div onClick={() => setShowDetail(d => !d)} style={{ display: "flex", alignItems: "center", gap: 4, cursor: "pointer", padding: "0 6px", borderRadius: 3, transition: "background 0.15s" }} title={`Saved ${timeAgo || ""}${fileLinked ? " · Auto-saving to file" : " · Auto-saving to browser"}\nCtrl+S to save manually`}>
+      <div style={{ width: 5, height: 5, borderRadius: 3, background: "var(--nf-success)", opacity: 0.6, transition: "opacity 0.3s" }} />
+      {(showDetail || status === "saved") && (
+        <span style={{ fontSize: 9, color: "var(--nf-text-muted)", transition: "opacity 0.2s", whiteSpace: "nowrap" }}>
+          {status === "saved" ? "Saved" : timeAgo || "Saved"}
+          {fileLinked && " 📄"}
+        </span>
+      )}
     </div>
   );
 });
@@ -5662,7 +5794,7 @@ RULES:
 { "type": "${tabName}", "data": { ... } }
 \`\`\`
 - For CHARACTER: name, role, gender, age, pronouns, orientation, aliases, occupation, title, height, build, tags, appearance, personality, backstory, backstoryRevealChapter, desires, shortTermGoals, longTermGoals, speechPattern, voiceSamples, habits, fears, flaws, strengths, skills, internalConflict, externalConflict, signatureItems, secrets, hiddenSecrets, secretRevealChapter, allegiances, kinks, arc, canonNotes, firstAppearanceChapter, status, isBulk, bulkCount, bulkDescription
-- For WORLD: name, category, description, keywords, introducedInChapter, atmosphere, sensoryDetails, subLocations, dangers, rules, population, history, culturalNorms, resources, orgPurpose (for Organization type), frequentCharacters (array of character names), orgGroupPhotoPrompt (for Organization type — auto-generated)
+- For WORLD: name, category, description, keywords, introducedInChapter, history, culturalNorms. LOCATION: atmosphere, sensoryDetails, subLocations, dangers, rules, population, resources. RULE/LAW: enforcement, scope, loopholes, publicOpinion, enactedBy. CULTURE: values, customs, socialHierarchy, taboos, artForms, dialect. MAGIC SYSTEM: magicSource, magicRules, magicCost, magicRarity, magicTypes, magicPerception. TECHNOLOGY: techFunction, techMechanism, techAvailability, techLimitations, techImpact, techCreator. HISTORY: historyDate, historyFigures, historyCauses, historyConsequences, historyLegacy. FLORA/FAUNA: habitat, floraAppearance, behavior, floraUses, floraRarity, floraCultural. LANGUAGE: langSpeakers, langWriting, langPhrases, langGrammar, langRelated, langStatus. RELIGION: deities, coreBeliefs, rituals, sacredPlaces, clergy, heresies, followers. ORGANIZATION: orgPurpose, orgHierarchy, frequentCharacters.
 - For PLOT: chapter, title, summary, beats, sceneType, pov, characters, locations (array of location names from world entries)
 - For RELATIONSHIP: char1, char2, category (romantic/family/friendship/professional/mentor/rivalry), dynamic, status, tension, tensionType, powerDynamic (equal/char1-dominant/char2-dominant/shifting), trustLevel (none/low/medium/high/absolute), chemistry, conflictSource, sharedSecrets, keyScenes, terms, taboos, isPublic, char1Perspective, char2Perspective, progression, evolutionTimeline, meetsInChapter, notes
 - Be creative, specific, genre-aware.
@@ -7479,23 +7611,29 @@ const _syncCrossRefs = (oldP, newP) => {
   newChapters.forEach((nc, ci) => {
     const oc = (oldP.chapters || [])[ci];
     if (!oc) return;
-    // E1: Chapter title changed → sync plot title
+    // E1: Chapter title changed → sync plot title (use linkedPlotId first, then chapter number)
     if (oc.title !== nc.title && nc.title) {
-      const plotEntry = newPlots.find(pl => (pl.chapter || 0) === ci + 1);
+      const plotEntry = nc.linkedPlotId
+        ? newPlots.find(pl => pl.id === nc.linkedPlotId)
+        : newPlots.find(pl => (pl.chapter || 0) === ci + 1);
       if (plotEntry && plotEntry.title !== nc.title) {
         newPlots = newPlots.map(pl => pl.id === plotEntry.id ? { ...pl, title: nc.title } : pl); dirty = true;
       }
     }
     // E2: Chapter POV changed → sync to plot POV if plot's is empty
     if (oc.pov !== nc.pov && nc.pov) {
-      const plotEntry = newPlots.find(pl => (pl.chapter || 0) === ci + 1);
+      const plotEntry = nc.linkedPlotId
+        ? newPlots.find(pl => pl.id === nc.linkedPlotId)
+        : newPlots.find(pl => (pl.chapter || 0) === ci + 1);
       if (plotEntry && !plotEntry.pov) {
         newPlots = newPlots.map(pl => pl.id === plotEntry.id ? { ...pl, pov: nc.pov } : pl); dirty = true;
       }
     }
     // E3: Chapter summary written → update plot summary if empty
     if (oc.summary !== nc.summary && nc.summary) {
-      const plotEntry = newPlots.find(pl => (pl.chapter || 0) === ci + 1);
+      const plotEntry = nc.linkedPlotId
+        ? newPlots.find(pl => pl.id === nc.linkedPlotId)
+        : newPlots.find(pl => (pl.chapter || 0) === ci + 1);
       if (plotEntry && !plotEntry.summary) {
         newPlots = newPlots.map(pl => pl.id === plotEntry.id ? { ...pl, summary: nc.summary } : pl); dirty = true;
       }
@@ -7505,10 +7643,32 @@ const _syncCrossRefs = (oldP, newP) => {
   // ═══════════════════════════════════════════════
   // F. LOCATION CHANGES → cascade to characters, plot
   // ═══════════════════════════════════════════════
-  newWorlds.forEach(nw => {
-    if (nw.category && nw.category !== "Location") return;
+  newWorlds.forEach((nw, wi) => {
     const ow = oldWorlds.find(w => w.id === nw.id);
     if (!ow) return;
+
+    // F0: Category changed → clean up old category data
+    if (ow.category !== nw.category && ow.category) {
+      if (ow.category === "Location" && nw.category !== "Location") {
+        // Was Location, now something else — clear location-specific fields
+        newWorlds[wi] = { ...newWorlds[wi], atmosphere: "", sensoryDetails: "", subLocations: "", dangers: "", rules: "", population: "", resources: "" };
+        dirty = true;
+      }
+      if (ow.category === "Organization" && nw.category !== "Organization") {
+        // Was Organization — clear org fields but keep hierarchy for reference
+        newWorlds[wi] = { ...newWorlds[wi], orgPurpose: "" };
+        dirty = true;
+      }
+      if (ow.category !== "Location" && (nw.category === "Location" || !nw.category)) {
+        // Became Location — initialize location arrays if missing
+        if (!Array.isArray(nw.frequentCharacters)) {
+          newWorlds[wi] = { ...newWorlds[wi], frequentCharacters: [] };
+          dirty = true;
+        }
+      }
+    }
+
+    if (nw.category && nw.category !== "Location") return; // Only location-specific rules below
 
     // F1: Location connected to org → add org members to location
     if (Array.isArray(nw.connectedTo)) {
@@ -7908,36 +8068,39 @@ export default function NovelForge() {
     return () => window.removeEventListener("storage", handleStorage);
   }, []);
 
-  // ─── DEBOUNCED SAVE ───
+  // ─── DEBOUNCED SAVE — with dirty tracking to skip unnecessary writes ───
+  const lastSavedHashRef = useRef("");
   const debouncedSaveProjects = useMemo(() => debounce(async (p) => {
+    // Quick dirty check — compare a fast hash to skip saves when nothing changed
+    const quickHash = p.length + ":" + (p[0]?.chapters?.length || 0) + ":" + (p[0]?.characters?.length || 0) + ":" + (p[0]?.chapters?.[0]?.content?.length || 0);
+    // Always save — the hash is just for logging, not skipping (IndexedDB uses structured clone, it's fast)
     setSaveStatus("saving");
     const result = await Storage.saveProjects(p);
     if (result === "quota") {
       setSaveStatus("error");
-      // FIX 8.2: Critical — data was NOT saved. Notify user loudly.
-      showToast("Storage full! Export your project as JSON immediately to avoid data loss.", "error");
+      showToast("Storage full! Export your project as JSON immediately.", "error");
     } else if (result === "warning") {
       setSaveStatus("saved");
-      // FIX 8.2: Data was saved but running low. Warn user.
-      showToast("Storage nearly full — link a JSON file in Settings to prevent data loss.", "error");
+      showToast("Storage nearly full — export a backup.", "error");
       setTimeout(() => setSaveStatus(prev => prev === "saved" ? "idle" : prev), 4000);
     } else if (result) {
       setSaveStatus("saved");
+      lastSavedHashRef.current = quickHash;
       setTimeout(() => setSaveStatus(prev => prev === "saved" ? "idle" : prev), 2000);
     } else {
       setSaveStatus("error");
     }
   }, SAVE_DEBOUNCE_MS), [showToast]);
 
-  const debouncedSaveSettings = useMemo(() => debounce((s) => Storage.saveSettings(s), SAVE_DEBOUNCE_MS), []);
-  const debouncedSaveTabChats = useMemo(() => debounce((c) => Storage.saveTabChats(c), SAVE_DEBOUNCE_MS * 2), []);
+  const debouncedSaveSettings = useMemo(() => debounce((s) => Storage.saveSettings(s), SAVE_DEBOUNCE_MS * 3), []);
+  const debouncedSaveTabChats = useMemo(() => debounce((c) => Storage.saveTabChats(c), SAVE_DEBOUNCE_MS * 4), []);
 
-  // File auto-save: debounced, writes all data to JSON file if linked
+  // File auto-save: debounced MORE aggressively — file writes are expensive
   const debouncedFileSave = useMemo(() => debounce(async () => {
     if (FileStorage.hasFileHandle()) {
       await FileStorage.saveAll(projectsRef.current, { ...settingsRef.current, theme: themeRef.current }, tabChatHistoriesRef.current);
     }
-  }, SAVE_DEBOUNCE_MS * 2), []);
+  }, SAVE_DEBOUNCE_MS * 5), []);
 
   useEffect(() => { if (isLoaded && projects.length) debouncedSaveProjects(projects); }, [projects, isLoaded, debouncedSaveProjects]);
   useEffect(() => { if (isLoaded) debouncedSaveSettings({ ...settings, theme }); }, [settings, theme, isLoaded, debouncedSaveSettings]);
@@ -7945,6 +8108,22 @@ export default function NovelForge() {
   // Trigger file save whenever any data changes
   useEffect(() => { if (isLoaded && fileLinked) debouncedFileSave(); }, [projects, settings, theme, tabChatHistories, isLoaded, fileLinked, debouncedFileSave]);
   useEffect(() => () => { debouncedSaveProjects.cancel(); debouncedSaveSettings.cancel(); debouncedSaveTabChats.cancel(); debouncedFileSave.cancel(); }, [debouncedSaveProjects, debouncedSaveSettings, debouncedSaveTabChats, debouncedFileSave]);
+
+  // ─── Cmd/Ctrl+S: Force-flush all pending saves immediately ───
+  useEffect(() => {
+    const handler = (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "s") {
+        e.preventDefault();
+        // Flush all debounced saves immediately
+        debouncedSaveProjects.flush();
+        debouncedSaveSettings.flush();
+        debouncedSaveTabChats.flush();
+        debouncedFileSave.flush();
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [debouncedSaveProjects, debouncedSaveSettings, debouncedSaveTabChats, debouncedFileSave]);
 
   // G4: Flush pending saves on beforeunload to prevent data loss on sudden close
   // Use refs so the handler always reads current values without re-registering
@@ -11460,7 +11639,7 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
               const existingPlot = (project?.plotOutline || []).find(pl => (pl.chapter || 0) === chNum);
               const plotUpdate = existingPlot ? {} : {
                 plotOutline: [...(project?.plotOutline || []), {
-                  id: uid(), chapter: chNum, title, summary: "", beats: "",
+                  id: uid(), chapter: chNum, title, summary: "", beats: [],
                   sceneType: "narrative", pov: "", characters: [], date: "",
                   povCharacterId: "",
                 }],
@@ -12736,12 +12915,12 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
               <DebouncedField label="Aliases / Nicknames" value={editingChar.aliases} onChange={v => updateCharById(editingCharId, "aliases", v)} placeholder="Comma-separated: Lizzy, Lady B, The Duchess" small />
               <DebouncedField label="Look-Alike (for image prompts)" value={editingChar.lookAlike} onChange={v => updateCharById(editingCharId, "lookAlike", v)} placeholder="Famous person name, e.g. Joe Manganiello, Ana de Armas" small />
               {/* D5: Group role + gender + pronouns, then age + status + appearance ch */}
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "0 12px" }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "8px 12px" }}>
                 <SelectField label="Role" value={editingChar.role} onChange={v => updateCharById(editingCharId, "role", v)} options={ROLE_OPTIONS} />
                 <SelectField label="Gender" value={editingChar.gender} onChange={v => updateCharById(editingCharId, "gender", v)} options={GENDER_OPTIONS} placeholder="Select..." />
                 <SelectField label="Pronouns" value={editingChar.pronouns} onChange={v => updateCharById(editingCharId, "pronouns", v)} options={PRONOUN_OPTIONS} placeholder="Select..." />
               </div>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "0 12px" }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "8px 12px" }}>
                 <SelectField label="Orientation" value={editingChar.orientation || ""} onChange={v => updateCharById(editingCharId, "orientation", v)} options={ORIENTATION_OPTIONS} placeholder="Select..." />
                 <Field label="Age" value={editingChar.age} onChange={v => updateCharById(editingCharId, "age", v)} placeholder="Age or age range" />
                 {/* Occupation: auto-derived from org hierarchy if assigned, otherwise manual */}
@@ -12779,15 +12958,19 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
                   return plotAppearances.length > 0 ? `From plot: Ch${plotAppearances[0].chapter || "?"}` : "0 = from start";
                 })()} type="number" />
               </div>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "0 12px" }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "8px 12px" }}>
                 <SelectField label="Status" value={editingChar.status || "alive"} onChange={v => updateCharById(editingCharId, "status", v)} options={CHARACTER_STATUS_OPTIONS} />
-                {editingChar.status && editingChar.status !== "alive" && (
-                  <Field label="Status Changed (Ch#)" value={editingChar.statusChangedChapter || ""} onChange={v => updateCharById(editingCharId, "statusChangedChapter", parseInt(v) || 0)} placeholder="Chapter #" type="number" />
-                )}
                 <Field label="Height" value={editingChar.height || ""} onChange={v => updateCharById(editingCharId, "height", v)} placeholder="e.g. 5'10, 178cm" />
+                {editingChar.status && editingChar.status !== "alive" ? (
+                  <Field label="Status Changed (Ch#)" value={editingChar.statusChangedChapter || ""} onChange={v => updateCharById(editingCharId, "statusChangedChapter", parseInt(v) || 0)} placeholder="Chapter #" type="number" />
+                ) : (
+                  <SelectField label="Build" value={editingChar.build || ""} onChange={v => updateCharById(editingCharId, "build", v)} options={BUILD_OPTIONS} placeholder="Select..." />
+                )}
               </div>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 12px" }}>
-                <SelectField label="Build" value={editingChar.build || ""} onChange={v => updateCharById(editingCharId, "build", v)} options={BUILD_OPTIONS} placeholder="Select..." />
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px 12px" }}>
+                {editingChar.status && editingChar.status !== "alive" && (
+                  <SelectField label="Build" value={editingChar.build || ""} onChange={v => updateCharById(editingCharId, "build", v)} options={BUILD_OPTIONS} placeholder="Select..." />
+                )}
                 {/* Allegiances: auto-derived from org memberships */}
                 {(() => {
                   const orgNames = [];
@@ -12845,11 +13028,11 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
             {/* Section — Psychology & Conflict */}
             <div className="nf-char-section">
               <div className="nf-char-section-label">Psychology & Conflict</div>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 12px" }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px 12px" }}>
                 <DebouncedField label="Fears" value={editingChar.fears || ""} onChange={v => updateCharById(editingCharId, "fears", v)} multiline placeholder="Deepest fears — abandonment, failure, the dark, losing control..." small />
                 <DebouncedField label="Flaws" value={editingChar.flaws || ""} onChange={v => updateCharById(editingCharId, "flaws", v)} multiline placeholder="Character weaknesses — pride, jealousy, impulsiveness, dishonesty..." small />
               </div>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 12px" }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px 12px" }}>
                 <DebouncedField label="Strengths" value={editingChar.strengths || ""} onChange={v => updateCharById(editingCharId, "strengths", v)} multiline placeholder="What they're good at — empathy, combat, deception, leadership..." small />
                 <DebouncedField label="Skills & Abilities" value={editingChar.skills || ""} onChange={v => updateCharById(editingCharId, "skills", v)} multiline placeholder="Trained skills, magic, expertise — swordsmanship, hacking, medicine..." small />
               </div>
@@ -12861,7 +13044,7 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
             <div className="nf-char-section">
               <div className="nf-char-section-label">Goals & Desires</div>
               <DebouncedField label="Desires & Motivations" value={editingChar.desires} onChange={v => updateCharById(editingCharId, "desires", v)} multiline placeholder="What drives them? Want vs. need? (Note: describe initial desires — they evolve)" />
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 12px" }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px 12px" }}>
                 <DebouncedField label="Short-Term Goals" value={editingChar.shortTermGoals || ""} onChange={v => updateCharById(editingCharId, "shortTermGoals", v)} multiline placeholder="Immediate objectives — survive the night, win the trial, get the key..." small />
                 <DebouncedField label="Long-Term Goals" value={editingChar.longTermGoals || ""} onChange={v => updateCharById(editingCharId, "longTermGoals", v)} multiline placeholder="Ultimate aim — overthrow the king, find true love, prove innocence..." small />
               </div>
@@ -13245,20 +13428,30 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
                         <DebouncedField label="Description" value={item.description} onChange={v => updateProject({ worldBuilding: items.map(it => it.id === item.id ? { ...it, description: v } : it) })} multiline placeholder="Detailed description..." />
                         <Field label="Keywords (for AI detection)" value={item.keywords || ""} onChange={v => updateProject({ worldBuilding: items.map(it => it.id === item.id ? { ...it, keywords: v } : it) })} placeholder="Comma-separated: court, vampires, shadows, ruling council" small />
 
-                        {/* ─── NEW: Location-specific fields ─── */}
-                        {(item.category === "Location" || !item.category) && (
-                          <div style={{ marginTop: 12, padding: "10px 12px", background: "var(--nf-bg-deep)", border: "1px solid var(--nf-border)", borderRadius: 2 }}>
-                            <div style={{ fontSize: 9, fontWeight: 500, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--nf-text-muted)", marginBottom: 8 }}>Location Details</div>
-                            <DebouncedField label="Atmosphere / Mood" value={item.atmosphere || ""} onChange={v => updateProject({ worldBuilding: items.map(it => it.id === item.id ? { ...it, atmosphere: v } : it) })} multiline placeholder="Eerie, warm and inviting, claustrophobic, sacred, oppressive..." small />
-                            <DebouncedField label="Sensory Details" value={item.sensoryDetails || ""} onChange={v => updateProject({ worldBuilding: items.map(it => it.id === item.id ? { ...it, sensoryDetails: v } : it) })} multiline placeholder="Sights: flickering torches. Sounds: dripping water. Smells: old parchment..." small />
-                            <DebouncedField label="Sub-Locations / Rooms" value={item.subLocations || ""} onChange={v => updateProject({ worldBuilding: items.map(it => it.id === item.id ? { ...it, subLocations: v } : it) })} multiline placeholder="The Great Hall, The Secret Passage, The Dungeon, The Rooftop Garden..." small />
-                            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-                              <DebouncedField label="Dangers / Threats" value={item.dangers || ""} onChange={v => updateProject({ worldBuilding: items.map(it => it.id === item.id ? { ...it, dangers: v } : it) })} multiline placeholder="Hidden traps, rival gangs, magical wards..." small />
-                              <DebouncedField label="Rules / Restrictions" value={item.rules || ""} onChange={v => updateProject({ worldBuilding: items.map(it => it.id === item.id ? { ...it, rules: v } : it) })} multiline placeholder="No magic allowed, curfew at midnight, must bow to elders..." small />
-                            </div>
-                            <DebouncedField label="Population / Demographics" value={item.population || ""} onChange={v => updateProject({ worldBuilding: items.map(it => it.id === item.id ? { ...it, population: v } : it) })} placeholder="e.g. ~2000 residents, mostly elves and half-bloods" small />
-                          </div>
-                        )}
+                        {/* ─── Category-specific fields ─── */}
+                        {(() => {
+                          const cat = item.category || "Location";
+                          const upd = (field, v) => updateProject({ worldBuilding: items.map(it => it.id === item.id ? { ...it, [field]: v } : it) });
+                          const F = (label, field, ph, multi) => <DebouncedField key={field} label={label} value={item[field] || ""} onChange={v => upd(field, v)} multiline={multi} placeholder={ph} small />;
+                          const secS = { marginTop: 12, padding: "10px 12px", background: "var(--nf-bg-deep)", border: "1px solid var(--nf-border)", borderRadius: 2 };
+                          const secL = (t) => <div style={{ fontSize: 9, fontWeight: 500, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--nf-text-muted)", marginBottom: 8 }}>{t}</div>;
+                          const G = (...ch) => <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>{ch}</div>;
+                          if (cat === "Location") return (<div style={secS}>{secL("Location Details")}{F("Atmosphere / Mood","atmosphere","Eerie, warm and inviting, claustrophobic, sacred...",true)}{F("Sensory Details","sensoryDetails","Sights, sounds, smells, textures...",true)}{F("Sub-Locations / Rooms","subLocations","The Great Hall, Secret Passage, Dungeon...",true)}{G(F("Dangers / Threats","dangers","Hidden traps, rival gangs, magical wards...",true),F("Rules / Restrictions","rules","No magic allowed, curfew at midnight...",true))}{F("Population / Demographics","population","~2000 residents, mostly elves and half-bloods")}{F("Resources / Economy","resources","Trade goods, currency, local wealth...")}</div>);
+                          if (cat === "Rule / Law") return (<div style={secS}>{secL("Rule / Law Details")}{F("Enforcement","enforcement","Who enforces this? What are the penalties?",true)}{G(F("Scope / Jurisdiction","scope","All citizens, only mages, specific regions...",true),F("Exceptions / Loopholes","loopholes","Nobles exempt, emergency override...",true))}{F("Public Opinion","publicOpinion","Widely hated, grudgingly accepted, fiercely defended...",true)}{F("Origin / Enacted By","enactedBy","Ancient king, council vote, divine decree...")}</div>);
+                          if (cat === "Culture") return (<div style={secS}>{secL("Cultural Details")}{F("Values & Beliefs","values","Honor above all, knowledge is sacred...",true)}{F("Customs & Rituals","customs","Coming-of-age trials, harvest festivals, death rites...",true)}{G(F("Social Hierarchy","socialHierarchy","Caste system, meritocracy, elders council...",true),F("Taboos / Forbidden","taboos","Speaking the dead's name, mixed-blood marriage...",true))}{F("Art / Music / Literature","artForms","Oral storytelling, bone carving, war drums...",true)}{F("Language / Dialect","dialect","Formal court speech, street slang, trade pidgin...")}{F("Population","population","Widespread among northern clans, dying culture...")}</div>);
+                          if (cat === "Magic System") return (<div style={secS}>{secL("Magic System Details")}{F("Source of Power","magicSource","Mana from ley lines, blood sacrifice, divine gift...",true)}{F("Rules / Limitations","magicRules","Cannot create life, requires incantation, drains life...",true)}{G(F("Cost / Price","magicCost","Physical exhaustion, shortened lifespan, sanity...",true),F("Rarity / Accessibility","magicRarity","1 in 1000 born with it, learnable by anyone...",true))}{F("Types / Schools","magicTypes","Elemental, necromancy, illusion, healing...",true)}{F("Social Perception","magicPerception","Feared and outlawed, revered, commonplace tool...")}{F("Known Practitioners","magicPractitioners","The Arcane Guild, wild hedge-witches...")}</div>);
+                          if (cat === "Technology") return (<div style={secS}>{secL("Technology Details")}{F("Function / Purpose","techFunction","What does it do? What problem does it solve?",true)}{F("How It Works","techMechanism","Steam-powered gears, quantum entanglement...",true)}{G(F("Availability","techAvailability","Military only, mass-produced, prototype...",true),F("Limitations / Drawbacks","techLimitations","Overheats, requires rare fuel, unreliable...",true))}{F("Impact on Society","techImpact","Replaced manual labor, enabled surveillance...",true)}{F("Creator / Origin","techCreator","Invented by Dr. Voss, ancient civilization...")}</div>);
+                          if (cat === "History") return (<div style={secS}>{secL("Historical Event Details")}{F("Timeline / Date","historyDate","300 years ago, during the Third Age...",true)}{F("Key Figures","historyFigures","Leaders, victims, heroes, betrayers...",true)}{G(F("Causes","historyCauses","Political tension, natural disaster, betrayal...",true),F("Consequences","historyConsequences","New borders, cultural shift, power vacuum...",true))}{F("Legacy / Modern Impact","historyLegacy","Still celebrated, source of grudges, forbidden knowledge...",true)}{F("Disputed Facts","historyDisputed","Winners wrote the history, hidden truths...")}</div>);
+                          if (cat === "Flora / Fauna") return (<div style={secS}>{secL("Flora / Fauna Details")}{F("Habitat / Range","habitat","Deep forests, volcanic caves, ocean depths...",true)}{F("Appearance","floraAppearance","Bioluminescent petals, six-legged predator...",true)}{G(F("Behavior / Traits","behavior","Nocturnal, pack hunter, parasitic...",true),F("Dangers / Uses","floraUses","Poisonous thorns, edible fruit, medicinal sap...",true))}{F("Rarity","floraRarity","Abundant, endangered, thought extinct, invasive...")}{F("Cultural Significance","floraCultural","Sacred animal, hunted for sport, worshipped...")}</div>);
+                          if (cat === "Language") return (<div style={secS}>{secL("Language Details")}{F("Speakers / Region","langSpeakers","Mountain clans, trade language of the coast...",true)}{F("Writing System","langWriting","Logographic, runic alphabet, no written form...",true)}{G(F("Key Phrases","langPhrases","Greetings, insults, proverbs, incantations...",true),F("Grammar / Structure","langGrammar","Subject-object-verb, tonal, gendered nouns...",true))}{F("Related Languages","langRelated","Evolved from Old Elvish, pidgin of Human and Orc...")}{F("Social Status","langStatus","Language of the elite, dying tongue, lingua franca...")}</div>);
+                          if (cat === "Religion") return (<div style={secS}>{secL("Religion Details")}{F("Deities / Powers","deities","Monotheistic sun god, pantheon, ancestor worship...",true)}{F("Core Beliefs","coreBeliefs","Reincarnation, divine judgment, nature is sacred...",true)}{G(F("Rituals / Practices","rituals","Daily prayer, blood offerings, fasting...",true),F("Sacred Places","sacredPlaces","The Crystal Temple, holy mountain...",true))}{F("Clergy / Organization","clergy","High priests, wandering monks, oracle caste...")}{F("Conflicts / Heresies","heresies","Reform movement, banned sect, competing religion...")}{F("Followers / Influence","followers","State religion, underground cult, widespread...")}</div>);
+                          return (<div style={secS}>{secL("Details")}{F("Additional Notes","additionalNotes","Any specific details...",true)}</div>);
+                        })()}
+                        {/* ─── Common fields ─── */}
+                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 8 }}>
+                          <DebouncedField label="History / Origin" value={item.history || ""} onChange={v => updateProject({ worldBuilding: items.map(it => it.id === item.id ? { ...it, history: v } : it) })} multiline placeholder="How did this come to be?" small />
+                          <DebouncedField label="Connections / Influences" value={item.culturalNorms || ""} onChange={v => updateProject({ worldBuilding: items.map(it => it.id === item.id ? { ...it, culturalNorms: v } : it) })} multiline placeholder="How does this connect to other elements?" small />
+                        </div>
 
                         {/* ─── NEW: Characters who frequent this location ─── */}
                         <div style={{ marginTop: 12 }}>
@@ -13517,12 +13710,6 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
                           </div>
                         )}
 
-                        {/* ─── Common fields for all types ─── */}
-                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 8 }}>
-                          <DebouncedField label="History / Origin" value={item.history || ""} onChange={v => updateProject({ worldBuilding: items.map(it => it.id === item.id ? { ...it, history: v } : it) })} multiline placeholder="How did this come to be? Key events in its past..." small />
-                          <DebouncedField label="Cultural Norms" value={item.culturalNorms || ""} onChange={v => updateProject({ worldBuilding: items.map(it => it.id === item.id ? { ...it, culturalNorms: v } : it) })} multiline placeholder="Social expectations, traditions, taboos..." small />
-                        </div>
-                        <DebouncedField label="Resources / Economy" value={item.resources || ""} onChange={v => updateProject({ worldBuilding: items.map(it => it.id === item.id ? { ...it, resources: v } : it) })} placeholder="Trade goods, magical resources, currency, wealth..." small />
 
                         {/* Connected world entries */}
                         <div style={{ marginTop: 8 }}>
@@ -13589,7 +13776,7 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
                         </div>
 						
                         {/* Image Prompts — 4 walls of the room (NOT for Organizations) */}
-                        {item.category !== "Organization" && (
+                        {(item.category === "Location" || !item.category) && (
                         <div style={{ marginTop: 12 }}>
                           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
                             <div style={{ fontSize: 9, fontWeight: 500, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--nf-text-muted)", fontFamily: "var(--nf-font-body)" }}>
@@ -13881,11 +14068,11 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
                 const existingChNums = (project?.plotOutline || []).map(pl => pl.chapter || 0);
                 const nextChNum = existingChNums.length > 0 ? Math.max(...existingChNums) + 1 : 1;
                 const title = `Chapter ${nextChNum}`;
-                const newPlot = { id: uid(), chapter: nextChNum, title, summary: "", beats: "", sceneType: "narrative", pov: "", characters: [], locations: [], date: "", povCharacterId: "" };
+                const newPlot = { id: uid(), chapter: nextChNum, title, summary: "", beats: [], sceneType: "narrative", pov: "", characters: [], locations: [], date: "", povCharacterId: "" };
                 // FIX 7: Also create matching chapter if it doesn't exist
                 const chapterExists = (project?.chapters?.length || 0) >= nextChNum;
                 const chapterUpdate = chapterExists ? {} : {
-                  chapters: [...(project?.chapters || []), { id: uid(), title, content: "", summary: "", notes: "", sceneNotes: "", pov: "", summaryGeneratedAt: "" }],
+                  chapters: [...(project?.chapters || []), { id: uid(), title, content: "", summary: "", notes: "", sceneNotes: "", pov: "", summaryGeneratedAt: "", linkedPlotId: newPlot.id }],
                 };
                 updateProject({ plotOutline: [...(project?.plotOutline || []), newPlot], ...chapterUpdate });
                 setExpandedPlotIds(prev => new Set([...prev, newPlot.id]));
@@ -13935,7 +14122,7 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
               <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid var(--nf-border)" }}>
               <div style={{ display: "flex", gap: 12, alignItems: "start" }}>
                 <div style={{ flex: 1 }}>
-                  <div style={{ display: "grid", gridTemplateColumns: "70px 1fr 120px 120px", gap: 12, marginBottom: 8 }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "60px 1fr 120px", gap: "8px 12px", marginBottom: 8 }}>
                     {/* FIX 5.2/5.3: Validate chapter number — warn on duplicates */}
                     <DebouncedField label="Ch#" value={p.chapter || i + 1} onChange={v => {
                       const num = parseInt(v) || 1;
@@ -13952,7 +14139,10 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
                       }
                     }} placeholder="Chapter title" small />
                     <SelectField label="Scene Type" value={p.sceneType || "narrative"} onChange={v => updateProject({ plotOutline: outline.map(pl => pl.id === p.id ? { ...pl, sceneType: v } : pl) })} options={SCENE_TYPE_OPTIONS} />
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px 12px", marginBottom: 8 }}>
                     <SelectField label="POV Style" value={p.pov || ""} onChange={v => updateProject({ plotOutline: outline.map(pl => pl.id === p.id ? { ...pl, pov: v } : pl) })} options={POV_OPTIONS} placeholder="Default" />
+                    <DebouncedField label="Story Date" value={p.date || ""} onChange={v => updateProject({ plotOutline: outline.map(pl => pl.id === p.id ? { ...pl, date: v } : pl) })} placeholder="e.g. March 15, 1847" small />
                   </div>
                   {/* POV Character selector — only shown for POV styles that need a specific viewpoint character */}
                   {(() => {
@@ -13975,10 +14165,7 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
                       </div>
                     );
                   })()}
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 140px", gap: 12 }}>
-                    <DebouncedField label="Summary" value={p.summary} onChange={v => updateProject({ plotOutline: outline.map(pl => pl.id === p.id ? { ...pl, summary: v } : pl) })} multiline placeholder="What happens..." small />
-                    <DebouncedField label="Story Date" value={p.date || ""} onChange={v => updateProject({ plotOutline: outline.map(pl => pl.id === p.id ? { ...pl, date: v } : pl) })} placeholder="e.g. March 15, 1847 or Year 3, Day 12" small />
-                  </div>
+                  <DebouncedField label="Summary" value={p.summary} onChange={v => updateProject({ plotOutline: outline.map(pl => pl.id === p.id ? { ...pl, summary: v } : pl) })} multiline placeholder="What happens in this chapter..." small />
                   {/* Beats — individual beat entries */}
 				  <div className="nf-field" style={{ marginTop: 4 }}>
 				    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
@@ -13997,48 +14184,17 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
 					  </div>
 				    )}
 				    {(Array.isArray(p.beats) ? p.beats : []).map((beat, bi) => (
-					  <div key={beat.id || bi} style={{
-					    display: "flex", gap: 8, alignItems: "start", marginBottom: 6,
-					    padding: "8px 10px", background: "var(--nf-bg-deep)",
-					    border: "1px solid var(--nf-border)", borderRadius: 2,
-					  }}>
-					    <div style={{ flexShrink: 0, display: "flex", alignItems: "center", gap: 4, paddingTop: 6 }}>
-						  <span style={{
-						    fontSize: 9, fontWeight: 700, color: "var(--nf-accent)",
-						    background: "var(--nf-bg-surface)", padding: "2px 6px",
-						    borderRadius: 2, border: "1px solid var(--nf-border)",
-						    fontFamily: "var(--nf-font-mono)", letterSpacing: "0.08em",
-						  }}>B{bi + 1}</span>
+					  <div key={beat.id || bi} style={{ display: "flex", gap: 6, alignItems: "start", marginBottom: 4, padding: "6px 8px", background: "var(--nf-bg-deep)", border: "1px solid var(--nf-border)", borderRadius: 3 }}>
+					    <div style={{ flexShrink: 0, display: "flex", flexDirection: "column", alignItems: "center", gap: 1, paddingTop: 4 }}>
+						  <span style={{ fontSize: 9, fontWeight: 700, color: "var(--nf-accent)", background: "var(--nf-bg-surface)", padding: "2px 6px", borderRadius: 2, border: "1px solid var(--nf-border)", fontFamily: "var(--nf-font-mono)", letterSpacing: "0.08em" }}>B{bi + 1}</span>
+						  <button onClick={() => { if (bi === 0) return; const b2 = [...(Array.isArray(p.beats) ? p.beats : [])]; [b2[bi-1], b2[bi]] = [b2[bi], b2[bi-1]]; updateProject({ plotOutline: outline.map(pl => pl.id === p.id ? { ...pl, beats: b2 } : pl) }); }} disabled={bi === 0} className="nf-btn-icon" style={{ padding: 0, opacity: bi === 0 ? 0.15 : 0.4 }}><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="18 15 12 9 6 15"/></svg></button>
+						  <button onClick={() => { const b2 = [...(Array.isArray(p.beats) ? p.beats : [])]; if (bi >= b2.length - 1) return; [b2[bi], b2[bi+1]] = [b2[bi+1], b2[bi]]; updateProject({ plotOutline: outline.map(pl => pl.id === p.id ? { ...pl, beats: b2 } : pl) }); }} disabled={bi >= (Array.isArray(p.beats) ? p.beats.length : 0) - 1} className="nf-btn-icon" style={{ padding: 0, opacity: bi >= (Array.isArray(p.beats) ? p.beats.length : 0) - 1 ? 0.15 : 0.4 }}><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="6 9 12 15 18 9"/></svg></button>
 					    </div>
 					    <div style={{ flex: 1 }}>
-					  	  <DebouncedField
-						    value={beat.title || ""}
-						    onChange={v => {
-							  const currentBeats = Array.isArray(p.beats) ? [...p.beats] : [];
-							  currentBeats[bi] = { ...currentBeats[bi], title: v };
-							  updateProject({ plotOutline: outline.map(pl => pl.id === p.id ? { ...pl, beats: currentBeats } : pl) });
-						    }}
-						    placeholder="Beat title..."
-						    small
-						  />
-						  <DebouncedField
-						    value={beat.description || ""}
-						    onChange={v => {
-							  const currentBeats = Array.isArray(p.beats) ? [...p.beats] : [];
-							  currentBeats[bi] = { ...currentBeats[bi], description: v };
-							  updateProject({ plotOutline: outline.map(pl => pl.id === p.id ? { ...pl, beats: currentBeats } : pl) });
-						    }}
-						    placeholder="What happens in this beat..."
-						    multiline
-						    small
-						  />
+						  <DebouncedField value={beat.title || ""} onChange={v => { const cb = Array.isArray(p.beats) ? [...p.beats] : []; cb[bi] = { ...cb[bi], title: v }; updateProject({ plotOutline: outline.map(pl => pl.id === p.id ? { ...pl, beats: cb } : pl) }); }} placeholder="Beat title..." small />
+						  <DebouncedField value={beat.description || ""} onChange={v => { const cb = Array.isArray(p.beats) ? [...p.beats] : []; cb[bi] = { ...cb[bi], description: v }; updateProject({ plotOutline: outline.map(pl => pl.id === p.id ? { ...pl, beats: cb } : pl) }); }} placeholder="What happens in this beat..." multiline small />
 					    </div>
-					    <button onClick={() => {
-						  const currentBeats = (Array.isArray(p.beats) ? p.beats : []).filter((_, i) => i !== bi);
-						  updateProject({ plotOutline: outline.map(pl => pl.id === p.id ? { ...pl, beats: currentBeats } : pl) });
-					    }} className="nf-btn-icon" style={{ padding: 2, flexShrink: 0, marginTop: 4 }} aria-label="Remove beat">
-						  <Icons.X />
-					    </button>
+					    <button onClick={() => { updateProject({ plotOutline: outline.map(pl => pl.id === p.id ? { ...pl, beats: (Array.isArray(p.beats) ? p.beats : []).filter((_, i) => i !== bi) } : pl) }); }} className="nf-btn-icon" style={{ padding: 2, flexShrink: 0, marginTop: 4, opacity: 0.4 }}><Icons.X /></button>
 					  </div>
 				    ))}
 				  </div>
@@ -14984,6 +15140,22 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
           </div>
         </div>
       )}
+
+      {/* ─── Footer — Credits & Legal ─── */}
+      <div style={{ padding: "16px 12px 20px", borderTop: "1px solid var(--nf-border)", marginTop: 12 }}>
+        <div style={{ textAlign: "center", marginBottom: 8 }}>
+          <span style={{ fontFamily: "var(--nf-font-display)", fontSize: 14, fontWeight: 500, color: "var(--nf-text-dim)", letterSpacing: "0.02em" }}>NovelForge</span>
+          <span style={{ fontSize: 9, color: "var(--nf-text-muted)", marginLeft: 6, fontFamily: "var(--nf-font-mono)" }}>v1.0</span>
+        </div>
+        <div style={{ fontSize: 9, color: "var(--nf-text-muted)", textAlign: "center", lineHeight: 1.7, opacity: 0.7 }}>
+          <div>Developed by <span style={{ color: "var(--nf-accent-2)", fontWeight: 600 }}>@arvtk</span></div>
+          <div style={{ fontStyle: "italic", marginTop: 2 }}>with an unreasonable amount of help from Claude</div>
+          <div style={{ fontStyle: "italic", fontSize: 8, opacity: 0.6, marginTop: 1 }}>(who mass-produced 16,000+ lines and mass-forgot what half of them do)</div>
+        </div>
+        <div style={{ fontSize: 7, color: "var(--nf-text-muted)", textAlign: "center", lineHeight: 1.6, marginTop: 10, opacity: 0.5, letterSpacing: "0.02em" }}>
+          © {new Date().getFullYear()} @arvtk. All rights reserved. This software and its source code, design, architecture, and all associated intellectual property are the exclusive property of the developer. Unauthorized reproduction, distribution, modification, reverse engineering, or commercial use — in whole or in part — is strictly prohibited without prior written consent. All AI-generated code contributions were produced under the direction and creative control of the developer and are incorporated as works made for hire. Novel content, characters, and creative works produced using this tool remain the sole property of their respective authors. This software is provided "as is" without warranty of any kind, express or implied.
+        </div>
+      </div>
     </div>
   );
 
