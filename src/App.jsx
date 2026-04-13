@@ -6217,7 +6217,7 @@ RULES:
     switch (tabName) {
       case "characters": {
         const actions = [
-          { label: "✦ Generate character", msg: "Generate a compelling character for my story considering genre, themes, and existing cast. Include ALL fields: name, role, gender, age, pronouns, occupation, height, build, tags, appearance, personality, backstory, desires, shortTermGoals, longTermGoals, speechPattern, voiceSamples, habits, fears, flaws, strengths, skills, internalConflict, externalConflict, signatureItems, secrets, allegiances, arc, canonNotes." },
+          { label: "✦ Generate character", msg: "Generate a compelling character for my story considering genre, themes, and existing cast. Include ALL fields: name, role, gender, age, pronouns, orientation, aliases, occupation, height, build, tags, appearance, personality, backstory, desires, shortTermGoals, longTermGoals, speechPattern, voiceSamples, habits, fears, flaws, strengths, skills, internalConflict, externalConflict, signatureItems, secrets, hiddenSecrets, allegiances, arc, canonNotes." },
         ];
         // D18: Contextual fill — reference which fields are actually empty
         if (editingEntityId && project?.characters) {
@@ -6237,7 +6237,7 @@ RULES:
         return actions;
       }
       case "world": return [
-        { label: "✦ Generate entry", msg: "Generate an enriching world-building entry that fits the genre and existing world. Include name, category, description, keywords, atmosphere, sensoryDetails, dangers, rules, history, culturalNorms, and resources. If it's a Location, also include subLocations and population." },
+        { label: "✦ Generate entry", msg: "Generate a world-building entry that fits my story's genre and existing world. IMPORTANT: Set the 'category' field to one of: Location, Rule / Law, Culture, Magic System, Technology, History, Flora / Fauna, Language, Religion, Organization. Then include the category-specific fields. LOCATION: atmosphere, sensoryDetails, subLocations, dangers, rules, population, resources. RELIGION: deities, coreBeliefs, rituals, sacredPlaces, clergy, heresies. MAGIC SYSTEM: magicSource, magicRules, magicCost, magicRarity, magicTypes. TECHNOLOGY: techFunction, techMechanism, techAvailability, techLimitations. CULTURE: values, customs, socialHierarchy, taboos. HISTORY: historyDate, historyFigures, historyCauses, historyConsequences. Always include: name, category, description, keywords." },
         { label: "Expand world", msg: `Suggest 3 new entries that would deepen my world${project?.worldBuilding?.length ? ` (I already have ${project.worldBuilding.length} entries)` : ""}. For each, include all relevant fields. Explain why each matters for the story.` },
         { label: "Build organization", msg: "Generate a detailed Organization entry with name, category (Organization), description, orgPurpose, and an orgHierarchy with 3-5 positions including titles, roles, and which existing characters could fill them. Return structured JSON." },
       ];
@@ -6246,7 +6246,7 @@ RULES:
         const existingChNums = (project?.plotOutline || []).map(pl => pl.chapter || 0);
         const nextCh = existingChNums.length > 0 ? Math.max(...existingChNums) + 1 : 1;
         return [
-          { label: `✦ Outline Ch${nextCh}`, msg: `Generate a chapter outline for Chapter ${nextCh}. Include title, summary, beats, scene type, and which characters appear.` },
+          { label: `✦ Outline Ch${nextCh}`, msg: `Generate a chapter outline for Chapter ${nextCh}. Include: chapter (number), title, summary, beats (array of {title, description}), sceneType, pov, date (story date if applicable), and characters (array of character names who appear). Consider the story's timeline and existing plot entries.` },
           { label: "Full arc plan", msg: "Suggest a complete story arc considering what's been written so far. Map turning points, climax, resolution with specific emotional beats." },
         ];
       }
@@ -11090,14 +11090,12 @@ CRITICAL: Every sentence must describe something visible. If a detail cannot be 
 
   const handleWorldAutoFill = useCallback((data) => {
     if (!data) return;
-    // Support batch: if array, add all entries at once
     const items = Array.isArray(data) ? data : [data];
     const currentWorld = project?.worldBuilding || [];
     const allChars = project?.characters || [];
     let newWorld = [...currentWorld];
     let added = 0, updated = 0;
 
-    // Helper: resolve character names to IDs for frequentCharacters
     const resolveCharNames = (raw) => {
       if (!raw) return [];
       const names = Array.isArray(raw) ? raw : String(raw).split(",").map(s => s.trim()).filter(Boolean);
@@ -11107,54 +11105,53 @@ CRITICAL: Every sentence must describe something visible. If a detail cannot be 
       }).filter(Boolean);
     };
 
+    // All possible world entry fields — generic merge for ANY category
+    const worldFields = [
+      "name","category","description","keywords","introducedInChapter",
+      "atmosphere","sensoryDetails","subLocations","dangers","rules","history",
+      "culturalNorms","resources","population","orgPurpose",
+      // Category-specific fields
+      "enforcement","scope","loopholes","publicOpinion","enactedBy",
+      "values","customs","socialHierarchy","taboos","artForms","dialect",
+      "magicSource","magicRules","magicCost","magicRarity","magicTypes","magicPerception",
+      "techFunction","techMechanism","techAvailability","techLimitations","techImpact","techCreator",
+      "historyDate","historyFigures","historyCauses","historyConsequences","historyLegacy",
+      "habitat","floraAppearance","behavior","floraUses","floraRarity","floraCultural",
+      "langSpeakers","langWriting","langPhrases","langGrammar","langRelated","langStatus",
+      "deities","coreBeliefs","rituals","sacredPlaces","clergy","heresies","followers",
+    ];
+
     for (const raw of items) {
       const norm = Object.fromEntries(Object.entries(raw).map(([k, v]) => {
-        // Keep arrays as arrays for frequentCharacters, orgMembers, connectedTo, orgHierarchy
         if (["frequentCharacters","orgMembers","connectedTo","orgHierarchy"].includes(k)) return [k, v];
         return [k, Array.isArray(v) ? v.join(", ") : v];
       }));
       const existing = newWorld.find(w => w.name && norm.name && w.name.toLowerCase() === norm.name.toLowerCase());
       if (existing) {
-        newWorld = newWorld.map(w => w.id === existing.id ? {
-          ...w,
-          category: norm.category || w.category,
-          description: norm.description || w.description,
-          keywords: norm.keywords || w.keywords,
-          introducedInChapter: norm.introducedInChapter || w.introducedInChapter,
-          atmosphere: norm.atmosphere || w.atmosphere || "",
-          sensoryDetails: norm.sensoryDetails || w.sensoryDetails || "",
-          subLocations: norm.subLocations || w.subLocations || "",
-          dangers: norm.dangers || w.dangers || "",
-          rules: norm.rules || w.rules || "",
-          history: norm.history || w.history || "",
-          culturalNorms: norm.culturalNorms || w.culturalNorms || "",
-          resources: norm.resources || w.resources || "",
-          population: norm.population || w.population || "",
-          orgPurpose: norm.orgPurpose || w.orgPurpose || "",
-          frequentCharacters: norm.frequentCharacters ? resolveCharNames(norm.frequentCharacters) : (w.frequentCharacters || []),
-        } : w);
+        // Merge: only fill empty fields, preserve existing values
+        const merged = { ...existing };
+        worldFields.forEach(f => {
+          if (norm[f] && !merged[f]) merged[f] = norm[f];
+        });
+        // Category: always accept if provided (the whole point of this fix)
+        if (norm.category) merged.category = norm.category;
+        // Special arrays
+        if (norm.frequentCharacters) merged.frequentCharacters = resolveCharNames(norm.frequentCharacters);
+        if (norm.orgHierarchy && Array.isArray(norm.orgHierarchy)) merged.orgHierarchy = norm.orgHierarchy;
+        newWorld = newWorld.map(w => w.id === existing.id ? merged : w);
         updated++;
       } else {
-        newWorld.push({
-          id: uid(), name: norm.name || "", category: norm.category || "",
-          description: norm.description || "", keywords: norm.keywords || "",
-          introducedInChapter: norm.introducedInChapter || 0,
-          referenceImages: {}, imagePrompts: {},
-          atmosphere: norm.atmosphere || "",
-          sensoryDetails: norm.sensoryDetails || "",
-          subLocations: norm.subLocations || "",
-          dangers: norm.dangers || "",
-          rules: norm.rules || "",
-          history: norm.history || "",
-          culturalNorms: norm.culturalNorms || "",
-          resources: norm.resources || "",
-          population: norm.population || "",
-          orgPurpose: norm.orgPurpose || "",
+        // Create new entry with all fields
+        const entry = {
+          id: uid(), referenceImages: {}, imagePrompts: {},
           frequentCharacters: norm.frequentCharacters ? resolveCharNames(norm.frequentCharacters) : [],
-          connectedTo: [],
+          connectedTo: [], orgMembers: [],
           orgHierarchy: Array.isArray(norm.orgHierarchy) ? norm.orgHierarchy : [],
-          orgMembers: [],
-        });
+        };
+        worldFields.forEach(f => { entry[f] = norm[f] || ""; });
+        // Fix numeric fields
+        entry.introducedInChapter = parseInt(entry.introducedInChapter, 10) || 0;
+        newWorld.push(entry);
         added++;
       }
     }
@@ -11203,11 +11200,23 @@ CRITICAL: Every sentence must describe something visible. If a detail cannot be 
           if (i !== existingIdx) return pl;
           const mergedChars = charIds.length > 0 ? charIds : pl.characters;
           const mergedLocs = locIds.length > 0 ? locIds : (pl.locations || []);
-          return { ...pl, title: norm.title || pl.title, summary: norm.summary || pl.summary, beats: norm.beats || pl.beats, sceneType: norm.sceneType || pl.sceneType, pov: norm.pov || pl.pov, characters: mergedChars, locations: mergedLocs };
+          // Merge beats: if AI sends array of beat objects, use them; if string, convert
+          let mergedBeats = pl.beats;
+          if (norm.beats) {
+            if (Array.isArray(norm.beats)) mergedBeats = norm.beats.map(b => typeof b === "string" ? { id: uid(), title: b, description: "" } : { id: uid(), ...b });
+            else if (typeof norm.beats === "string") mergedBeats = norm.beats.split("\n").filter(b => b.trim()).map(b => ({ id: uid(), title: b.trim(), description: "" }));
+          }
+          return { ...pl, title: norm.title || pl.title, summary: norm.summary || pl.summary, beats: mergedBeats, sceneType: norm.sceneType || pl.sceneType, pov: norm.pov || pl.pov, date: norm.date || pl.date || "", povCharacterId: norm.povCharacterId || pl.povCharacterId || "", characters: mergedChars, locations: mergedLocs };
         });
         updated++;
       } else {
-        currentOutline.push({ id: uid(), chapter: chNum, title: norm.title || "", summary: norm.summary || "", beats: norm.beats || "", sceneType: norm.sceneType || "narrative", pov: norm.pov || "", characters: charIds, locations: locIds });
+        // Normalize beats for new entry
+        let newBeats = [];
+        if (norm.beats) {
+          if (Array.isArray(norm.beats)) newBeats = norm.beats.map(b => typeof b === "string" ? { id: uid(), title: b, description: "" } : { id: uid(), ...b });
+          else if (typeof norm.beats === "string") newBeats = norm.beats.split("\n").filter(b => b.trim()).map(b => ({ id: uid(), title: b.trim(), description: "" }));
+        }
+        currentOutline.push({ id: uid(), chapter: chNum, title: norm.title || "", summary: norm.summary || "", beats: newBeats, sceneType: norm.sceneType || "narrative", pov: norm.pov || "", date: norm.date || "", povCharacterId: norm.povCharacterId || "", characters: charIds, locations: locIds });
         added++;
       }
     }
