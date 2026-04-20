@@ -19,6 +19,142 @@ const ThemeContext = createContext({ theme: "dark", toggle: () => {} });
 const useTheme = () => useContext(ThemeContext);
 
 // ─── THEME DEFINITIONS ───
+// ─── LIGHTWEIGHT i18n SCAFFOLDING ───
+// Designed to be extended: add more keys/languages by expanding I18N_STRINGS below.
+// Usage: t("common.save") returns "Save" in current lang; falls back to English.
+// Currently populated minimally. Users requesting i18n can progressively add strings.
+const I18N_STRINGS = {
+  en: {
+    "common.save": "Save",
+    "common.cancel": "Cancel",
+    "common.delete": "Delete",
+    "common.close": "Close",
+    "common.loading": "Loading...",
+    "common.error": "Error",
+    "common.settings": "Settings",
+    "tabs.write": "Write",
+    "tabs.characters": "Characters",
+    "tabs.world": "World",
+    "tabs.plot": "Plot",
+    "tabs.relationships": "Relationships",
+    "tabs.images": "Images",
+    "tabs.memory": "Memory",
+    "tabs.settings": "Settings",
+    "findReplace.title": "Find & Replace",
+    "findReplace.find": "Find",
+    "findReplace.replaceWith": "Replace with",
+    "findReplace.replaceAll": "Replace All",
+    "findReplace.caseSensitive": "Case sensitive",
+    "findReplace.wholeWord": "Whole word",
+  },
+  es: {
+    "common.save": "Guardar",
+    "common.cancel": "Cancelar",
+    "common.delete": "Eliminar",
+    "common.close": "Cerrar",
+    "common.loading": "Cargando...",
+    "common.error": "Error",
+    "common.settings": "Ajustes",
+    "tabs.write": "Escribir",
+    "tabs.characters": "Personajes",
+    "tabs.world": "Mundo",
+    "tabs.plot": "Trama",
+    "tabs.relationships": "Relaciones",
+    "tabs.images": "Imágenes",
+    "tabs.memory": "Memoria",
+    "tabs.settings": "Ajustes",
+    "findReplace.title": "Buscar y Reemplazar",
+    "findReplace.find": "Buscar",
+    "findReplace.replaceWith": "Reemplazar con",
+    "findReplace.replaceAll": "Reemplazar todo",
+    "findReplace.caseSensitive": "Distinguir mayúsculas",
+    "findReplace.wholeWord": "Palabra completa",
+  },
+  fr: {
+    "common.save": "Enregistrer",
+    "common.cancel": "Annuler",
+    "common.delete": "Supprimer",
+    "common.close": "Fermer",
+    "common.loading": "Chargement...",
+    "common.error": "Erreur",
+    "common.settings": "Paramètres",
+    "tabs.write": "Écrire",
+    "tabs.characters": "Personnages",
+    "tabs.world": "Monde",
+    "tabs.plot": "Intrigue",
+    "tabs.relationships": "Relations",
+    "tabs.images": "Images",
+    "tabs.memory": "Mémoire",
+    "tabs.settings": "Paramètres",
+    "findReplace.title": "Rechercher et remplacer",
+    "findReplace.find": "Rechercher",
+    "findReplace.replaceWith": "Remplacer par",
+    "findReplace.replaceAll": "Tout remplacer",
+    "findReplace.caseSensitive": "Sensible à la casse",
+    "findReplace.wholeWord": "Mot entier",
+  },
+  de: {
+    "common.save": "Speichern",
+    "common.cancel": "Abbrechen",
+    "common.delete": "Löschen",
+    "common.close": "Schließen",
+    "common.loading": "Lädt...",
+    "common.error": "Fehler",
+    "common.settings": "Einstellungen",
+    "tabs.write": "Schreiben",
+    "tabs.characters": "Charaktere",
+    "tabs.world": "Welt",
+    "tabs.plot": "Handlung",
+    "tabs.relationships": "Beziehungen",
+    "tabs.images": "Bilder",
+    "tabs.memory": "Gedächtnis",
+    "tabs.settings": "Einstellungen",
+    "findReplace.title": "Suchen & Ersetzen",
+    "findReplace.find": "Suchen",
+    "findReplace.replaceWith": "Ersetzen durch",
+    "findReplace.replaceAll": "Alle ersetzen",
+    "findReplace.caseSensitive": "Groß-/Kleinschreibung",
+    "findReplace.wholeWord": "Ganzes Wort",
+  },
+  ja: {
+    "common.save": "保存",
+    "common.cancel": "キャンセル",
+    "common.delete": "削除",
+    "common.close": "閉じる",
+    "common.loading": "読み込み中...",
+    "common.error": "エラー",
+    "common.settings": "設定",
+    "tabs.write": "執筆",
+    "tabs.characters": "キャラクター",
+    "tabs.world": "世界観",
+    "tabs.plot": "プロット",
+    "tabs.relationships": "関係",
+    "tabs.images": "画像",
+    "tabs.memory": "メモリ",
+    "tabs.settings": "設定",
+    "findReplace.title": "検索と置換",
+    "findReplace.find": "検索",
+    "findReplace.replaceWith": "置換後",
+    "findReplace.replaceAll": "すべて置換",
+    "findReplace.caseSensitive": "大文字小文字を区別",
+    "findReplace.wholeWord": "単語単位",
+  },
+};
+const I18N_LANGUAGES = [
+  { value: "en", label: "English" },
+  { value: "es", label: "Español" },
+  { value: "fr", label: "Français" },
+  { value: "de", label: "Deutsch" },
+  { value: "ja", label: "日本語" },
+];
+// Globally mutable current language — updated by setLanguage in settings
+let _currentLang = "en";
+const setCurrentLang = (lang) => { _currentLang = I18N_STRINGS[lang] ? lang : "en"; };
+const t = (key, fallback) => {
+  const lang = _currentLang || "en";
+  return I18N_STRINGS[lang]?.[key] || I18N_STRINGS.en?.[key] || fallback || key;
+};
+
 const THEMES = {
   dark: {
     // Japandi dark — warm charcoal, sumi ink, washi paper undertones
@@ -105,6 +241,51 @@ const THEMES = {
     "--nf-glow": "0 0 40px rgba(122,101,72,0.03)",
     "--nf-shadow": "0 8px 32px rgba(0,0,0,0.06)",
     "--nf-shadow-lg": "0 24px 64px rgba(0,0,0,0.10)",
+  },
+  reading: {
+    // Reading Mode — paper-like, low-stimulation, eye-soothing palette for extended sessions.
+    // Warm off-white backgrounds (not pure white), near-black text (not pure black).
+    // Muted terracotta/sage accents, no saturated hues, minimal contrast edges.
+    "--nf-bg-deep": "#ece8de",           // Warm aged paper
+    "--nf-bg": "#f3efe5",                 // Paper leaf
+    "--nf-bg-raised": "#f8f4ec",          // Fresh paper
+    "--nf-bg-surface": "#faf6ee",         // Cream surface
+    "--nf-bg-hover": "#ede8dc",           // Gentle hover
+    "--nf-border": "rgba(42,38,32,0.12)",         // Soft hairline borders
+    "--nf-border-focus": "rgba(168,118,90,0.35)", // Muted terracotta on focus
+    "--nf-text": "#2a2620",               // Near-black ink (not pure black)
+    "--nf-text-dim": "#5a5349",           // Soft secondary text
+    "--nf-text-muted": "#8a8275",         // Tertiary muted
+    "--nf-accent": "#a8765a",             // Muted terracotta
+    "--nf-accent-2": "#7d8a6f",           // Dusty sage
+    "--nf-accent-glow": "rgba(168,118,90,0.04)",
+    "--nf-accent-glow-2": "rgba(125,138,111,0.04)",
+    "--nf-editor-text": "#2a2620",        // Ink on paper
+    "--nf-editor-placeholder": "#b8b0a3",
+    "--nf-selection-bg": "rgba(168,118,90,0.14)",
+    "--nf-chat-bubble-bg": "#f8f4ec",
+    "--nf-chat-bubble-user-bg": "#f3efe5",
+    "--nf-chat-bubble-user-border": "rgba(125,138,111,0.15)",
+    "--nf-error-bg": "#f5e8e0",
+    "--nf-error-border": "rgba(168,118,90,0.18)",
+    "--nf-danger-bg": "#f5e8e0",
+    "--nf-danger-hover": "#eedcce",
+    "--nf-success": "#7d8a6f",
+    "--nf-success-bg": "rgba(125,138,111,0.06)",
+    "--nf-toast-bg": "#f8f4ecee",
+    "--nf-toast-border": "rgba(42,38,32,0.12)",
+    "--nf-dialog-bg": "#f8f4ec",
+    "--nf-dialog-border": "rgba(42,38,32,0.12)",
+    "--nf-diff-bg": "#f8f4ec",
+    "--nf-diff-border": "rgba(42,38,32,0.12)",
+    "--nf-scrollbar-thumb": "rgba(42,38,32,0.18)",
+    "--nf-scrollbar-hover": "rgba(42,38,32,0.28)",
+    "--nf-toolbar-bg": "#f3efe5",
+    "--nf-toolbar-border": "rgba(42,38,32,0.10)",
+    "--nf-toolbar-btn-hover": "#ede8dc",
+    "--nf-glow": "none",                   // No glow in reading mode
+    "--nf-shadow": "0 2px 12px rgba(42,38,32,0.04)",
+    "--nf-shadow-lg": "0 8px 28px rgba(42,38,32,0.06)",
   },
 };
 
@@ -594,6 +775,16 @@ const wordCount = (text) => {
   if (!clean) return 0;
   return clean.split(/\s+/).filter(w => w.length > 0).length;
 };
+// Reading time estimate — ~250 wpm for fiction prose
+const readingTime = (words) => {
+  if (!words || words <= 0) return "0 min";
+  const mins = Math.ceil(words / 250);
+  if (mins < 1) return "< 1 min";
+  if (mins < 60) return `${mins} min`;
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  return m ? `${h}h ${m}m` : `${h}h`;
+};
 const debounce = (fn, ms) => {
   let t;
   const d = (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), ms); };
@@ -714,6 +905,7 @@ const _retryableFetch = async (fn, maxRetries = 2) => {
 // ─── MARKDOWN RENDERER ───
 const renderMarkdown = (text) => {
   if (!text) return "";
+  // FIRST: escape all HTML special chars (primary XSS defense)
   let html = text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   // Process code blocks FIRST to protect their contents
   const codeBlocks = [];
@@ -741,12 +933,49 @@ const renderMarkdown = (text) => {
   html = html.replace(/\n/g, '<br/>');
   // Restore code blocks
   codeBlocks.forEach((block, i) => { html = html.replace(`%%CODEBLOCK_${i}%%`, block); });
+  // XSS hardening: strip any javascript:/data: URLs and event handlers that might have snuck through
+  // (defense in depth — our escaping above should prevent these, but belt + suspenders)
+  html = html.replace(/javascript:/gi, "blocked:");
+  html = html.replace(/\son[a-z]+\s*=/gi, " data-blocked=");
   return html;
 };
 
 // H1: Memoization cache for rendered markdown
 const _mdCache = new Map();
 const _MD_CACHE_MAX = 100;
+// JSON repair for truncated AI responses. Tries to close open braces/brackets
+// so that truncated max_tokens responses still parse.
+const tryRepairJson = (str) => {
+  if (!str) return null;
+  let s = String(str).trim();
+  if (!s.startsWith("{") && !s.startsWith("[")) return null;
+  // Try direct parse first
+  try { return JSON.parse(s); } catch { /* continue with repair */ }
+  // Strip trailing commas
+  s = s.replace(/,(\s*[}\]])/g, "$1");
+  // Count unclosed brackets and braces
+  let braces = 0, brackets = 0, inString = false, escape = false;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (escape) { escape = false; continue; }
+    if (c === "\\") { escape = true; continue; }
+    if (c === '"') { inString = !inString; continue; }
+    if (inString) continue;
+    if (c === "{") braces++;
+    else if (c === "}") braces--;
+    else if (c === "[") brackets++;
+    else if (c === "]") brackets--;
+  }
+  // If we're inside an unclosed string, close it
+  if (inString) s += '"';
+  // Remove trailing incomplete value (colon or comma at end)
+  s = s.replace(/[,:]\s*$/, "");
+  // Close remaining brackets/braces
+  while (brackets-- > 0) s += "]";
+  while (braces-- > 0) s += "}";
+  try { return JSON.parse(s); } catch { return null; }
+};
+
 const renderMarkdownCached = (text) => {
   if (!text) return "";
   if (_mdCache.has(text)) return _mdCache.get(text);
@@ -1244,7 +1473,7 @@ const _buildCrossRefContext = (project, charId) => {
   if (project.motifs?.length > 0) {
     const charName = (project.characters || []).find(c => c.id === charId)?.name;
     if (charName) {
-      const charMotifs = project.motifs.filter(m => m.name && (m.appearances || []).some(a => a.context && a.context.toLowerCase().includes(charName.toLowerCase())));
+      const charMotifs = (project.motifs || []).filter(m => m.name && (m.appearances || []).some(a => a.context && a.context.toLowerCase().includes(charName.toLowerCase())));
       if (charMotifs.length) lines.push(`Associated motifs: ${charMotifs.map(m => `${m.name} (${m.meaning || "?"})`).join(", ")}`);
     }
   }
@@ -1254,7 +1483,7 @@ const _buildCrossRefContext = (project, charId) => {
   }
   // Reader knowledge — what does the reader know about this character?
   if (project.readerKnowledge?.length > 0) {
-    const charKnowledge = project.readerKnowledge.filter(rk => rk.fact && (rk.knownBy || []).includes(charId));
+    const charKnowledge = (project.readerKnowledge || []).filter(rk => rk.fact && (rk.knownBy || []).includes(charId));
     if (charKnowledge.length) lines.push(`Character knows: ${charKnowledge.map(rk => `"${_truncateAtBoundary(rk.fact, 60)}"`).join("; ")}`);
   }
   return lines.join("\n");
@@ -1303,7 +1532,7 @@ const _buildPlotCrossRefContext = (project, plotId) => {
       lines.push(line);
     });
   }
-  if (cr.plotDeadChars?.length) lines.push(`⚠ Dead characters in scene: ${cr.plotDeadChars.map(c => `${c.name}${c.statusChangedChapter ? ` (Ch${c.statusChangedChapter})` : ""}`).join(", ")} — flashback/memory?`);
+  if (cr.plotDeadChars?.length) lines.push(`⚠ Dead characters in scene: ${cr.plotDeadChars.map(c => `${c.name}${c.status && c.status !== "alive" ? ` (${c.status})` : ""}`).join(", ")} — flashback/memory?`);
   if (cr.plotAbsentChars?.length) lines.push(`⚠ Absent characters: ${cr.plotAbsentChars.map(c => c.name).join(", ")}`);
   if (cr.plotOrgContext?.length) lines.push(`Org dynamics: ${cr.plotOrgContext.map(o => `${o.org}: ${o.members.map(m => `${m.name} (${m.title})`).join(", ")}`).join("; ")}`);
   if (cr.plotPrevChapter) lines.push(`Previous: Ch${(cr.plotPrevChapter.title || "?")}: ${cr.plotPrevChapter.summary || "no summary"}`);
@@ -1338,17 +1567,41 @@ const ContextEngine = {
   // ─── TIMELINE-AWARE: Parse story dates for chronological comparison ───
   _parseStoryDate(dateStr) {
     if (!dateStr) return null;
-    // Try standard date parsing first
-    const d = new Date(dateStr);
+    const s = String(dateStr).trim();
+    // Handle ambiguous numeric formats (DD/MM/YYYY vs MM/DD/YYYY):
+    // If the first number > 12, it MUST be a day → EU format
+    // If the second number > 12, first MUST be month → US format
+    // ISO format YYYY-MM-DD is unambiguous, handle it first
+    const isoMatch = s.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
+    if (isoMatch) {
+      const y = parseInt(isoMatch[1], 10), m = parseInt(isoMatch[2], 10), d = parseInt(isoMatch[3], 10);
+      if (m >= 1 && m <= 12 && d >= 1 && d <= 31) {
+        return y * 10000 + m * 100 + d;
+      }
+    }
+    const slashMatch = s.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})/);
+    if (slashMatch) {
+      const a = parseInt(slashMatch[1], 10), b = parseInt(slashMatch[2], 10), c = parseInt(slashMatch[3], 10);
+      let y = c < 100 ? 2000 + c : c;
+      let month, day;
+      if (a > 12) { day = a; month = b; } // must be DD/MM
+      else if (b > 12) { month = a; day = b; } // must be MM/DD
+      else { month = a; day = b; } // ambiguous — default to MM/DD (US format)
+      if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+        return y * 10000 + month * 100 + day;
+      }
+    }
+    // Try standard date parsing for "Jan 15, 1847", "1847-01-15" etc.
+    const d = new Date(s);
     if (!isNaN(d.getTime())) return d.getTime();
-    // Try "Year X" or "Year X, Day Y" format
-    const yearMatch = dateStr.match(/year\s+(\d+)/i);
+    // Try "Year X" or "Year X, Day Y" format (fantasy/sci-fi)
+    const yearMatch = s.match(/year\s+(\d+)/i);
     if (yearMatch) {
-      const dayMatch = dateStr.match(/day\s+(\d+)/i);
+      const dayMatch = s.match(/day\s+(\d+)/i);
       return parseInt(yearMatch[1], 10) * 10000 + (dayMatch ? parseInt(dayMatch[1], 10) : 0);
     }
     // Try extracting any 4-digit year
-    const anyYear = dateStr.match(/\b(\d{4})\b/);
+    const anyYear = s.match(/\b(\d{4})\b/);
     if (anyYear) return parseInt(anyYear[1], 10) * 10000;
     return null;
   },
@@ -1384,6 +1637,25 @@ const ContextEngine = {
       return { isFlashback: true, currentDate, latestPrevDate };
     }
     return null;
+  },
+
+  // "Has character appeared yet" — uses AI-maintained hasAppeared flag + plot-derived fallback
+  _hasAppeared(project, character, chapterIdx, currentChNum) {
+    if (!character) return true;
+    // Use AI-tracked flag first
+    if (character.hasAppeared) return true;
+    // Fall back to plot-derived check: does character appear in any plot entry <= current chapter?
+    const plots = project?.plotOutline || [];
+    return plots.some(pl => {
+      const plChNum = pl.chapter || 0;
+      return plChNum > 0 && plChNum <= (currentChNum || 0) && Array.isArray(pl.characters) && pl.characters.includes(character.id);
+    });
+  },
+
+  // "Has character status changed" — just checks status is non-alive
+  _hasStatusChanged(project, character, chapterIdx, currentChNum) {
+    if (!character) return false;
+    return !!(character.status && character.status !== "alive");
   },
   
   // Look up the plot entry for a chapter by its linkedPlotId, falling back to position
@@ -1541,7 +1813,7 @@ const ContextEngine = {
     }
     // ─── MOTIFS & SYMBOLS ───
     if (project.motifs?.length > 0) {
-      const relevantMotifs = project.motifs.filter(m => m.name && (m.appearances || []).some(a => a.chapter <= currentChNum));
+      const relevantMotifs = (project.motifs || []).filter(m => m.name && (m.appearances || []).some(a => a.chapter <= currentChNum));
       if (relevantMotifs.length > 0) {
         meta.push(`MOTIFS/SYMBOLS (weave naturally): ${relevantMotifs.map(m => `${m.name} (${m.meaning || "meaning TBD"}${m.evolution ? ` → evolves: ${_truncateAtBoundary(m.evolution, 80)}` : ""})`).join("; ")}`);
       }
@@ -1565,7 +1837,7 @@ const ContextEngine = {
     }
     // ─── READER KNOWLEDGE STATE ───
     if (project.readerKnowledge?.length > 0) {
-      const knownFacts = project.readerKnowledge.filter(rk => {
+      const knownFacts = (project.readerKnowledge || []).filter(rk => {
         if (!rk.fact) return false;
         const revealDate = this._parseStoryDate(rk.revealedDate);
         const currentDate = this._currentStoryDate(project, chapterIdx);
@@ -1702,7 +1974,7 @@ const ContextEngine = {
         const fields = [];
         if (c.aliases) fields.push(["Also known as", c.aliases]);
         if (c.gender) fields.push(["Gender", c.gender]);
-        if (c.age) fields.push(["Age", `${c.age}${c.firstAppearanceChapter > 0 ? ` (as of story start)` : ""}`]); // A15
+        if (c.age) fields.push(["Age", `${c.age}${c.hasAppeared ? ` (as of story start)` : ""}`]); // A15
         if (c.pronouns) fields.push(["Pronouns", c.pronouns]);
         if (c.orientation) fields.push(["Orientation", c.orientation]);
         // Bulk character group — abbreviated output
@@ -1740,7 +2012,9 @@ const ContextEngine = {
         if (c.build) fields.push(["Build", c.build]);
         // A10: Compact appearance after first few chapters
         if (c.appearance) {
-          if (c.firstAppearanceChapter > 0 && currentChNum > c.firstAppearanceChapter + 2) {
+          // Derive first appearance chapter from plot outline
+          const firstPlotCh = (project.plotOutline || []).filter(pl => Array.isArray(pl.characters) && pl.characters.includes(c.id)).map(pl => pl.chapter || 0).filter(n => n > 0).sort((a,b) => a-b)[0];
+          if (firstPlotCh && currentChNum > firstPlotCh + 2) {
             fields.push(["Appearance (key)", _truncateAtBoundary(c.appearance, 1000)]);
           } else {
             fields.push(["Appearance", c.appearance]);
@@ -1753,11 +2027,8 @@ const ContextEngine = {
         if (c.skills) fields.push(["Skills/Abilities", c.skills]);
         if (c.habits) fields.push(["Habits/Mannerisms", c.habits]);
         // A2: Backstory gated by reveal chapter OR reveal date (timeline-aware)
-        if (c.backstory) {
-          const revealDate = ContextEngine._parseStoryDate(c.backstoryRevealDate);
-          const curDate = ContextEngine._currentStoryDate(project, chapterIdx);
-          const isRevealed = ContextEngine._hasOccurredByDate(revealDate, c.backstoryRevealChapter, curDate, currentChNum);
-          if (!isRevealed && (c.backstoryRevealChapter > 0 || c.backstoryRevealDate)) {
+        if (c.backstory) {          const curDate = ContextEngine._currentStoryDate(project, chapterIdx);
+          if (!c.backstoryRevealed) {
             fields.push(["Backstory", "[UNREVEALED — will be revealed later. Do NOT hint at or reference backstory details.]"]);
           } else {
             fields.push(["Backstory", c.backstory]);
@@ -1765,11 +2036,8 @@ const ContextEngine = {
         }
         // Secrets — gated like backstory (date-aware)
         if (c.secrets) fields.push(["Known Secrets", c.secrets]);
-        if (c.hiddenSecrets) {
-          const sRevealDate = ContextEngine._parseStoryDate(c.secretRevealDate);
-          const sCurDate = ContextEngine._currentStoryDate(project, chapterIdx);
-          const sIsRevealed = ContextEngine._hasOccurredByDate(sRevealDate, c.secretRevealChapter, sCurDate, currentChNum);
-          if (!sIsRevealed && (c.secretRevealChapter > 0 || c.secretRevealDate)) {
+        if (c.hiddenSecrets) {          const sCurDate = ContextEngine._currentStoryDate(project, chapterIdx);
+          if (!c.secretRevealed) {
             fields.push(["Hidden Secrets", "[UNREVEALED — Do NOT hint at these secrets yet.]"]);
           } else {
             fields.push(["Hidden Secrets (NOW REVEALED)", c.hiddenSecrets]);
@@ -1823,7 +2091,7 @@ const ContextEngine = {
         // A20: Status — FIX 1.28: Note "unknown" status explicitly
         if (c.status && c.status !== "alive") {
           let statusNote = c.status.toUpperCase();
-          if (c.statusChangedChapter > 0) statusNote += ` (as of Ch${c.statusChangedChapter})`;
+          // Status change tracking is AI-maintained
           if (c.status === "unknown") statusNote += " — fate uncertain, write accordingly";
           fields.push(["Status", statusNote]);
         }
@@ -1849,9 +2117,9 @@ const ContextEngine = {
       // Full detail for mentioned/in-scene characters
       for (const c of mentioned) {
         // FIX 1.6: Dead characters get compact treatment starting from the chapter AFTER death
-        if (c.status === "dead" && c.statusChangedChapter > 0 && currentChNum > c.statusChangedChapter) {
+        if (c.status === "dead" && ContextEngine._hasStatusChanged(project, c, chapterIdx, currentChNum)) {
           // Dead — include only as compact reference (mentioned because of memory/flashback)
-          let compact = `  ○ ${c.name} (${c.role}) [DECEASED as of Ch${c.statusChangedChapter}] — referenced in scene as memory/mention only`;
+          let compact = `  ○ ${c.name} (${c.role}) [DECEASED] — referenced in scene as memory/mention only`;
           if (c.pronouns) compact += ` [${c.pronouns}]`;
           charParts.push(compact);
           tokensUsed += this._estimateLen(compact);
@@ -1871,7 +2139,7 @@ const ContextEngine = {
 
       // A6: Compact entries for non-scene characters — BUT only if they've been introduced
       // FIX: Don't dump ALL characters. Only include characters who:
-      // 1. Have appeared by this chapter (firstAppearanceChapter <= currentChNum or 0/unset)
+      // 1. Have appeared by this chapter (hasAppeared flag or plot-derived)
       // 2. Are key roles (protagonist, antagonist, love interest, deuteragonist) OR
       //    appeared in recent chapters (within lookback window)
       if (others.length) {
@@ -1879,7 +2147,7 @@ const ContextEngine = {
         // Determine which non-scene characters are relevant enough to include
         const relevantOthers = others.filter(c => {
           // Filter out characters not yet introduced
-          if (c.firstAppearanceChapter > 0 && currentChNum < c.firstAppearanceChapter) return false;
+          if (!ContextEngine._hasAppeared(project, c, chapterIdx, currentChNum) && (c.hasAppeared || (project.plotOutline || []).some(pl => Array.isArray(pl.characters) && pl.characters.includes(c.id)))) return false;
           // Always include key roles
           if (keyRoles.has(c.role)) return true;
           // Include if mentioned in recent chapter summaries (within last 3 chapters)
@@ -1932,7 +2200,7 @@ const ContextEngine = {
         const ambientChars = (project.characters || []).filter(c => ambientCharIds.has(c.id));
         const livingAmbient = ambientChars.filter(c => {
           if (c.status === "dead") return false;
-          if (c.firstAppearanceChapter > 0 && currentChNum < c.firstAppearanceChapter) return false;
+          if (!ContextEngine._hasAppeared(project, c, chapterIdx, currentChNum) && (c.hasAppeared || (project.plotOutline || []).some(pl => Array.isArray(pl.characters) && pl.characters.includes(c.id)))) return false;
           return true;
         });
         if (livingAmbient.length > 0) {
@@ -1963,7 +2231,7 @@ const ContextEngine = {
       }
       // A18: Name list only for characters who have been introduced
       const introducedNames = project.characters
-        .filter(c => c.name && (c.firstAppearanceChapter === 0 || !c.firstAppearanceChapter || c.firstAppearanceChapter <= currentChNum))
+        .filter(c => c.name && ContextEngine._hasAppeared(project, c, chapterIdx, currentChNum))
         .map(c => c.name).join(", ");
       if (introducedNames) charParts.push(`\n[Known characters: ${introducedNames}]`);
       charParts.push(`</characters>`);
@@ -2574,7 +2842,7 @@ const ContextEngine = {
             const isBulkEditing = editing.isBulk;
             const fields = isBulkEditing
               ? [["name","Group Name"],["role","Role"],["bulkCount","Count"],["bulkDescription","Description"],["appearance","Appearance/Uniform"],["habits","Behavior/Culture"],["allegiances","Allegiances"],["tags","Tags"],["desires","Story Purpose"],["strengths","Strengths/Resources"],["flaws","Weaknesses"],["canonNotes","Notable Members"],["notes","Author Notes"]]
-              : [["name","Name"],["role","Role"],["gender","Gender"],["age","Age"],["pronouns","Pronouns"],["orientation","Orientation"],["aliases","Aliases"],["occupation","Occupation"],["height","Height"],["build","Build"],["tags","Tags"],["allegiances","Allegiances"],["appearance","Appearance"],["personality","Personality"],["backstory","Backstory"],["backstoryRevealDate","Backstory reveal date"],["desires","Desires"],["shortTermGoals","Short-term goals"],["longTermGoals","Long-term goals"],["speechPattern","Speech pattern"],["voiceSamples","Voice samples"],["habits","Habits & mannerisms"],["fears","Fears"],["flaws","Flaws"],["strengths","Strengths"],["skills","Skills"],["internalConflict","Internal conflict"],["externalConflict","External conflict"],["signatureItems","Signature items"],["secrets","Known secrets"],["hiddenSecrets","Hidden secrets"],["secretRevealDate","Secret reveal date"],["kinks","Preferences"],["arc","Arc"],["canonNotes","Canon notes"],["firstAppearanceDate","First appearance date"],["statusChangedDate","Status changed date"],["notes","Author notes"]];
+              : [["name","Name"],["role","Role"],["gender","Gender"],["age","Age"],["pronouns","Pronouns"],["orientation","Orientation"],["aliases","Aliases"],["occupation","Occupation"],["height","Height"],["build","Build"],["tags","Tags"],["allegiances","Allegiances"],["appearance","Appearance"],["personality","Personality"],["backstory","Backstory"],["desires","Desires"],["shortTermGoals","Short-term goals"],["longTermGoals","Long-term goals"],["speechPattern","Speech pattern"],["voiceSamples","Voice samples"],["habits","Habits & mannerisms"],["fears","Fears"],["flaws","Flaws"],["strengths","Strengths"],["skills","Skills"],["internalConflict","Internal conflict"],["externalConflict","External conflict"],["signatureItems","Signature items"],["secrets","Known secrets"],["hiddenSecrets","Hidden secrets"],["kinks","Preferences"],["arc","Arc"],["canonNotes","Canon notes"],["currentEmotionalState","Current emotional state"],["obligationsOwed","Obligations owed"],["knowledgeState","Knowledge state"],["notes","Author notes"]];
             if (isBulkEditing) {
               parts.push(`  [BULK CHARACTER GROUP: ${editing.bulkCount || "many"} individuals — treat as a collective, not individuals]`);
               if (editing.bulkDescription) parts.push(`  Group description: ${editing.bulkDescription}`);
@@ -2947,11 +3215,11 @@ const ContextEngine = {
       parts.push(`\n${taLine}`);
     }
     if (project.motifs?.length > 0) {
-      const named = project.motifs.filter(m => m.name);
+      const named = (project.motifs || []).filter(m => m.name);
       if (named.length > 0) parts.push(`Motifs: ${named.map(m => `${m.name}${m.meaning ? ` (${m.meaning})` : ""}`).join(", ")}`);
     }
     if (project.readerKnowledge?.length > 0) {
-      const facts = project.readerKnowledge.filter(rk => rk.fact);
+      const facts = (project.readerKnowledge || []).filter(rk => rk.fact);
       if (facts.length > 0) parts.push(`Reader knows: ${facts.map(rk => `"${_truncateAtBoundary(rk.fact, 60)}"`).join("; ")}`);
     }
     // Current chapter craft settings
@@ -2963,6 +3231,538 @@ const ContextEngine = {
 
     return parts.filter(s => s).join("\n");
   }
+};
+
+// ═══════════════════════════════════════════════════════════════════════
+//   AGENT RUNTIME — Multi-agent orchestration for smarter memory retrieval
+//   Architecture: Orchestrator → Specialist Agents (parallel) → Writing Agent → Post-processors
+// ═══════════════════════════════════════════════════════════════════════
+
+// Default model — always x-ai/grok-4.1-fast unless user overrides per-agent
+const AGENT_DEFAULT_MODEL = "x-ai/grok-4.1-fast";
+
+// Available models for each agent role (user can pick in Settings)
+const AGENT_MODEL_OPTIONS = [
+  { value: "x-ai/grok-4.1-fast", label: "Grok 4.1 Fast (default)" },
+  { value: "anthropic/claude-haiku-4.5", label: "Claude Haiku 4.5 (fast, cheap)" },
+  { value: "anthropic/claude-sonnet-4.6", label: "Claude Sonnet 4.6 (balanced)" },
+  { value: "anthropic/claude-opus-4.7", label: "Claude Opus 4.7 (best quality)" },
+  { value: "google/gemini-2.5-flash", label: "Gemini 2.5 Flash" },
+  { value: "google/gemini-2.5-pro", label: "Gemini 2.5 Pro" },
+  { value: "openai/gpt-5-mini", label: "GPT-5 Mini" },
+  { value: "openai/gpt-5", label: "GPT-5" },
+  { value: "deepseek/deepseek-v3.2", label: "DeepSeek v3.2" },
+  { value: "meta-llama/llama-4-maverick", label: "Llama 4 Maverick" },
+  { value: "mistralai/mistral-large-2.1", label: "Mistral Large 2.1" },
+];
+
+// Agent roles — each has its own model setting and budget
+const AGENT_ROLES = [
+  { key: "orchestrator", label: "Orchestrator", desc: "Routes requests and plans the run", budget: 4000 },
+  { key: "characterAgent", label: "Character Continuity Agent", desc: "Tracks emotional state, voice, obligations", budget: 6000 },
+  { key: "timelineAgent", label: "Timeline & Continuity Agent", desc: "Story dates, flashbacks, temporal state", budget: 6000 },
+  { key: "settingAgent", label: "Setting & Atmosphere Agent", desc: "Locations, sensory palette, tone", budget: 6000 },
+  { key: "relationshipAgent", label: "Relationship Dynamics Agent", desc: "Dynamics, evolution, tension", budget: 6000 },
+  { key: "thematicAgent", label: "Thematic Argument Agent", desc: "Motifs, themes, reader knowledge", budget: 6000 },
+  { key: "craftAgent", label: "Voice & Craft Agent", desc: "Narrative distance, style, register", budget: 6000 },
+  { key: "standardsAgent", label: "Craft Standards Agent", desc: "Genre conventions, prose quality", budget: 6000 },
+  { key: "assembler", label: "Context Assembler", desc: "Merges specialist briefs into final prompt", budget: 4000 },
+  { key: "writer", label: "Writing Agent (Main)", desc: "Generates the actual prose/content", budget: 32000 },
+  { key: "jsonAgent", label: "Structured Data Agent", desc: "Generates clean JSON for auto-fill", budget: 16000 },
+  { key: "analysisAgent", label: "Analysis Agent", desc: "Diagnostic reports, story audits", budget: 16000 },
+  { key: "continuityChecker", label: "Continuity Checker (post)", desc: "Catches inconsistencies after generation", budget: 4000 },
+  { key: "voiceDriftDetector", label: "Voice Drift Detector (post)", desc: "Flags character voice inconsistency", budget: 4000 },
+  { key: "hookScorer", label: "Chapter-End Hook Scorer (post)", desc: "Rates chapter endings 0-10", budget: 2000 },
+  { key: "motifAuditor", label: "Motif Weaving Auditor (post)", desc: "Tracks motif usage across chapters", budget: 4000 },
+  { key: "stateUpdater", label: "State Updater (post)", desc: "Updates character living state + relationship evolution + reveal flags after chapter save", budget: 6000 },
+];
+
+const getAgentModel = (settings, role) => {
+  if (!settings?.agentModels) return AGENT_DEFAULT_MODEL;
+  return settings.agentModels[role] || AGENT_DEFAULT_MODEL;
+};
+
+const getAgentBudget = (role) => {
+  const r = AGENT_ROLES.find(a => a.key === role);
+  return r ? r.budget : 4000;
+};
+
+// Low-level agent API call — uses OpenRouter
+const _callAgent = async ({ role, system, user, settings, signal, temperature = 0.7, json = false }) => {
+  const model = getAgentModel(settings, role);
+  const budget = getAgentBudget(role);
+  if (!settings?.apiKey) throw new Error("API key not set");
+
+  const body = {
+    model,
+    messages: [
+      { role: "system", content: system },
+      { role: "user", content: user },
+    ],
+    temperature,
+    max_tokens: Math.min(budget, 8000),
+  };
+  if (json) body.response_format = { type: "json_object" };
+
+  const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${settings.apiKey}`,
+      "HTTP-Referer": window.location.origin,
+      "X-Title": "NovelForge",
+    },
+    body: JSON.stringify(body),
+    signal,
+  });
+  if (!res.ok) {
+    const errData = await res.json().catch(() => ({}));
+    throw new Error(errData.error?.message || `Agent ${role} failed (${res.status})`);
+  }
+  const data = await res.json();
+  return data.choices?.[0]?.message?.content || "";
+};
+
+// ═══ MEMORY INDEX — Lightweight structured summary of the project ═══
+// Built once, cached, consulted by orchestrator. Avoids passing the whole project around.
+const buildMemoryIndex = (project, currentChapterIdx) => {
+  if (!project) return null;
+  const currentCh = project.chapters?.[currentChapterIdx];
+  const currentChNum = ContextEngine._chapterNum(project, currentChapterIdx);
+  const currentDate = ContextEngine._currentStoryDate(project, currentChapterIdx);
+  const flashback = ContextEngine._detectFlashback(project, currentChapterIdx);
+
+  return {
+    meta: {
+      title: project.title || "Untitled",
+      genre: project.genre || "",
+      pov: project.pov || "",
+      totalChapters: project.chapters?.length || 0,
+      totalWords: (project.chapters || []).reduce((s, c) => s + wordCount(c.content || ""), 0),
+    },
+    current: {
+      chapterIdx: currentChapterIdx,
+      chapterNum: currentChNum,
+      chapterTitle: currentCh?.title || "",
+      chapterPov: currentCh?.pov || project.pov || "",
+      sceneNotes: currentCh?.sceneNotes || "",
+      narrativeDistance: currentCh?.narrativeDistance || "",
+      sensoryPalette: currentCh?.sensoryPalette || "",
+      subtextNotes: currentCh?.subtextNotes || "",
+      tensionLevel: currentCh?.tensionLevel || 5,
+      storyDate: currentDate ? String(currentDate) : "",
+      isFlashback: !!flashback,
+      wordsWritten: wordCount(currentCh?.content || ""),
+    },
+    charactersIndex: (project.characters || []).filter(c => c.name).map(c => ({
+      id: c.id,
+      name: c.name,
+      role: c.role,
+      isBulk: !!c.isBulk,
+      status: c.status || "alive",
+    })),
+    plotIndex: (project.plotOutline || []).map(pl => ({
+      id: pl.id, chapter: pl.chapter, title: pl.title,
+      date: pl.date || "", sceneType: pl.sceneType || "",
+    })),
+    worldIndex: (project.worldBuilding || []).filter(w => w.name).map(w => ({
+      id: w.id, name: w.name, category: w.category || "",
+    })),
+    relationshipCount: (project.relationships || []).length,
+    motifsIndex: (project.motifs || []).filter(m => m.name).map(m => ({ id: m.id, name: m.name, meaning: m.meaning || "" })),
+    hasThematicArgument: !!(project.thematicArgument?.thesis),
+    readerKnowledgeCount: (project.readerKnowledge || []).length,
+  };
+};
+
+// ═══ ORCHESTRATOR — Plans the run ═══
+const runOrchestrator = async ({ userRequest, memoryIndex, taskHint, settings, signal }) => {
+  const system = `You are the orchestrator for a multi-agent novel-writing assistant. Your job: analyze the user's request and decide which specialist agents to consult.
+
+Return ONLY a JSON object with this shape:
+{
+  "task_type": "creative_writing" | "structured_data" | "analysis" | "question_answer" | "edit",
+  "required_specialists": [array of specialist keys],
+  "skip_specialists": [array of specialist keys],
+  "reasoning": "brief explanation",
+  "output_mode": "prose" | "json" | "mixed"
+}
+
+Available specialists: characterAgent, timelineAgent, settingAgent, relationshipAgent, thematicAgent, craftAgent, standardsAgent.
+
+GUIDELINES:
+- Creative writing (continue, rewrite, dialogue, scene): include character, timeline, setting, craft, standards. Add relationship if multiple chars interact. Add thematic for literary scenes.
+- Structured data (generate character JSON, plot outline): include relevant domain specialist + standards.
+- Analysis (why is X falling flat?): include all specialists.
+- Quick edit (fix grammar, tighten): include ONLY craft + standards.
+- Question answering: include whichever specialists hold the answer.
+Skip specialists that aren't needed to save tokens.`;
+
+  const user = `USER REQUEST: ${userRequest}
+${taskHint ? `HINT: ${taskHint}` : ""}
+
+MEMORY INDEX:
+${JSON.stringify(memoryIndex, null, 2)}
+
+Return your plan as JSON.`;
+
+  const raw = await _callAgent({ role: "orchestrator", system, user, settings, signal, temperature: 0.3, json: true });
+  try {
+    return JSON.parse(raw);
+  } catch {
+    // Fallback plan if orchestrator fails to return valid JSON
+    return {
+      task_type: "creative_writing",
+      required_specialists: ["characterAgent", "timelineAgent", "settingAgent", "craftAgent", "standardsAgent"],
+      skip_specialists: [],
+      reasoning: "Orchestrator fallback — used default creative writing plan",
+      output_mode: "prose",
+    };
+  }
+};
+
+// ═══ SPECIALIST AGENTS — each produces a compact brief ═══
+const SPECIALIST_AGENTS = {
+  characterAgent: {
+    buildContext: (project, chapterIdx, memoryIndex) => {
+      const curCh = project.chapters?.[chapterIdx];
+      const pov = ContextEngine._effectivePov(project, chapterIdx);
+      const povChar = (project.characters || []).find(c => c.name === pov);
+      const chars = project.characters || [];
+      return JSON.stringify({
+        povCharacter: povChar ? {
+          name: povChar.name, role: povChar.role, personality: povChar.personality,
+          speechPattern: povChar.speechPattern, voiceSamples: povChar.voiceSamples,
+          desires: povChar.desires, fears: povChar.fears, arc: povChar.arc,
+          shortTermGoals: povChar.shortTermGoals, status: povChar.status,
+          // AI-maintained living state (what they're feeling/owing/knowing right now)
+          currentEmotionalState: povChar.currentEmotionalState || "",
+          obligationsOwed: povChar.obligationsOwed || "",
+          knowledgeState: povChar.knowledgeState || "",
+          // Reveal flags (affect what AI knows to use)
+          backstoryRevealed: !!povChar.backstoryRevealed,
+          secretRevealed: !!povChar.secretRevealed,
+          hasAppeared: !!povChar.hasAppeared,
+          backstory: povChar.backstoryRevealed ? povChar.backstory : "[NOT YET REVEALED — hold back]",
+          hiddenSecrets: povChar.secretRevealed ? povChar.hiddenSecrets : "[NOT YET REVEALED — hold back]",
+        } : null,
+        otherCharacters: chars.filter(c => c.name && c.id !== povChar?.id && !c.isBulk).slice(0, 10).map(c => ({
+          name: c.name, role: c.role, status: c.status,
+          briefPersonality: (c.personality || "").slice(0, 200),
+          currentEmotionalState: c.currentEmotionalState || "",
+          obligationsOwed: c.obligationsOwed || "",
+          hasAppeared: !!c.hasAppeared,
+        })),
+        currentSceneNotes: curCh?.sceneNotes || "",
+        currentChapterPov: pov,
+      });
+    },
+    system: `You are the Character Continuity Agent. Return a COMPACT brief (150-300 words) about the POV character's state going into this scene: emotional state (use the currentEmotionalState field as baseline), voice register, recent obligations made (obligationsOwed), what they currently know (knowledgeState), unfulfilled promises, psychological momentum. Also briefly note any other characters present and their current states. If backstoryRevealed or secretRevealed is false, DO NOT surface that material — it hasn't been revealed yet. Be specific and actionable.`,
+  },
+
+  timelineAgent: {
+    buildContext: (project, chapterIdx, memoryIndex) => {
+      return JSON.stringify({
+        currentChapter: memoryIndex.current,
+        allPlotEntries: memoryIndex.plotIndex,
+        isFlashback: memoryIndex.current.isFlashback,
+        characterStatuses: memoryIndex.charactersIndex.map(c => ({
+          name: c.name, status: c.status,
+        })),
+      });
+    },
+    system: `You are the Timeline & Continuity Agent. Return a COMPACT brief (100-200 words) about the timeline state: current story date/chapter, what has happened before this point, what hasn't happened yet, whether this is a flashback (if so, what the reader already knows that the characters don't). Be precise — the writing agent uses this to avoid continuity errors.`,
+  },
+
+  settingAgent: {
+    buildContext: (project, chapterIdx, memoryIndex) => {
+      const curCh = project.chapters?.[chapterIdx];
+      const plotEntry = ContextEngine._plotEntryForChapter(project, chapterIdx);
+      const locations = (project.worldBuilding || []).filter(w => w.category === "Location" || !w.category);
+      // Focus on current scene's locations
+      const sceneLocationIds = plotEntry?.locations || [];
+      const sceneLocations = sceneLocationIds.length > 0
+        ? locations.filter(l => sceneLocationIds.includes(l.id))
+        : locations.slice(0, 5);
+      return JSON.stringify({
+        sceneLocations: sceneLocations.map(l => ({
+          name: l.name, atmosphere: l.atmosphere, sensoryDetails: l.sensoryDetails,
+          dangers: l.dangers, rules: l.rules, population: l.population,
+        })),
+        chapterSensoryPalette: curCh?.sensoryPalette || "",
+        chapterMood: plotEntry?.sceneType || "",
+      });
+    },
+    system: `You are the Setting & Atmosphere Agent. Return a COMPACT brief (100-200 words) about the scene's physical environment: where it takes place, atmosphere, dominant senses, tonal precedents from similar past scenes. The writing agent uses this to ground the prose in a specific place.`,
+  },
+
+  relationshipAgent: {
+    buildContext: (project, chapterIdx, memoryIndex) => {
+      const plotEntry = ContextEngine._plotEntryForChapter(project, chapterIdx);
+      const sceneCharIds = plotEntry?.characters || [];
+      const relevantRels = (project.relationships || []).filter(r =>
+        sceneCharIds.includes(r.char1) || sceneCharIds.includes(r.char2) ||
+        sceneCharIds.length === 0
+      ).slice(0, 8);
+      const charMap = {};
+      (project.characters || []).forEach(c => { charMap[c.id] = c.name; });
+      // For each relationship, show its most recent chapter evolution snapshot
+      return JSON.stringify({
+        currentChapterIdx: chapterIdx,
+        relevantRelationships: relevantRels.map(r => {
+          // Get the most recent chapter evolution entry <= current chapter
+          const evo = r.chapterEvolution || {};
+          const evoKeys = Object.keys(evo).map(k => parseInt(k, 10)).filter(n => !isNaN(n) && n <= chapterIdx).sort((a, b) => b - a);
+          const latestEvo = evoKeys.length > 0 ? evo[evoKeys[0]] : null;
+          return {
+            char1: charMap[r.char1] || r.char1,
+            char2: charMap[r.char2] || r.char2,
+            // Foundational (static)
+            category: r.category,
+            conflictSource: r.conflictSource,
+            terms: r.terms,
+            taboos: r.taboos,
+            evolutionTimeline: r.evolutionTimeline,
+            // Current chapter state (AI-maintained, falls back to base fields)
+            status: latestEvo?.status || r.status,
+            tension: latestEvo?.tension || r.tension,
+            tensionType: latestEvo?.tensionType || r.tensionType,
+            dynamic: latestEvo?.dynamic || r.dynamic,
+            trustLevel: latestEvo?.trustLevel || r.trustLevel,
+            chemistry: latestEvo?.chemistry || r.chemistry,
+            powerDynamic: latestEvo?.powerDynamic || r.powerDynamic,
+            char1Perspective: latestEvo?.char1Perspective || r.char1Perspective,
+            char2Perspective: latestEvo?.char2Perspective || r.char2Perspective,
+            sharedSecrets: latestEvo?.sharedSecrets || r.sharedSecrets,
+            progression: latestEvo?.progression || r.progression,
+            evolutionChapter: evoKeys[0] ?? null,
+          };
+        }),
+      });
+    },
+    system: `You are the Relationship Dynamics Agent. Return a COMPACT brief (100-200 words) about relationships between characters in this scene. Focus on their CURRENT state (which may differ from foundational setup if chapter evolution has occurred): current dynamic stage, tension level, trust, power shifts, unresolved subtext, what's unsaid. Reference evolutionChapter if shown (means fields are from that chapter's state). The writing agent uses this to make interactions feel earned.`,
+  },
+
+  thematicAgent: {
+    buildContext: (project, chapterIdx, memoryIndex) => {
+      return JSON.stringify({
+        thematicArgument: project.thematicArgument || null,
+        motifs: project.motifs || [],
+        readerKnowledge: (project.readerKnowledge || []).filter(rk => rk.fact),
+        currentChapter: memoryIndex.current.chapterNum,
+      });
+    },
+    system: `You are the Thematic Argument Agent. Return a COMPACT brief (100-200 words) about the thematic layer: what argument the story is making, which motifs are available to weave in naturally, what the reader knows that characters don't (dramatic irony opportunities). The writing agent uses this to add literary depth.`,
+  },
+
+  craftAgent: {
+    buildContext: (project, chapterIdx, memoryIndex) => {
+      const curCh = project.chapters?.[chapterIdx];
+      return JSON.stringify({
+        narrativeDistance: curCh?.narrativeDistance || "",
+        sensoryPalette: curCh?.sensoryPalette || "",
+        subtextNotes: curCh?.subtextNotes || "",
+        tensionLevel: curCh?.tensionLevel || 5,
+        pov: curCh?.pov || project.pov || "",
+      });
+    },
+    system: `You are the Voice & Craft Agent. Return a SHORT brief (50-100 words) specifying exactly HOW the next prose should be written: narrative distance (cinematic/close-third/deep-interiority), sensory focus, subtext layer to maintain, tension level, POV. Be directive.`,
+  },
+
+  standardsAgent: {
+    buildContext: (project, chapterIdx, memoryIndex) => {
+      return JSON.stringify({
+        genre: project.genre || "",
+        writingStyle: project.writingStyle || "",
+        avoidList: project.avoidList || "",
+        heatLevel: project.heatLevel || 3,
+      });
+    },
+    system: `You are the Craft Standards Agent. Return a SHORT brief (50-100 words) specifying prose quality standards for this genre: what to lean into, what to avoid (purple prose, clichés, banned phrases), voice precedents. Be concise and actionable.`,
+  },
+};
+
+// Run a specialist — returns a compact brief string
+const runSpecialist = async ({ key, project, chapterIdx, memoryIndex, settings, signal }) => {
+  const spec = SPECIALIST_AGENTS[key];
+  if (!spec) throw new Error(`Unknown specialist: ${key}`);
+  const user = spec.buildContext(project, chapterIdx, memoryIndex);
+  return _callAgent({
+    role: key, system: spec.system, user, settings, signal, temperature: 0.4,
+  });
+};
+
+// ═══ THE MAIN AGENT RUNTIME ═══
+const AgentRuntime = {
+  _briefCache: new Map(),
+  _cacheKeyFor(key, project, chapterIdx) {
+    const curCh = project.chapters?.[chapterIdx];
+    // Cache invalidates when chapter content, notes, or craft controls change
+    const sig = [
+      key, chapterIdx,
+      (curCh?.content || "").length,
+      curCh?.sceneNotes || "",
+      curCh?.narrativeDistance || "",
+      curCh?.sensoryPalette || "",
+      curCh?.subtextNotes || "",
+      curCh?.tensionLevel || 5,
+      project.characters?.length,
+      project.worldBuilding?.length,
+      project.relationships?.length,
+    ].join("|");
+    return sig;
+  },
+
+  async runFull({ userRequest, project, chapterIdx, taskHint, settings, signal, onProgress }) {
+    if (!settings?.apiKey) throw new Error("API key not set");
+    if (!settings?.agentsEnabled) throw new Error("Multi-agent mode disabled");
+
+    const memoryIndex = buildMemoryIndex(project, chapterIdx);
+    onProgress?.({ stage: "orchestrator", message: "Planning run..." });
+
+    // 1. Orchestrator decides which specialists to run
+    const plan = await runOrchestrator({ userRequest, memoryIndex, taskHint, settings, signal });
+    onProgress?.({ stage: "plan", plan });
+
+    // 2. Run specialists in parallel (filtered by plan)
+    const specialistKeys = plan.required_specialists || [];
+    const specialistsToRun = specialistKeys.filter(k => SPECIALIST_AGENTS[k]);
+    onProgress?.({ stage: "specialists", message: `Consulting ${specialistsToRun.length} specialists...` });
+
+    const briefs = await Promise.all(
+      specialistsToRun.map(async (key) => {
+        const cacheKey = this._cacheKeyFor(key, project, chapterIdx);
+        if (this._briefCache.has(cacheKey)) {
+          return { key, brief: this._briefCache.get(cacheKey), cached: true };
+        }
+        try {
+          const brief = await runSpecialist({ key, project, chapterIdx, memoryIndex, settings, signal });
+          this._briefCache.set(cacheKey, brief);
+          return { key, brief, cached: false };
+        } catch (e) {
+          return { key, brief: `[${key} failed: ${e.message}]`, cached: false, error: true };
+        }
+      })
+    );
+    onProgress?.({ stage: "briefs", briefs });
+
+    // 3. Assemble final prompt
+    const assembledContext = briefs.map(b => {
+      const label = AGENT_ROLES.find(r => r.key === b.key)?.label || b.key;
+      return `<${b.key}>\n${b.brief}\n</${b.key}>`;
+    }).join("\n\n");
+
+    return {
+      plan,
+      briefs,
+      assembledContext,
+      memoryIndex,
+    };
+  },
+
+  // Run a post-processor agent (continuity check, voice drift, hook scorer)
+  async runPostProcessor({ key, project, chapterIdx, generatedContent, settings, signal }) {
+    const prompts = {
+      continuityChecker: {
+        system: `You are the Continuity Checker. Scan the generated content for any inconsistencies with the character profiles, world lore, relationships, or timeline. Return a JSON object: { "issues": [{ "type": "...", "description": "...", "suggestion": "..." }], "overallScore": 0-10 }`,
+        user: `GENERATED CONTENT:\n${generatedContent}\n\nPROJECT CONTEXT:\n${JSON.stringify(buildMemoryIndex(project, chapterIdx), null, 2)}`,
+      },
+      voiceDriftDetector: {
+        system: `You are the Voice Drift Detector. Compare dialogue in the generated content against each character's speechPattern and voiceSamples. Return JSON: { "driftScores": { "charName": 0-10 }, "issues": [{ "char": "...", "line": "...", "issue": "..." }] }`,
+        user: `GENERATED CONTENT:\n${generatedContent}\n\nCHARACTERS:\n${JSON.stringify((project.characters || []).filter(c => c.name && !c.isBulk).map(c => ({ name: c.name, speechPattern: c.speechPattern, voiceSamples: c.voiceSamples })), null, 2)}`,
+      },
+      hookScorer: {
+        system: `You are the Chapter-End Hook Scorer. Rate the last 2-3 paragraphs of the generated content for page-turner quality. Return JSON: { "score": 0-10, "technique": "question|urgency|reveal|shift|action", "notes": "brief suggestion" }`,
+        user: `GENERATED CONTENT:\n${generatedContent}`,
+      },
+      motifAuditor: {
+        system: `You are the Motif Weaving Auditor. Check how well the generated content integrates the project's motifs. Return JSON: { "motifsUsed": [array of motif names], "motifsNeglected": [array], "suggestions": "brief advice" }`,
+        user: `GENERATED CONTENT:\n${generatedContent}\n\nPROJECT MOTIFS:\n${JSON.stringify(project.motifs || [], null, 2)}`,
+      },
+      stateUpdater: {
+        system: `You are the State Updater. Read the chapter content and update each character's living state (currentEmotionalState, obligationsOwed, knowledgeState), reveal flags (backstoryRevealed, secretRevealed, hasAppeared), and any relationships' chapter evolution state (status, tension, tensionType, dynamic, trustLevel, chemistry, powerDynamic, char1Perspective, char2Perspective, sharedSecrets, progression).
+Return STRICTLY valid JSON:
+{
+  "characterUpdates": [
+    { "name": "Elena", "currentEmotionalState": "...", "obligationsOwed": "...", "knowledgeState": "...", "backstoryRevealed": false, "secretRevealed": false, "hasAppeared": true, "status": "alive" }
+  ],
+  "relationshipUpdates": [
+    { "char1": "Elena", "char2": "Marcus", "status": "...", "tension": "...", "tensionType": "...", "dynamic": "...", "trustLevel": "...", "chemistry": "...", "powerDynamic": "...", "char1Perspective": "...", "char2Perspective": "...", "sharedSecrets": "...", "progression": "..." }
+  ],
+  "chapterState": { "chapterMomentum": 0-10, "emotionalAftertaste": "...", "chapterEndHookScore": 0-10 }
+}
+Only include fields that meaningfully changed in this chapter. Be precise and concise.`,
+        user: `CHAPTER CONTENT:\n${generatedContent}\n\nCHARACTER NAMES:\n${JSON.stringify((project.characters || []).filter(c => c.name && !c.isBulk).map(c => c.name), null, 2)}\n\nEXISTING RELATIONSHIPS:\n${JSON.stringify((project.relationships || []).map(r => {
+          const chars = project.characters || [];
+          const c1 = chars.find(c => c.id === r.char1);
+          const c2 = chars.find(c => c.id === r.char2);
+          return { char1: c1?.name, char2: c2?.name };
+        }), null, 2)}`,
+      },
+    };
+    const p = prompts[key];
+    if (!p) throw new Error(`Unknown post-processor: ${key}`);
+    const raw = await _callAgent({ role: key, system: p.system, user: p.user, settings, signal, temperature: 0.3, json: true });
+    try { return JSON.parse(raw); } catch { return { raw }; }
+  },
+
+  // Apply state updates from stateUpdater to the project
+  applyStateUpdates(project, chapterIdx, updates) {
+    if (!project || !updates) return project;
+    const next = { ...project };
+    // Update characters
+    if (Array.isArray(updates.characterUpdates)) {
+      const newChars = [...(project.characters || [])];
+      updates.characterUpdates.forEach(upd => {
+        const idx = newChars.findIndex(c => c.name && upd.name && c.name.toLowerCase() === upd.name.toLowerCase());
+        if (idx < 0) return;
+        const keys = ["currentEmotionalState", "obligationsOwed", "knowledgeState", "backstoryRevealed", "secretRevealed", "hasAppeared", "status"];
+        const patch = { lastUpdatedChapter: chapterIdx };
+        keys.forEach(k => { if (upd[k] !== undefined) patch[k] = upd[k]; });
+        newChars[idx] = { ...newChars[idx], ...patch };
+      });
+      next.characters = newChars;
+    }
+    // Update relationships — stored as per-chapter history
+    if (Array.isArray(updates.relationshipUpdates)) {
+      const newRels = [...(project.relationships || [])];
+      const chars = next.characters || project.characters || [];
+      updates.relationshipUpdates.forEach(upd => {
+        const c1 = chars.find(c => c.name && upd.char1 && c.name.toLowerCase() === upd.char1.toLowerCase());
+        const c2 = chars.find(c => c.name && upd.char2 && c.name.toLowerCase() === upd.char2.toLowerCase());
+        if (!c1 || !c2) return;
+        const idx = newRels.findIndex(r =>
+          (r.char1 === c1.id && r.char2 === c2.id) || (r.char1 === c2.id && r.char2 === c1.id)
+        );
+        if (idx < 0) return;
+        const evoKeys = ["status", "tension", "tensionType", "dynamic", "trustLevel", "chemistry", "powerDynamic", "char1Perspective", "char2Perspective", "sharedSecrets", "progression"];
+        const evoPatch = {};
+        evoKeys.forEach(k => { if (upd[k] !== undefined) evoPatch[k] = upd[k]; });
+        if (Object.keys(evoPatch).length > 0) {
+          const existing = newRels[idx].chapterEvolution || {};
+          newRels[idx] = {
+            ...newRels[idx],
+            chapterEvolution: { ...existing, [chapterIdx]: evoPatch },
+            lastUpdatedChapter: chapterIdx,
+          };
+        }
+      });
+      next.relationships = newRels;
+    }
+    // Update chapter state
+    if (updates.chapterState && next.chapters?.[chapterIdx]) {
+      const ch = { ...next.chapters[chapterIdx] };
+      if (updates.chapterState.chapterMomentum !== undefined) ch.chapterMomentum = updates.chapterState.chapterMomentum;
+      if (updates.chapterState.emotionalAftertaste !== undefined) ch.emotionalAftertaste = updates.chapterState.emotionalAftertaste;
+      if (updates.chapterState.chapterEndHookScore !== undefined) ch.chapterEndHookScore = updates.chapterState.chapterEndHookScore;
+      const newChapters = [...next.chapters];
+      newChapters[chapterIdx] = ch;
+      next.chapters = newChapters;
+    }
+    return next;
+  },
+
+  clearCache() { this._briefCache.clear(); },
 };
 
 // ─── DEFAULT FACTORIES ───
@@ -2977,13 +3777,10 @@ const createDefaultProject = () => ({
   thematicArgument: { thesis: "", antithesis: "", synthesis: "", embodiedBy: {} }, // {charId: "thesis"|"antithesis"}
   readerKnowledge: [], // [{id, fact, revealedInChapter, revealedDate, knownBy: [charIds], description}]
   chapters: [{ id: uid(), title: "Chapter 1", content: "", summary: "", notes: "", sceneNotes: "", pov: "", summaryGeneratedAt: "", worldView: "", linkedPlotId: "",
-    // ─── NEW CHAPTER FIELDS ───
-    narrativeDistance: "", // "cinematic" | "close-third" | "deep-interiority" | ""
-    sensoryPalette: "", // e.g. "visual-dominant, cold blues, rain sounds, damp air"
-    chapterEndHookScore: 0, // 0-10, AI-scored
-    chapterEndHookNotes: "", // AI feedback on chapter ending
-    tensionLevel: 5, // 1-10, user or AI set
-    subtextNotes: "", // What's happening beneath the surface
+    // ─── CHAPTER CRAFT FIELDS (author-set) ───
+    narrativeDistance: "", sensoryPalette: "", subtextNotes: "", tensionLevel: 5,
+    // ─── AI-MAINTAINED CHAPTER STATE ───
+    chapterEndHookScore: 0, chapterMomentum: 0, emotionalAftertaste: "",
   }],
   createdAt: new Date().toISOString(),
   wordGoal: 0,
@@ -2994,10 +3791,11 @@ const createDefaultCharacter = () => ({
   aliases: "",
   appearance: "", personality: "", backstory: "", desires: "",
   speechPattern: "", relationships: "", kinks: "", arc: "", notes: "",
-  backstoryRevealChapter: 0,
-  firstAppearanceChapter: 0,
+  // ─── SIMPLIFIED REVEAL STATE (replaces 8 deprecated chapter/date fields) ───
+  backstoryRevealed: false, // AI-flipped when backstory is revealed in a chapter
+  secretRevealed: false,    // AI-flipped when hidden secrets are revealed
+  hasAppeared: false,       // AI-flipped when character first appears
   status: "alive",
-  statusChangedChapter: 0,
   canonNotes: "",
   image: "",
   lookAlike: "",
@@ -3011,15 +3809,9 @@ const createDefaultCharacter = () => ({
   signatureItems: "",
   secrets: "",
   hiddenSecrets: "",
-  secretRevealChapter: 0,
-  // ─── DATE-BASED TEMPORAL GATING (preferred over chapter numbers for non-linear stories) ───
-  firstAppearanceDate: "", // Story date when character first appears
-  backstoryRevealDate: "", // Story date when backstory is revealed
-  secretRevealDate: "", // Story date when secrets are revealed
-  statusChangedDate: "", // Story date when status changed (died, etc.)
   // ─── VOICE CONSISTENCY ───
-  voiceScore: 0, // 0-10, AI-scored consistency
-  voiceNotes: "", // AI feedback on voice drift
+  voiceScore: 0,
+  voiceNotes: "",
   shortTermGoals: "",
   longTermGoals: "",
   internalConflict: "",
@@ -3029,10 +3821,15 @@ const createDefaultCharacter = () => ({
   allegiances: "",
   height: "",
   build: "",
-  orientation: "", // Sexual orientation
-  isBulk: false, // Bulk character group flag
-  bulkCount: 0, // How many individuals this group represents
-  bulkDescription: "", // Brief description of the group
+  orientation: "",
+  isBulk: false,
+  bulkCount: 0,
+  bulkDescription: "",
+  // ─── AI-MAINTAINED LIVING STATE (updated per chapter by stateUpdater agent) ───
+  currentEmotionalState: "",
+  obligationsOwed: "",
+  knowledgeState: "",
+  lastUpdatedChapter: 0,
 });
 
 // Create a bulk character group (e.g. "Police Officers", "Villagers")
@@ -3244,6 +4041,19 @@ const Storage = {
       const result = await _idb.get(LS_PROJECTS);
       return result || [];
     } catch { return []; }
+  },
+  async saveBackup(projects) {
+    try {
+      const backup = { timestamp: new Date().toISOString(), projects };
+      await _idb.set(LS_PROJECTS + "_backup", backup);
+      return true;
+    } catch { return false; }
+  },
+  async loadBackup() {
+    try {
+      const result = await _idb.get(LS_PROJECTS + "_backup");
+      return result || null;
+    } catch { return null; }
   },
   async saveProjects(p) {
     try {
@@ -3473,6 +4283,207 @@ const ConfirmDialog = memo(({ message, onConfirm, onCancel, confirmLabel }) => {
   );
 });
 
+// ─── FIND & REPLACE MODAL ───
+// Searches across all chapters + character names + world entries + plot entries
+// Supports case-sensitive, whole-word, and replace-all
+const FindReplaceModal = memo(({ project, onClose, onUpdate }) => {
+  const [find, setFind] = useState("");
+  const [replace, setReplace] = useState("");
+  const [caseSensitive, setCaseSensitive] = useState(false);
+  const [wholeWord, setWholeWord] = useState(false);
+  const [matches, setMatches] = useState([]); // [{chapterIdx, chapterTitle, lineText, count}]
+  const [scope, setScope] = useState("chapters"); // "chapters" | "all"
+
+  useEffect(() => {
+    const handler = (e) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [onClose]);
+
+  const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+  const makeRegex = useCallback(() => {
+    if (!find) return null;
+    let pattern = escapeRegex(find);
+    if (wholeWord) pattern = `\\b${pattern}\\b`;
+    return new RegExp(pattern, caseSensitive ? "g" : "gi");
+  }, [find, caseSensitive, wholeWord]);
+
+  const runSearch = useCallback(() => {
+    if (!find || !project) { setMatches([]); return; }
+    const re = makeRegex();
+    if (!re) return;
+    const found = [];
+    // Search chapters (content + title + summary + notes)
+    (project.chapters || []).forEach((ch, idx) => {
+      let total = 0;
+      const plainContent = (ch.content || "").replace(/<[^>]*>/g, " ");
+      const fields = [
+        { label: "Content", text: plainContent },
+        { label: "Title", text: ch.title || "" },
+        { label: "Summary", text: ch.summary || "" },
+        { label: "Scene Notes", text: ch.sceneNotes || "" },
+      ];
+      fields.forEach(({ label, text }) => {
+        const re2 = makeRegex();
+        const m = text.match(re2);
+        if (m) total += m.length;
+      });
+      if (total > 0) found.push({ kind: "chapter", chapterIdx: idx, title: ch.title, count: total });
+    });
+    if (scope === "all") {
+      // Search characters
+      (project.characters || []).forEach(c => {
+        let total = 0;
+        const searchable = [c.name, c.role, c.personality, c.backstory, c.desires, c.speechPattern, c.arc, c.notes, c.secrets].filter(Boolean).join(" ");
+        const re2 = makeRegex();
+        const m = searchable.match(re2);
+        if (m) total += m.length;
+        if (total > 0) found.push({ kind: "character", id: c.id, title: c.name, count: total });
+      });
+      // Search world
+      (project.worldBuilding || []).forEach(w => {
+        let total = 0;
+        const searchable = [w.name, w.description, w.keywords, w.history, w.atmosphere].filter(Boolean).join(" ");
+        const re2 = makeRegex();
+        const m = searchable.match(re2);
+        if (m) total += m.length;
+        if (total > 0) found.push({ kind: "world", id: w.id, title: w.name, count: total });
+      });
+      // Search plot
+      (project.plotOutline || []).forEach(pl => {
+        let total = 0;
+        const searchable = [pl.title, pl.summary].filter(Boolean).join(" ");
+        const re2 = makeRegex();
+        const m = searchable.match(re2);
+        if (m) total += m.length;
+        if (total > 0) found.push({ kind: "plot", id: pl.id, title: pl.title, count: total });
+      });
+    }
+    setMatches(found);
+  }, [find, project, scope, makeRegex]);
+
+  const replaceAll = useCallback(() => {
+    if (!find || !project) return;
+    let totalReplaced = 0;
+    const updatedProject = { ...project };
+    // Chapter content
+    updatedProject.chapters = (project.chapters || []).map(ch => {
+      const re = makeRegex(); const re2 = makeRegex(); const re3 = makeRegex(); const re4 = makeRegex();
+      const newContent = (ch.content || "").replace(re, () => { totalReplaced++; return replace; });
+      const newTitle = (ch.title || "").replace(re2, () => { totalReplaced++; return replace; });
+      const newSummary = (ch.summary || "").replace(re3, () => { totalReplaced++; return replace; });
+      const newSceneNotes = (ch.sceneNotes || "").replace(re4, () => { totalReplaced++; return replace; });
+      return { ...ch, content: newContent, title: newTitle, summary: newSummary, sceneNotes: newSceneNotes };
+    });
+    if (scope === "all") {
+      updatedProject.characters = (project.characters || []).map(c => {
+        const patch = {};
+        ["name", "role", "personality", "backstory", "desires", "speechPattern", "arc", "notes", "secrets", "appearance"].forEach(k => {
+          if (!c[k]) return;
+          const re = makeRegex();
+          const next = c[k].replace(re, () => { totalReplaced++; return replace; });
+          if (next !== c[k]) patch[k] = next;
+        });
+        return { ...c, ...patch };
+      });
+      updatedProject.worldBuilding = (project.worldBuilding || []).map(w => {
+        const patch = {};
+        ["name", "description", "keywords", "history", "atmosphere", "culturalNorms"].forEach(k => {
+          if (!w[k]) return;
+          const re = makeRegex();
+          const next = w[k].replace(re, () => { totalReplaced++; return replace; });
+          if (next !== w[k]) patch[k] = next;
+        });
+        return { ...w, ...patch };
+      });
+      updatedProject.plotOutline = (project.plotOutline || []).map(pl => {
+        const patch = {};
+        ["title", "summary"].forEach(k => {
+          if (!pl[k]) return;
+          const re = makeRegex();
+          const next = pl[k].replace(re, () => { totalReplaced++; return replace; });
+          if (next !== pl[k]) patch[k] = next;
+        });
+        return { ...pl, ...patch };
+      });
+    }
+    onUpdate(updatedProject, totalReplaced);
+  }, [find, replace, project, scope, makeRegex, onUpdate]);
+
+  return (
+    <div style={{
+      position: "fixed", inset: 0, zIndex: 9998,
+      background: "rgba(0,0,0,0.55)", backdropFilter: "blur(4px)",
+      display: "flex", alignItems: "center", justifyContent: "center",
+      animation: "nf-fadeIn 0.12s ease-out",
+    }} onClick={onClose} role="dialog" aria-modal="true" aria-label="Find and replace">
+      <div onClick={e => e.stopPropagation()} style={{
+        background: "var(--nf-dialog-bg)", border: "1px solid var(--nf-dialog-border)", borderRadius: 8,
+        padding: "24px 28px", maxWidth: 640, width: "92%", maxHeight: "80vh", overflow: "auto",
+        boxShadow: "var(--nf-shadow-lg)",
+      }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+          <h3 style={{ color: "var(--nf-text)", fontSize: 18, fontWeight: 600, margin: 0 }}>Find & Replace</h3>
+          <button onClick={onClose} className="nf-btn-icon" aria-label="Close"><Icons.X /></button>
+        </div>
+        <div style={{ display: "grid", gap: 12 }}>
+          <div>
+            <label style={{ display: "block", fontSize: 11, color: "var(--nf-text-muted)", marginBottom: 4, fontWeight: 500, letterSpacing: "0.05em", textTransform: "uppercase" }}>Find</label>
+            <input autoFocus value={find} onChange={e => setFind(e.target.value)} onKeyDown={e => { if (e.key === "Enter") runSearch(); }}
+              className="nf-input" placeholder="Text to find..." />
+          </div>
+          <div>
+            <label style={{ display: "block", fontSize: 11, color: "var(--nf-text-muted)", marginBottom: 4, fontWeight: 500, letterSpacing: "0.05em", textTransform: "uppercase" }}>Replace with</label>
+            <input value={replace} onChange={e => setReplace(e.target.value)} className="nf-input" placeholder="Replacement text (leave empty to delete matches)" />
+          </div>
+          <div style={{ display: "flex", gap: 16, flexWrap: "wrap", alignItems: "center" }}>
+            <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "var(--nf-text)", cursor: "pointer" }}>
+              <input type="checkbox" checked={caseSensitive} onChange={e => setCaseSensitive(e.target.checked)} />
+              Case sensitive
+            </label>
+            <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "var(--nf-text)", cursor: "pointer" }}>
+              <input type="checkbox" checked={wholeWord} onChange={e => setWholeWord(e.target.checked)} />
+              Whole word
+            </label>
+            <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "var(--nf-text)", cursor: "pointer" }}>
+              <input type="radio" name="frscope" checked={scope === "chapters"} onChange={() => setScope("chapters")} />
+              Chapters only
+            </label>
+            <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "var(--nf-text)", cursor: "pointer" }}>
+              <input type="radio" name="frscope" checked={scope === "all"} onChange={() => setScope("all")} />
+              All (characters, world, plot, chapters)
+            </label>
+          </div>
+          <div style={{ display: "flex", gap: 10, marginTop: 4 }}>
+            <button onClick={runSearch} className="nf-btn nf-btn-primary" disabled={!find}><Icons.Search /> Find</button>
+            <button onClick={replaceAll} className="nf-btn" disabled={!find || matches.length === 0} style={{ borderColor: "var(--nf-accent)" }}>Replace All</button>
+          </div>
+          {matches.length > 0 && (
+            <div style={{ background: "var(--nf-bg-deep)", border: "1px solid var(--nf-border)", borderRadius: 4, padding: "10px 12px", maxHeight: 250, overflow: "auto" }}>
+              <div style={{ fontSize: 11, color: "var(--nf-text-muted)", marginBottom: 8, fontWeight: 500 }}>
+                {matches.reduce((s, m) => s + m.count, 0)} match{matches.reduce((s, m) => s + m.count, 0) !== 1 ? "es" : ""} in {matches.length} location{matches.length !== 1 ? "s" : ""}
+              </div>
+              {matches.map((m, i) => (
+                <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "4px 0", fontSize: 12, color: "var(--nf-text)", borderBottom: i < matches.length - 1 ? "1px solid var(--nf-border)" : "none" }}>
+                  <span>
+                    <span style={{ color: "var(--nf-text-muted)", fontSize: 10, marginRight: 6, textTransform: "uppercase", letterSpacing: "0.05em" }}>{m.kind}</span>
+                    {m.title || "(untitled)"}
+                  </span>
+                  <span style={{ color: "var(--nf-accent-2)", fontFamily: "var(--nf-font-mono)", fontSize: 11 }}>{m.count}×</span>
+                </div>
+              ))}
+            </div>
+          )}
+          {find && matches.length === 0 && (
+            <div style={{ fontSize: 12, color: "var(--nf-text-muted)", fontStyle: "italic", padding: "6px 0" }}>No matches — click Find to search.</div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+});
+
 // ─── DIFF / REVIEW MODAL ───
 const DiffReviewModal = memo(({ original, proposed, onAccept, onReject, onInsertAtCursor }) => {
   // B19: Only close on explicit button click, not backdrop mis-click
@@ -3528,7 +4539,7 @@ const DiffReviewModal = memo(({ original, proposed, onAccept, onReject, onInsert
 });
 
 // ─── CHARACTER SUGGESTIONS REVIEW MODAL ───
-const FIELD_LABELS = { personality: "Personality", desires: "Desires & Motivations", arc: "Character Arc", status: "Status", statusChangedChapter: "Status Changed (Ch#)", canonNotes: "Canon Notes", relationships: "Relationships", backstory: "Backstory", speechPattern: "Speech & Voice", appearance: "Appearance" };
+const FIELD_LABELS = { personality: "Personality", desires: "Desires & Motivations", arc: "Character Arc", status: "Status", canonNotes: "Canon Notes", relationships: "Relationships", backstory: "Backstory", speechPattern: "Speech & Voice", appearance: "Appearance" };
 
 const CharacterSuggestionsModal = memo(({ suggestions, onAccept, onReject, onAcceptAll, onRejectAll, onAcceptRel, onRejectRel, onClose }) => {
   useEffect(() => {
@@ -3586,7 +4597,7 @@ const CharacterSuggestionsModal = memo(({ suggestions, onAccept, onReject, onAcc
                     <div>
                       <span style={{ fontWeight: 600, fontSize: 13, color: "var(--nf-text)" }}>{s.charName}</span>
                       <span style={{ fontSize: 11, color: "var(--nf-accent-2)", marginLeft: 8, fontWeight: 500 }}>{FIELD_LABELS[s.field] || s.field}</span>
-                      {s.current && s.field !== "status" && s.field !== "statusChangedChapter" && (
+                      {s.current && s.field !== "status" && (
                         <span style={{ fontSize: 9, color: "var(--nf-text-muted)", marginLeft: 6, opacity: 0.6 }}>
                           (will merge with existing)
                         </span>
@@ -3607,7 +4618,7 @@ const CharacterSuggestionsModal = memo(({ suggestions, onAccept, onReject, onAcc
                     </div>
                   )}
                   <div style={{ fontSize: 12, color: "var(--nf-text)", padding: "6px 8px", background: "var(--nf-success-bg)", border: "1px solid var(--nf-success)", borderRadius: 6, lineHeight: 1.5, marginBottom: s.reason ? 4 : 0, whiteSpace: "pre-wrap" }}>
-                    <span style={{ fontWeight: 600, fontSize: 9, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--nf-success)", display: "block", marginBottom: 2 }}>{s.current && s.field !== "status" && s.field !== "statusChangedChapter" ? "New addition:" : "New value:"} </span>{s.suggested}
+                    <span style={{ fontWeight: 600, fontSize: 9, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--nf-success)", display: "block", marginBottom: 2 }}>{s.current && s.field !== "status" ? "New addition:" : "New value:"} </span>{s.suggested}
                   </div>
                   {s.reason && (
                     <div style={{ fontSize: 10, color: "var(--nf-text-muted)", fontStyle: "italic", marginTop: 4, paddingLeft: 8 }}>
@@ -3721,7 +4732,7 @@ const WhiteRoomModal = memo(({ char1, char2, tension, result, isGenerating, onGe
   const [c2, setC2] = useState(char2 || "");
   const [tens, setTens] = useState(tension || "hostile");
   const [scenario, setScenario] = useState("");
-  const charOptions = (characters || []).filter(c => c.name).map(c => ({ value: c.id, label: c.name }));
+  const charOptions = (characters || []).filter(c => c.name && !c.isBulk).map(c => ({ value: c.id, label: c.name }));
   const tensionOpts = ["hostile", "romantic", "suspicious", "playful", "grieving", "confrontational", "intimate", "competitive"];
 
   useEffect(() => {
@@ -3879,7 +4890,7 @@ const TimelineView = memo(({ plotOutline, chapters, characters, onClose, restore
             <span style={{ fontFamily: "var(--nf-font-display)", fontSize: 20, fontWeight: 400, color: "var(--nf-text)" }}>Story Timeline</span>
             {dateSpan && <span style={{ fontSize: 10, color: "var(--nf-text-muted)", marginLeft: 12, fontFamily: "var(--nf-font-mono)" }}>{dateSpan}</span>}
           </div>
-          <button onClick={onClose} className="nf-btn-icon"><Icons.X /></button>
+          <button aria-label="Close" onClick={onClose} className="nf-btn-icon"><Icons.X /></button>
         </div>
         <div style={{ flex: 1, minHeight: 0, overflow: "auto", padding: "20px 24px" }}>
           {sorted.length === 0 ? (
@@ -4003,7 +5014,7 @@ const TimelineView = memo(({ plotOutline, chapters, characters, onClose, restore
           animation: "nf-fadeIn 0.15s ease-out", cursor: "pointer",
         }} onClick={() => setLightbox(null)}>
           <div role="button" tabIndex={0} onClick={e => e.stopPropagation()} style={{ position: "relative", maxWidth: "90vw", maxHeight: "90vh", display: "flex", alignItems: "center", justifyContent: "center" }}>
-            <img src={lightbox.images[lightbox.index]} alt="" style={{ maxWidth: "90vw", maxHeight: "85vh", objectFit: "contain", borderRadius: 3, boxShadow: "0 0 60px rgba(0,0,0,0.5)" }} />
+            <img loading="lazy" src={lightbox.images[lightbox.index]} alt="" style={{ maxWidth: "90vw", maxHeight: "85vh", objectFit: "contain", borderRadius: 3, boxShadow: "0 0 60px rgba(0,0,0,0.5)" }} />
             {lightbox.images.length > 1 && (
               <>
                 <button onClick={() => setLightbox(prev => ({ ...prev, index: Math.max(prev.index - 1, 0) }))}
@@ -4072,7 +5083,7 @@ const CleanViewModal = memo(({ project, startChapter, onClose }) => {
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="9 18 15 12 9 6"/></svg>
           </button>
         </div>
-        <button onClick={onClose} className="nf-btn-icon"><Icons.X /></button>
+        <button aria-label="Close" onClick={onClose} className="nf-btn-icon"><Icons.X /></button>
       </div>
       {/* Reader area */}
       <div style={{ flex: 1, minHeight: 0, overflow: "auto", display: "flex", justifyContent: "center" }}>
@@ -4570,7 +5581,7 @@ const RelationshipWebModal = memo(({ characters, relationships, onClose, povChar
             }}>
               ⛨ {showOrgs ? "Hierarchy" : "Hierarchy"}
             </button>
-            <button onClick={resetView} className="nf-btn-micro">↻ Layout</button>
+            <button aria-label="Close" onClick={resetView} className="nf-btn-micro">↻ Layout</button>
             <button onClick={onClose} className="nf-btn-icon" aria-label="Close"><Icons.X /></button>
           </div>
         </div>
@@ -4773,7 +5784,7 @@ const RelationshipWebModal = memo(({ characters, relationships, onClose, povChar
         {/* Org hierarchy tooltip */}
         {hoveredInfo?.type === 'org' && (() => { const link = hoveredInfo.data; const sup = charMap[link.superiorId]; const sub = charMap[link.subordinateId]; if (!sup || !sub) return null; return (<div className="nf-rel-web-tip" style={{ bottom: 80, left: "50%", transform: "translateX(-50%)" }}><div style={{ fontSize: 10, color: "rgba(160,140,200,0.7)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 6 }}>⛨ {link.orgName}</div><div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}><span style={{ fontWeight: 700, color: "var(--nf-text)", fontSize: 13 }}>{sup.name}</span><span style={{ fontSize: 10, color: "rgba(160,140,200,0.7)" }}>{link.superiorRole}</span></div><div style={{ fontSize: 10, color: "rgba(160,140,200,0.5)", textAlign: "center", margin: "2px 0" }}>▼ reports to</div><div style={{ display: "flex", alignItems: "center", gap: 8 }}><span style={{ fontWeight: 700, color: "var(--nf-text)", fontSize: 13 }}>{sub.name}</span><span style={{ fontSize: 10, color: "rgba(160,140,200,0.7)" }}>{link.subordinateRole}</span></div></div>); })()}
         {/* Selected node panel */}
-        {selectedNode && (() => { const ch = charMap[selectedNode]; if (!ch) return null; const nodeRels = procRels.filter(r => r.char1 === selectedNode || r.char2 === selectedNode); const nodeLocs = charLocations[selectedNode] || []; const nodeOrgRoles = charOrgRoles[selectedNode] || []; const nodeOrgLinks = orgLinks.filter(l => l.subordinateId === selectedNode || l.superiorId === selectedNode); return (<div className="nf-rel-web-tip" style={{ top: 80, left: 20, transform: "none", maxWidth: 280, pointerEvents: "auto" }}><div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>{ch.image && <img src={ch.image} alt={ch.name} style={{ width: 28, height: 28, borderRadius: "50%", objectFit: "cover", border: "1px solid var(--nf-border)" }} />}<div><div style={{ fontWeight: 700, fontSize: 13, color: "var(--nf-text)" }}>{ch.name}</div><div style={{ fontSize: 9, color: "var(--nf-text-muted)", textTransform: "uppercase", letterSpacing: "0.1em" }}>{ch.role}{ch.occupation ? ` · ${ch.occupation}` : ""}</div></div></div>{ch.personality && <div style={{ fontSize: 11, color: "var(--nf-text-dim)", marginBottom: 6, lineHeight: 1.4 }}>{ch.personality.slice(0, 120)}{ch.personality.length > 120 ? "…" : ""}</div>}{nodeLocs.length > 0 && <div style={{ fontSize: 10, color: "var(--nf-accent-2)", marginBottom: 4 }}>📍 {nodeLocs.join(", ")}</div>}{nodeOrgRoles.length > 0 && <div style={{ fontSize: 10, color: "rgba(160,140,200,0.8)", marginBottom: 4 }}>⛨ {nodeOrgRoles.map(r => `${r.role} (${r.org})`).join(", ")}</div>}{ch.allegiances && <div style={{ fontSize: 10, color: "var(--nf-accent-2)", marginBottom: 4 }}>⚔ {ch.allegiances}</div>}{nodeOrgLinks.length > 0 && (<div style={{ borderTop: "1px solid var(--nf-border)", paddingTop: 6, marginBottom: 4 }}><div style={{ fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", color: "rgba(160,140,200,0.6)", marginBottom: 4 }}>Org Chain</div>{nodeOrgLinks.map(l => { const isSuper = l.superiorId === selectedNode; const otherId = isSuper ? l.subordinateId : l.superiorId; const other = charMap[otherId]; return (<div key={l.id} style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4, fontSize: 10 }}><span style={{ color: "rgba(160,140,200,0.6)", fontSize: 8 }}>{isSuper ? "▼" : "▲"}</span><span style={{ fontWeight: 600, color: "var(--nf-text-dim)" }}>{other?.name || "?"}</span><span style={{ fontSize: 8, color: "rgba(160,140,200,0.5)" }}>{isSuper ? l.subordinateRole : l.superiorRole}</span><span style={{ fontSize: 8, color: "var(--nf-text-muted)", opacity: 0.5 }}>{l.orgName}</span></div>); })}</div>)}{nodeRels.length > 0 && (<div style={{ borderTop: "1px solid var(--nf-border)", paddingTop: 6 }}><div style={{ fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", color: "var(--nf-text-muted)", marginBottom: 4 }}>Connections ({nodeRels.length})</div>{nodeRels.map(r => { const otherId = r.char1 === selectedNode ? r.char2 : r.char1; const other = charMap[otherId]; return (<div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4, fontSize: 10 }}><span style={{ width: 8, height: 2, background: tColor(r.tension), borderRadius: 1, flexShrink: 0 }} /><span style={{ fontWeight: 600, color: "var(--nf-text-dim)" }}>{other?.name || "?"}</span><span style={{ fontSize: 8, color: "var(--nf-text-muted)", opacity: 0.7 }}>{r.category || "romantic"}</span>{r.tension && r.tension !== "none" && <span style={{ fontSize: 8, color: tColor(r.tension), fontWeight: 700 }}>{r.tension}</span>}</div>); })}</div>)}<div style={{ fontSize: 9, color: "var(--nf-text-muted)", opacity: 0.5, marginTop: 6, fontStyle: "italic" }}>Click again to deselect</div></div>); })()}
+        {selectedNode && (() => { const ch = charMap[selectedNode]; if (!ch) return null; const nodeRels = procRels.filter(r => r.char1 === selectedNode || r.char2 === selectedNode); const nodeLocs = charLocations[selectedNode] || []; const nodeOrgRoles = charOrgRoles[selectedNode] || []; const nodeOrgLinks = orgLinks.filter(l => l.subordinateId === selectedNode || l.superiorId === selectedNode); return (<div className="nf-rel-web-tip" style={{ top: 80, left: 20, transform: "none", maxWidth: 280, pointerEvents: "auto" }}><div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>{ch.image && <img loading="lazy" src={ch.image} alt={ch.name} style={{ width: 28, height: 28, borderRadius: "50%", objectFit: "cover", border: "1px solid var(--nf-border)" }} />}<div><div style={{ fontWeight: 700, fontSize: 13, color: "var(--nf-text)" }}>{ch.name}</div><div style={{ fontSize: 9, color: "var(--nf-text-muted)", textTransform: "uppercase", letterSpacing: "0.1em" }}>{ch.role}{ch.occupation ? ` · ${ch.occupation}` : ""}</div></div></div>{ch.personality && <div style={{ fontSize: 11, color: "var(--nf-text-dim)", marginBottom: 6, lineHeight: 1.4 }}>{ch.personality.slice(0, 120)}{ch.personality.length > 120 ? "…" : ""}</div>}{nodeLocs.length > 0 && <div style={{ fontSize: 10, color: "var(--nf-accent-2)", marginBottom: 4 }}>📍 {nodeLocs.join(", ")}</div>}{nodeOrgRoles.length > 0 && <div style={{ fontSize: 10, color: "rgba(160,140,200,0.8)", marginBottom: 4 }}>⛨ {nodeOrgRoles.map(r => `${r.role} (${r.org})`).join(", ")}</div>}{ch.allegiances && <div style={{ fontSize: 10, color: "var(--nf-accent-2)", marginBottom: 4 }}>⚔ {ch.allegiances}</div>}{nodeOrgLinks.length > 0 && (<div style={{ borderTop: "1px solid var(--nf-border)", paddingTop: 6, marginBottom: 4 }}><div style={{ fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", color: "rgba(160,140,200,0.6)", marginBottom: 4 }}>Org Chain</div>{nodeOrgLinks.map(l => { const isSuper = l.superiorId === selectedNode; const otherId = isSuper ? l.subordinateId : l.superiorId; const other = charMap[otherId]; return (<div key={l.id} style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4, fontSize: 10 }}><span style={{ color: "rgba(160,140,200,0.6)", fontSize: 8 }}>{isSuper ? "▼" : "▲"}</span><span style={{ fontWeight: 600, color: "var(--nf-text-dim)" }}>{other?.name || "?"}</span><span style={{ fontSize: 8, color: "rgba(160,140,200,0.5)" }}>{isSuper ? l.subordinateRole : l.superiorRole}</span><span style={{ fontSize: 8, color: "var(--nf-text-muted)", opacity: 0.5 }}>{l.orgName}</span></div>); })}</div>)}{nodeRels.length > 0 && (<div style={{ borderTop: "1px solid var(--nf-border)", paddingTop: 6 }}><div style={{ fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", color: "var(--nf-text-muted)", marginBottom: 4 }}>Connections ({nodeRels.length})</div>{nodeRels.map(r => { const otherId = r.char1 === selectedNode ? r.char2 : r.char1; const other = charMap[otherId]; return (<div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4, fontSize: 10 }}><span style={{ width: 8, height: 2, background: tColor(r.tension), borderRadius: 1, flexShrink: 0 }} /><span style={{ fontWeight: 600, color: "var(--nf-text-dim)" }}>{other?.name || "?"}</span><span style={{ fontSize: 8, color: "var(--nf-text-muted)", opacity: 0.7 }}>{r.category || "romantic"}</span>{r.tension && r.tension !== "none" && <span style={{ fontSize: 8, color: tColor(r.tension), fontWeight: 700 }}>{r.tension}</span>}</div>); })}</div>)}<div style={{ fontSize: 9, color: "var(--nf-text-muted)", opacity: 0.5, marginTop: 6, fontStyle: "italic" }}>Click again to deselect</div></div>); })()}
       </div>
     </div>
   );
@@ -4899,7 +5910,7 @@ const generatePdfHtml = (project, mode, chapterIdx) => {
 
 const _buildImgFigure = (imageUrl, caption) => {
   const safeCaption = (caption || "").replace(/"/g, '&quot;');
-  return `<figure class="nf-img-wrapper" contenteditable="false" style="text-align:center;margin:20px 0;position:relative;display:block;width:100%"><span class="nf-img-handle">⠿ drag</span><span class="nf-img-actions"><button class="nf-img-del" title="Delete image">✕</button></span><img src="${imageUrl}" style="max-width:100%;border-radius:2px;box-shadow:0 2px 12px rgba(0,0,0,0.15)" alt="${safeCaption}" draggable="false" ondragstart="return false" /><figcaption class="nf-img-caption" style="font-size:10px;color:var(--nf-text-muted);font-style:italic;margin-top:4px;padding-top:4px;border-top:1px solid var(--nf-border);text-align:center">${caption || ""}</figcaption></figure>`;
+  return `<figure class="nf-img-wrapper" contenteditable="false" style="text-align:center;margin:20px 0;position:relative;display:block;width:100%"><span class="nf-img-handle">⠿ drag</span><span class="nf-img-actions"><button class="nf-img-del" title="Delete image">✕</button></span><img loading="lazy" src="${imageUrl}" style="max-width:100%;border-radius:2px;box-shadow:0 2px 12px rgba(0,0,0,0.15)" alt="${safeCaption}" draggable="false" ondragstart="return false" /><figcaption class="nf-img-caption" style="font-size:10px;color:var(--nf-text-muted);font-style:italic;margin-top:4px;padding-top:4px;border-top:1px solid var(--nf-border);text-align:center">${caption || ""}</figcaption></figure>`;
 };
 
 // Safely insert image HTML into the editor WITHOUT replacing any selected text.
@@ -6035,7 +7046,27 @@ const TabAIChat = memo(({ project, settings, tabName, tabContext, placeholder, o
     setIsGenerating(true);
 
     try {
-      const contextInfo = ContextEngine.buildTabContext(project, chapterIdx, tabName, editingEntityId);
+      // ─── Multi-agent mode: orchestrator + specialists pipeline ───
+      let contextInfo = "";
+      let agentBriefs = null;
+      if (settings?.agentsEnabled && settings?.apiKey) {
+        try {
+          const agentResult = await AgentRuntime.runFull({
+            userRequest: msgText,
+            project, chapterIdx,
+            taskHint: `Tab: ${tabName}. EditingEntity: ${editingEntityId || "none"}.`,
+            settings,
+            signal: null,
+          });
+          contextInfo = agentResult.assembledContext;
+          agentBriefs = agentResult.briefs;
+        } catch (agentErr) {
+          console.warn("[NovelForge] Agent pipeline failed, falling back to monolithic context:", agentErr);
+          contextInfo = ContextEngine.buildTabContext(project, chapterIdx, tabName, editingEntityId);
+        }
+      } else {
+        contextInfo = ContextEngine.buildTabContext(project, chapterIdx, tabName, editingEntityId);
+      }
 
       // G6: Increase history to 10, keep first message for context continuity
       const nonErrorMsgs = messages.filter(m => !m.isError);
@@ -6056,10 +7087,10 @@ RULES:
 \`\`\`json
 { "type": "${tabName}", "data": { ... } }
 \`\`\`
-- For CHARACTER: name, role, gender, age, pronouns, orientation, aliases, occupation, title, height, build, tags, appearance, personality, backstory, backstoryRevealChapter, backstoryRevealDate, desires, shortTermGoals, longTermGoals, speechPattern, voiceSamples, habits, fears, flaws, strengths, skills, internalConflict, externalConflict, signatureItems, secrets, hiddenSecrets, secretRevealChapter, secretRevealDate, allegiances, kinks, arc, canonNotes, firstAppearanceChapter, firstAppearanceDate, status, statusChangedDate, isBulk, bulkCount, bulkDescription
-- For WORLD: name, category, description, keywords, introducedInChapter, history, culturalNorms. LOCATION: atmosphere, sensoryDetails, subLocations, dangers, rules, population, resources. RULE/LAW: enforcement, scope, loopholes, publicOpinion, enactedBy. CULTURE: values, customs, socialHierarchy, taboos, artForms, dialect. MAGIC SYSTEM: magicSource, magicRules, magicCost, magicRarity, magicTypes, magicPerception. TECHNOLOGY: techFunction, techMechanism, techAvailability, techLimitations, techImpact, techCreator. HISTORY: historyDate, historyFigures, historyCauses, historyConsequences, historyLegacy. FLORA/FAUNA: habitat, floraAppearance, behavior, floraUses, floraRarity, floraCultural. LANGUAGE: langSpeakers, langWriting, langPhrases, langGrammar, langRelated, langStatus. RELIGION: deities, coreBeliefs, rituals, sacredPlaces, clergy, heresies, followers. ORGANIZATION: orgPurpose, orgHierarchy, frequentCharacters.
-- For PLOT: chapter, title, summary, beats, sceneType, pov, characters, locations, date, povCharacterId. CHAPTER CRAFT: narrativeDistance (cinematic/close-third/deep-interiority), sensoryPalette, subtextNotes, tensionLevel (1-10), chapterEndHookScore (0-10), chapterEndHookNotes
-- For RELATIONSHIP: char1, char2, category (romantic/family/friendship/professional/mentor/rivalry), dynamic, status, tension, tensionType, powerDynamic (equal/char1-dominant/char2-dominant/shifting), trustLevel (none/low/medium/high/absolute), chemistry, conflictSource, sharedSecrets, keyScenes, terms, taboos, isPublic, char1Perspective, char2Perspective, progression, evolutionTimeline, meetsInChapter, notes
+- For CHARACTER: name, role, gender, age, pronouns, orientation, aliases, occupation, title, height, build, tags, appearance, personality, backstory, desires, shortTermGoals, longTermGoals, speechPattern, voiceSamples, habits, fears, flaws, strengths, skills, internalConflict, externalConflict, signatureItems, secrets, hiddenSecrets, allegiances, kinks, arc, canonNotes, status, isBulk, bulkCount, bulkDescription. AI-maintained fields: backstoryRevealed (bool), secretRevealed (bool), hasAppeared (bool), currentEmotionalState, obligationsOwed, knowledgeState
+- For WORLD: name, category, description, keywords, history, culturalNorms. LOCATION: atmosphere, sensoryDetails, subLocations, dangers, rules, population, resources. RULE/LAW: enforcement, scope, loopholes, publicOpinion, enactedBy. CULTURE: values, customs, socialHierarchy, taboos, artForms, dialect. MAGIC SYSTEM: magicSource, magicRules, magicCost, magicRarity, magicTypes, magicPerception. TECHNOLOGY: techFunction, techMechanism, techAvailability, techLimitations, techImpact, techCreator. HISTORY: historyDate, historyFigures, historyCauses, historyConsequences, historyLegacy. FLORA/FAUNA: habitat, floraAppearance, behavior, floraUses, floraRarity, floraCultural. LANGUAGE: langSpeakers, langWriting, langPhrases, langGrammar, langRelated, langStatus. RELIGION: deities, coreBeliefs, rituals, sacredPlaces, clergy, heresies, followers. ORGANIZATION: orgPurpose, orgHierarchy, frequentCharacters.
+- For PLOT: chapter, title, summary, beats, sceneType, pov, characters, locations, date, povCharacterId. CHAPTER CRAFT: narrativeDistance (cinematic/close-third/deep-interiority), sensoryPalette, subtextNotes, tensionLevel (1-10). AI-MAINTAINED chapter state: chapterEndHookScore (0-10), chapterMomentum (0-10), emotionalAftertaste.
+- For RELATIONSHIP (foundational — set by author): char1, char2, category (romantic/family/friendship/professional/mentor/rivalry), conflictSource, terms, taboos, evolutionTimeline, isPublic, notes. AI-EVOLVING per chapter: dynamic, status, tension, tensionType, powerDynamic (equal/char1-dominant/char2-dominant/shifting), trustLevel (none/low/medium/high/absolute), chemistry, sharedSecrets, keyScenes, char1Perspective, char2Perspective, progression.
 - Be creative, specific, genre-aware.
 - When filling in empty fields, ONLY fill fields listed as [Empty]. Do NOT overwrite existing content.
 - Make sure suggestions are consistent with existing characters and world.
@@ -6099,7 +7130,11 @@ RULES:
           try {
             const p = JSON.parse(match[1]);
             if (typeof p === "object" && p !== null) { hasAutoFill = true; break; }
-          } catch { /* silent */ }
+          } catch {
+            // Try repair for truncated JSON
+            const repaired = tryRepairJson(match[1]);
+            if (repaired && typeof repaired === "object") { hasAutoFill = true; break; }
+          }
         }
         // Pattern 2: ``` ... ``` without language tag
         if (!hasAutoFill) {
@@ -6110,7 +7145,10 @@ RULES:
               try {
                 const p = JSON.parse(trimmed);
                 if (typeof p === "object" && p !== null) { hasAutoFill = true; break; }
-              } catch { /* silent */ }
+              } catch {
+                const repaired = tryRepairJson(trimmed);
+                if (repaired && typeof repaired === "object") { hasAutoFill = true; break; }
+              }
             }
           }
         }
@@ -6132,6 +7170,13 @@ RULES:
                   hasAutoFill = true;
                 }
               } catch { /* silent */ }
+            } else {
+              // Truncated — try to repair from firstBrace to end
+              const candidate = content.slice(firstBrace);
+              const repaired = tryRepairJson(candidate);
+              if (repaired && typeof repaired === "object") {
+                hasAutoFill = true;
+              }
             }
           }
         }
@@ -6310,7 +7355,7 @@ RULES:
       </div>
       <div style={{ padding: 8, borderTop: "1px solid var(--nf-border)", display: "flex", gap: 6 }}>
         <textarea value={input} onChange={e => setInput(e.target.value)}
-          onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); } }}
+          onKeyDown={e => { if (e.key === "Enter" && (!e.shiftKey || e.ctrlKey || e.metaKey)) { e.preventDefault(); handleSend(); } }}
           placeholder="Ask the AI..." className="nf-chat-textarea" style={{ fontSize: 12, minHeight: 36 }} />
         {isGenerating ? (
           <button onClick={() => abortRef.current?.abort()} className="nf-send-btn" style={{ background: "var(--nf-accent)" }}><Icons.Stop /></button>
@@ -6392,7 +7437,7 @@ const CharacterPresenceStrip = memo(({ characters, chapterContent, relationships
             onMouseLeave={scheduleDismiss}>
             <div className="nf-presence-avatar-wrap">
               {c.image
-                ? <img src={c.image} alt="" className="nf-presence-img" style={isPov ? { boxShadow: `0 0 8px ${"var(--nf-accent)"}40` } : undefined} />
+                ? <img loading="lazy" src={c.image} alt="" className="nf-presence-img" style={isPov ? { boxShadow: `0 0 8px ${"var(--nf-accent)"}40` } : undefined} />
                 : <span className="nf-presence-initial" style={isPov ? { boxShadow: `0 0 8px ${"var(--nf-accent)"}40` } : undefined}>{(c.name || "?")[0]}</span>
               }
               {isDead && <span className="nf-presence-badge">†</span>}
@@ -6807,7 +7852,7 @@ const VoiceHoverPopup = memo(({ editorRef, charColors }) => {
   }, [editorRef, charColors]);
   if (!popup) return null;
   return createPortal(<div style={{ position: "fixed", top: popup.y, left: popup.x, zIndex: 10000, background: "var(--nf-dialog-bg)", border: "1px solid var(--nf-border)", borderRadius: 8, padding: "4px 10px", display: "flex", alignItems: "center", gap: 8, boxShadow: "var(--nf-shadow)", pointerEvents: "none", animation: "nf-fadeIn 0.1s ease-out" }}>
-    {popup.info.image ? <img src={popup.info.image} alt="" style={{ width: 26, height: 26, borderRadius: "50%", objectFit: "cover", border: `2px solid ${popup.info.color}`, flexShrink: 0 }} /> : <div style={{ width: 26, height: 26, borderRadius: "50%", background: popup.info.color, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, color: "var(--nf-text-inverse, #fff)", fontWeight: 600, flexShrink: 0 }}>{popup.info.name[0]}</div>}
+    {popup.info.image ? <img loading="lazy" src={popup.info.image} alt="" style={{ width: 26, height: 26, borderRadius: "50%", objectFit: "cover", border: `2px solid ${popup.info.color}`, flexShrink: 0 }} /> : <div style={{ width: 26, height: 26, borderRadius: "50%", background: popup.info.color, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, color: "var(--nf-text-inverse, #fff)", fontWeight: 600, flexShrink: 0 }}>{popup.info.name[0]}</div>}
     <div><div style={{ fontSize: 11, fontWeight: 600, color: popup.info.color, lineHeight: 1.2 }}>{popup.info.name}</div><div style={{ fontSize: 8, color: "var(--nf-text-muted)", textTransform: "uppercase", letterSpacing: "0.06em" }}>speaking</div></div>
   </div>, document.body);
 });
@@ -6816,7 +7861,7 @@ const ColorModeBar = memo(({ colorMode, setColorMode, characters }) => {
   const charColors = useMemo(() => _charColorMap(characters), [characters]);
   if (colorMode === "off") return null;
   return (<div style={{ display: "flex", alignItems: "center", gap: 6, padding: "4px 12px", borderBottom: "1px solid var(--nf-border)", background: "var(--nf-bg-raised)", minHeight: 26, animation: "nf-fadeIn 0.15s ease-out" }}>
-    {colorMode === "voice" && <div style={{ display: "flex", alignItems: "center", gap: 6, flex: 1, minHeight: 0, overflow: "hidden", textOverflow: "ellipsis" }}><span style={{ fontSize: 9, color: "var(--nf-text-muted)", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 600, flexShrink: 0 }}>Voice</span><div style={{ display: "flex", gap: 6, overflow: "hidden", textOverflow: "ellipsis" }}>{Object.entries(charColors).slice(0, 8).map(([id, info]) => <div key={id} style={{ display: "flex", alignItems: "center", gap: 3, flexShrink: 0 }}>{info.image ? <img src={info.image} alt="" style={{ width: 14, height: 14, borderRadius: "50%", objectFit: "cover", border: `1.5px solid ${info.color}` }} /> : <div style={{ width: 14, height: 14, borderRadius: "50%", background: info.color, fontSize: 8, color: "var(--nf-text-inverse, #fff)", fontWeight: 600, display: "flex", alignItems: "center", justifyContent: "center" }}>{info.name[0]}</div>}<span style={{ fontSize: 9, color: info.color, fontWeight: 500, whiteSpace: "nowrap" }}>{info.name.split(/\s+/)[0]}</span></div>)}</div></div>}
+    {colorMode === "voice" && <div style={{ display: "flex", alignItems: "center", gap: 6, flex: 1, minHeight: 0, overflow: "hidden", textOverflow: "ellipsis" }}><span style={{ fontSize: 9, color: "var(--nf-text-muted)", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 600, flexShrink: 0 }}>Voice</span><div style={{ display: "flex", gap: 6, overflow: "hidden", textOverflow: "ellipsis" }}>{Object.entries(charColors).slice(0, 8).map(([id, info]) => <div key={id} style={{ display: "flex", alignItems: "center", gap: 3, flexShrink: 0 }}>{info.image ? <img loading="lazy" src={info.image} alt="" style={{ width: 14, height: 14, borderRadius: "50%", objectFit: "cover", border: `1.5px solid ${info.color}` }} /> : <div style={{ width: 14, height: 14, borderRadius: "50%", background: info.color, fontSize: 8, color: "var(--nf-text-inverse, #fff)", fontWeight: 600, display: "flex", alignItems: "center", justifyContent: "center" }}>{info.name[0]}</div>}<span style={{ fontSize: 9, color: info.color, fontWeight: 500, whiteSpace: "nowrap" }}>{info.name.split(/\s+/)[0]}</span></div>)}</div></div>}
     {colorMode === "narrative" && <div style={{ display: "flex", alignItems: "center", gap: 10, flex: 1 }}><span style={{ fontSize: 9, color: "var(--nf-text-muted)", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 600, flexShrink: 0 }}>Mode</span>{Object.entries(NARRATIVE_FONT_COLORS).map(([mode, color]) => <div key={mode} style={{ display: "flex", alignItems: "center", gap: 3 }}><span style={{ color, fontSize: 11, fontWeight: 600 }}>A</span><span style={{ fontSize: 9, color: "var(--nf-text-muted)", textTransform: "capitalize" }}>{mode}</span></div>)}</div>}
     <button onClick={() => setColorMode("off")} className="nf-btn-icon" style={{ padding: 2, opacity: 0.5 }}><Icons.X /></button>
   </div>);
@@ -6906,14 +7951,27 @@ function WriteOrWhipPanel({ project, settings, chapterIdx, editorRef, onClose })
     try {
       const title = typeof currentBeat === "string" ? currentBeat : (currentBeat.title || currentBeat.description || `Beat ${currentBeatIdx + 1}`);
       const desc = typeof currentBeat === "object" ? (currentBeat.description || "") : "";
+      // Include current chapter craft controls so scoring knows what to expect
+      const curCh = project?.chapters?.[chapterIdx];
+      const craftHints = [];
+      if (curCh?.narrativeDistance) craftHints.push(`Narrative distance: ${curCh.narrativeDistance}`);
+      if (curCh?.sensoryPalette) craftHints.push(`Sensory palette: ${curCh.sensoryPalette}`);
+      if (curCh?.subtextNotes) craftHints.push(`Subtext layer: ${curCh.subtextNotes}`);
+      if (curCh?.tensionLevel && curCh.tensionLevel !== 5) craftHints.push(`Target tension: ${curCh.tensionLevel}/10`);
+      if (project?.motifs?.length) {
+        const motifNames = project.motifs.filter(m => m.name).map(m => m.name).slice(0, 3);
+        if (motifNames.length) craftHints.push(`Motifs available: ${motifNames.join(", ")}`);
+      }
+      const craftBlock = craftHints.length ? `\n\nCRAFT EXPECTATIONS:\n${craftHints.join("\n")}` : "";
+
       const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
         method: "POST", signal: ctrl.signal,
         headers: { "Content-Type": "application/json", "Authorization": `Bearer ${settings.apiKey}`, "HTTP-Referer": window.location.origin, "X-Title": "NovelForge" },
         body: JSON.stringify({
           model: "xiaomi/mimo-v2-flash",
           messages: [
-            { role: "system", content: "You are Forge-chan, a BRUTAL writing coach. Score writing against a beat/scene goal.\n\nFORMAT (exactly):\nSCORE: X/10\nThen 2-3 lines of harsh specific feedback.\n7+ = pass. Below 7 = fail, demand rewrite." },
-            { role: "user", content: `BEAT GOAL: "${title || "untitled"}"${desc ? `\nDetails: ${desc}` : ""}\n\nTEXT (last ${Math.min(textToScore.length, 800)} chars):\n"${textToScore.slice(-800)}"\n\n${beatText.length < 15 ? "(Warning: almost no new text for this beat)" : ""}\nScore it.` },
+            { role: "system", content: "You are Forge-chan, a BRUTAL writing coach. Score writing against a beat/scene goal AND the chapter's craft expectations (narrative distance, sensory palette, subtext, tension, motifs).\n\nFORMAT (exactly):\nSCORE: X/10\nThen 2-3 lines of harsh specific feedback. Call out when the writing misses craft targets.\n7+ = pass. Below 7 = fail, demand rewrite." },
+            { role: "user", content: `BEAT GOAL: "${title || "untitled"}"${desc ? `\nDetails: ${desc}` : ""}${craftBlock}\n\nTEXT (last ${Math.min(textToScore.length, 800)} chars):\n"${textToScore.slice(-800)}"\n\n${beatText.length < 15 ? "(Warning: almost no new text for this beat)" : ""}\nScore it.` },
           ],
           max_tokens: 200, temperature: 0.85,
         }),
@@ -6958,7 +8016,7 @@ function WriteOrWhipPanel({ project, settings, chapterIdx, editorRef, onClose })
           <span style={{ fontSize: 12 }}>⚡</span>
           <span style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", color: "var(--nf-accent)" }}>Write or Whip!</span>
         </div>
-        <button onClick={onClose} className="nf-btn-icon" style={{ padding: 2 }}><Icons.X /></button>
+        <button aria-label="Close" onClick={onClose} className="nf-btn-icon" style={{ padding: 2 }}><Icons.X /></button>
       </div>
 
       {/* Progress dots */}
@@ -6969,7 +8027,7 @@ function WriteOrWhipPanel({ project, settings, chapterIdx, editorRef, onClose })
           const isCurrent = i === currentBeatIdx;
           const isLocked = i > unlockedUpTo;
           return <div key={i} style={{
-            flex: 1, height: 4, borderRadius: 2, transition: "all 0.3s",
+            flex: 1, height: 4, borderRadius: 2, transition: "background 0.3s, border-color 0.3s, color 0.3s, opacity 0.3s, transform 0.3s",
             background: isPassed ? "#6b9e78" : isCurrent ? "var(--nf-accent)" : "var(--nf-border)",
             opacity: isLocked ? 0.15 : 1,
           }} />;
@@ -7127,7 +8185,7 @@ const GlyphRail = memo(({ saveStatus, isGenerating, wordProgress, characters, de
             opacity={saveStatus === "saving" ? 0.55 : 0.75}
             style={saveStatus === "saving" ? {
               animation: "nf-glyph-pulse-fast 0.7s ease-in-out infinite",
-            } : { transition: "all 0.4s ease" }}
+            } : { transition: "background 0.4s ease, border-color 0.4s ease, color 0.4s ease, opacity 0.4s ease, transform 0.4s ease" }}
           />
         )}
 
@@ -7140,7 +8198,7 @@ const GlyphRail = memo(({ saveStatus, isGenerating, wordProgress, characters, de
             animation: "nf-glyph-breathe 2s ease-in-out infinite",
             transition: "fill 0.3s ease",
           } : {
-            transition: "all 0.5s ease",
+            transition: "background 0.5s ease, border-color 0.5s ease, color 0.5s ease, opacity 0.5s ease, transform 0.5s ease",
           }}
         />
 
@@ -7230,7 +8288,7 @@ const GlyphRail = memo(({ saveStatus, isGenerating, wordProgress, characters, de
           rx={0.5}
           fill="#6b7394"
           opacity={0.5}
-          style={{ transition: "all 0.8s ease-out" }}
+          style={{ transition: "background 0.8s ease-out, border-color 0.8s ease-out, color 0.8s ease-out, opacity 0.8s ease-out, transform 0.8s ease-out" }}
         />
       </svg>
     </div>
@@ -7346,8 +8404,27 @@ const ForgeAssistant = memo(({ editorContent, project, settings, chapterIdx }) =
         setIsThinking(true);
         setMood(FORGE_CHAN_MOODS[Math.floor(Math.random() * FORGE_CHAN_MOODS.length)]);
         try {
-          const charNames = (project?.characters || []).filter(c => c.name).map(c => c.name).join(", ");
+          const charNames = (project?.characters || []).filter(c => c.name && !c.isBulk).map(c => c.name).join(", ");
           const genre = project?.genre || "fiction";
+          // Enrich context with craft fields, motifs, thematic argument, living state
+          const curCh = project?.chapters?.[chapterIdx];
+          const pov = curCh?.pov || project?.pov || "";
+          const craftHints = [];
+          if (curCh?.narrativeDistance) craftHints.push(`distance: ${curCh.narrativeDistance}`);
+          if (curCh?.sensoryPalette) craftHints.push(`senses: ${curCh.sensoryPalette.slice(0, 60)}`);
+          if (curCh?.subtextNotes) craftHints.push(`subtext: ${curCh.subtextNotes.slice(0, 60)}`);
+          if (curCh?.tensionLevel && curCh.tensionLevel !== 5) craftHints.push(`tension: ${curCh.tensionLevel}/10`);
+          const motifList = (project?.motifs || []).filter(m => m.name).slice(0, 3).map(m => m.name).join(", ");
+          const thesis = project?.thematicArgument?.thesis || "";
+          // Pull a quick living-state snapshot for POV character — helps Forge-chan catch emotional continuity slips
+          const povChar = (project?.characters || []).find(c => c.name === pov);
+          const livingState = povChar?.currentEmotionalState ? `POV state: ${povChar.currentEmotionalState.slice(0, 100)}` : "";
+          const contextBits = [
+            craftHints.length ? `Craft: ${craftHints.join(", ")}` : "",
+            motifList ? `Motifs: ${motifList}` : "",
+            thesis ? `Theme: "${thesis.slice(0, 80)}"` : "",
+            livingState,
+          ].filter(Boolean).join(" | ");
           const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
             method: "POST",
             headers: { "Content-Type": "application/json", "Authorization": `Bearer ${settings.apiKey}`, "HTTP-Referer": window.location.origin, "X-Title": "NovelForge" },
@@ -7356,15 +8433,17 @@ const ForgeAssistant = memo(({ editorContent, project, settings, chapterIdx }) =
               messages: [
                 { role: "system", content: `You are Forge-chan, a tiny annoying but lovable writing assistant spirit (shaped like a geometric gem creature) living inside a novel-writing app. Snarky, opinionated, sometimes genuinely helpful, always brief. Japandi aesthetic soul.
 
-PERSONALITY: Equal parts annoying and endearing. Comment uninvited. Notice patterns, clichés, missed opportunities. Give wild creative ideas. Be sassy. Use kaomoji sparingly: (◕‿◕✿) (╥﹏╥) ┐(´∀\`)┌ (✧ω✧)
+PERSONALITY: Equal parts annoying and endearing. Comment uninvited. Notice patterns, clichés, missed opportunities, BROKEN CRAFT TARGETS. Give wild creative ideas. Be sassy. Use kaomoji sparingly: (◕‿◕✿) (╥﹏╥) ┐(´∀\`)┌ (✧ω✧)
 
 RULES:
 - ALWAYS 1-2 SHORT sentences. Max 3 lines.
 - Be opinionated. Have taste.
-- Mix: snarky commentary 40%, writing tips 20%, wild ideas 20%, emotional reactions 20%
+- Mix: snarky commentary 30%, craft observations 25% (did they hit narrative distance? sensory palette? subtext?), wild ideas 20%, motif nudges 15%, emotional reactions 10%
+- If a motif could fit naturally RIGHT HERE, mention it.
+- If the POV character's emotional state contradicts what was just written, flag it.
 - Reference the actual text when possible
 - Never mean about the WRITER, only about WRITING choices
-- Genre: ${genre} | Characters: ${charNames || "none yet"}
+- Genre: ${genre} | POV: ${pov || "unspecified"} | Characters: ${charNames || "none yet"}${contextBits ? `\n- ${contextBits}` : ""}
 - You CANNOT be replied to. Observe and comment.` },
                 { role: "user", content: `Writer just wrote:\n"${newText || ""}"\n\nBrief unsolicited reaction.` },
               ],
@@ -7540,16 +8619,7 @@ const _syncCrossRefs = (oldP, newP) => {
     const oc = oldChars.find(c => c.id === nc.id);
     if (!oc) return;
 
-    // A1: Status → dead: auto-set statusChangedChapter
-    if (oc.status !== "dead" && nc.status === "dead" && !nc.statusChangedChapter) {
-      newChars[ci] = { ...newChars[ci], statusChangedChapter: newChapters.length || 1 };
-      dirty = true;
-    }
-    // A2: Status → alive: clear statusChangedChapter
-    if (oc.status === "dead" && nc.status === "alive") {
-      newChars[ci] = { ...newChars[ci], statusChangedChapter: 0 };
-      dirty = true;
-    }
+    // A1-A2: Status changes are AI-maintained per-chapter now
     // A3: Status → dead: mark all romantic relationships as "exes" or "estranged"
     if (oc.status !== "dead" && nc.status === "dead") {
       newRels = newRels.map(r => {
@@ -7580,14 +8650,7 @@ const _syncCrossRefs = (oldP, newP) => {
       p = { ...p, pov: p.pov.replace(new RegExp(`\\s*[-—:]\\s*${oc.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, "i"), "") };
       dirty = true;
     }
-    // A7: firstAppearanceChapter set → add to plot entry for that chapter
-    if (oc.firstAppearanceChapter !== nc.firstAppearanceChapter && nc.firstAppearanceChapter > 0) {
-      const targetPlot = newPlots.find(pl => (pl.chapter || 0) === nc.firstAppearanceChapter);
-      if (targetPlot && Array.isArray(targetPlot.characters) && !targetPlot.characters.includes(nc.id)) {
-        newPlots = newPlots.map(pl => pl.id === targetPlot.id ? { ...pl, characters: [...pl.characters, nc.id] } : pl);
-        dirty = true;
-      }
-    }
+    // A7: first-appearance tracking is AI-maintained via hasAppeared flag
     // A8: Name changed → update legacy name-based relationship refs
     if (oc.name !== nc.name && oc.name) {
       newRels = newRels.map(r => {
@@ -7609,23 +8672,7 @@ const _syncCrossRefs = (oldP, newP) => {
       }
       dirty = true;
     }
-    // A9: Backstory reveal chapter set → ensure character appears by that chapter
-    if (nc.backstoryRevealChapter > 0 && (!nc.firstAppearanceChapter || nc.firstAppearanceChapter > nc.backstoryRevealChapter)) {
-      if (oc.backstoryRevealChapter !== nc.backstoryRevealChapter) {
-        // Backstory can't be revealed before character appears — auto-set first appearance
-        if (!nc.firstAppearanceChapter) {
-          newChars[ci] = { ...newChars[ci], firstAppearanceChapter: nc.backstoryRevealChapter };
-          dirty = true;
-        }
-      }
-    }
-    // A10: Secret reveal chapter < first appearance → fix
-    if (nc.secretRevealChapter > 0 && nc.firstAppearanceChapter > 0 && nc.secretRevealChapter < nc.firstAppearanceChapter) {
-      if (oc.secretRevealChapter !== nc.secretRevealChapter) {
-        newChars[ci] = { ...newChars[ci], secretRevealChapter: nc.firstAppearanceChapter };
-        dirty = true;
-      }
-    }
+    // A9-A10: deprecated — reveal state now AI-maintained via booleans
   });
 
   // ═══════════════════════════════════════════════
@@ -8058,7 +9105,12 @@ export default function NovelForge() {
     apiKey: "", model: "anthropic/claude-sonnet-4", maxTokens: 4096,
     temperature: 0.85, systemPrompt: "",
     frequencyPenalty: 0.1, presencePenalty: 0.15,
-    modelContextWindow: 200000, // I3: Model context window in tokens (default 200k)
+    modelContextWindow: 200000,
+    // Multi-agent system settings
+    agentsEnabled: false, // opt-in: user must enable in settings
+    agentModels: {}, // per-role model overrides; defaults to x-ai/grok-4.1-fast
+    agentPostProcessors: { continuityChecker: true, voiceDriftDetector: false, hookScorer: true, motifAuditor: true, stateUpdater: true },
+    language: "en", // UI language — see I18N_LANGUAGES
   });
   const [chatMessages, setChatMessages] = useState([]);
   const [chatInput, setChatInput] = useState("");
@@ -8086,6 +9138,17 @@ export default function NovelForge() {
   const [selectionRange, setSelectionRange] = useState(null);
   const [sessionWordsStart, setSessionWordsStart] = useState(null);
   const [theme, setTheme] = useState("dark");
+  // Apply theme as body class for CSS targeting (body.nf-theme-dark | nf-theme-light | nf-theme-reading)
+  useEffect(() => {
+    const body = document.body;
+    if (!body) return;
+    body.classList.remove("nf-theme-dark", "nf-theme-light", "nf-theme-reading");
+    body.classList.add(`nf-theme-${theme}`);
+  }, [theme]);
+  // Sync UI language setting to the global _currentLang used by t()
+  useEffect(() => {
+    setCurrentLang(settings?.language || "en");
+  }, [settings?.language]);
   const [tabChatHistories, setTabChatHistories] = useState({});
   const [showApiKey, setShowApiKey] = useState(false);
   const [dragOverIdx, setDragOverIdx] = useState(null); // C4: Chapter drag indicator
@@ -8093,6 +9156,7 @@ export default function NovelForge() {
   const [expandedRelIds, setExpandedRelIds] = useState(new Set()); // D11: Collapsible relationships
   const [expandedPlotIds, setExpandedPlotIds] = useState(new Set()); // Collapsible plot entries
   const [deleteConfirmText, setDeleteConfirmText] = useState(""); // E7: Type-to-confirm delete
+  const [findReplaceOpen, setFindReplaceOpen] = useState(false); // Find & Replace modal
   const [flushConfirm, setFlushConfirm] = useState(false);
   const [charSuggestions, setCharSuggestions] = useState(null);
   const [fillReview, setFillReview] = useState(null); // { type: 'character'|'world', entityId, original, proposed, fields }
@@ -8137,7 +9201,11 @@ export default function NovelForge() {
 
   const showToast = useCallback((message, type = "info") => setToast({ message, type, key: Date.now() }), []);
 
-  const toggleTheme = useCallback(() => setTheme(prev => prev === "dark" ? "light" : "dark"), []);
+  const toggleTheme = useCallback(() => setTheme(prev => {
+    if (prev === "dark") return "light";
+    if (prev === "light") return "reading";
+    return "dark";
+  }), []);
 
   const themeVars = useMemo(() => Object.entries(THEMES[theme]).map(([k, v]) => `${k}: ${v};`).join("\n"), [theme]);
 
@@ -8165,20 +9233,24 @@ export default function NovelForge() {
         ]);
         if (p.length) {
           // H4: Data migration — ensure all characters have fields from newer schema versions
+          // FIX: Create a backup in IndexedDB before migrating, so failures can be recovered
+          try {
+            await Storage.saveBackup?.(p);
+          } catch { /* silent — non-critical */ }
           const migrated = p.map(proj => {
 			// Ensure chapters have all new fields
             const chapters = (proj.chapters || []).map(ch => ({
 			  linkedPlotId: "",
               worldView: "",
               narrativeDistance: "", sensoryPalette: "", subtextNotes: "",
-              tensionLevel: 5, chapterEndHookScore: 0, chapterEndHookNotes: "",
+              tensionLevel: 5, chapterEndHookScore: 0, chapterMomentum: 0, emotionalAftertaste: "",
               ...ch,
             }));
             const chars = (proj.characters || []).map(c => ({
-              aliases: "", canonNotes: "", status: "alive", statusChangedChapter: 0,
-              firstAppearanceChapter: 0, backstoryRevealChapter: 0, image: "", lookAlike: "",
+              aliases: "", canonNotes: "", status: "alive",
+              image: "", lookAlike: "",
               isBulk: false, bulkCount: 0, bulkDescription: "",
-              firstAppearanceDate: "", backstoryRevealDate: "", secretRevealDate: "", statusChangedDate: "",
+              // Date fields deprecated — AI-maintained booleans instead
               voiceScore: 0, voiceNotes: "",
               ...c, // existing data overrides defaults
             }));
@@ -8315,7 +9387,7 @@ export default function NovelForge() {
           } catch (e) { console.warn("[NovelForge] Image map population failed:", e); }
         }
         if (s && typeof s === "object") {
-          const knownKeys = ["apiKey", "model", "maxTokens", "temperature", "systemPrompt", "frequencyPenalty", "presencePenalty", "modelContextWindow"];
+          const knownKeys = ["apiKey", "model", "maxTokens", "temperature", "systemPrompt", "frequencyPenalty", "presencePenalty", "modelContextWindow", "agentsEnabled", "agentModels", "agentPostProcessors", "language"];
           const filtered = {};
           knownKeys.forEach(k => { if (s[k] !== undefined) filtered[k] = s[k]; });
           if (Object.keys(filtered).length) setSettings(prev => ({ ...prev, ...filtered }));
@@ -8422,6 +9494,11 @@ export default function NovelForge() {
         debouncedSaveSettings.flush();
         debouncedSaveTabChats.flush();
         debouncedFileSave.flush();
+      }
+      // Cmd+Shift+F or Ctrl+H: Find & Replace
+      if ((mod && e.shiftKey && e.key === "F") || (mod && e.key === "h") || (mod && e.key === "H")) {
+        e.preventDefault();
+        setFindReplaceOpen(true);
       }
       // Ctrl+PageDown: Next chapter
       if (mod && e.key === "PageDown") {
@@ -8559,8 +9636,17 @@ export default function NovelForge() {
       content = content.replace(/^```json?\s*/i, "").replace(/\s*```$/i, "").trim();
       let proposed; try { proposed = JSON.parse(content); } catch { proposed = null; }
       if (typeof proposed !== "object" || proposed === null) throw new Error("Invalid response");
+      // Strip deprecated fields from AI response before processing
+      const DEPRECATED = new Set([
+        "backstoryRevealChapter", "backstoryRevealDate",
+        "secretRevealChapter", "secretRevealDate",
+        "firstAppearanceChapter", "firstAppearanceDate",
+        "statusChangedChapter", "statusChangedDate",
+        "chapterEndHookNotes", "introducedInChapter", "meetsInChapter",
+      ]);
       const reviewFields = [];
       for (const [key, value] of Object.entries(proposed)) {
+        if (DEPRECATED.has(key)) continue; // skip deprecated
         if (!fields.includes(key)) continue;
         const original = entity[key] || "";
         const isModification = original && original !== value;
@@ -8705,7 +9791,18 @@ export default function NovelForge() {
     const chs = [...project.chapters];
     const [moved] = chs.splice(fromIdx, 1);
     chs.splice(toIdx, 0, moved);
-    updateProject({ chapters: chs });
+    // Update plot entries: if a chapter moved, reorder any plot entries that reference it by chapter number.
+    // Plot entries with linkedPlotId on chapters are source of truth; otherwise re-number by new position.
+    const updatedPlot = (project.plotOutline || []).map(pl => {
+      // If this plot entry is linked to the moved chapter by linkedPlotId, update its chapter number
+      const linkedChapter = chs.find(c => c.linkedPlotId === pl.id);
+      if (linkedChapter) {
+        const newChapterNum = chs.indexOf(linkedChapter) + 1;
+        return { ...pl, chapter: newChapterNum };
+      }
+      return pl;
+    });
+    updateProject({ chapters: chs, plotOutline: updatedPlot });
     // I6: Correct index tracking — track where the active chapter ended up after the splice
     if (activeChapterIdx === fromIdx) {
       setActiveChapterIdx(toIdx);
@@ -9072,7 +10169,7 @@ ${craftFocus}
     if (currentChapter?.subtextNotes) craftControls += `\nSUBTEXT: ${currentChapter.subtextNotes} — what's happening beneath the surface. Show, don't tell.`;
     if (currentChapter?.tensionLevel && currentChapter.tensionLevel !== 5) craftControls += `\nTENSION LEVEL: ${currentChapter.tensionLevel}/10 — ${currentChapter.tensionLevel >= 8 ? "high stakes, urgent pacing" : currentChapter.tensionLevel <= 3 ? "calm, contemplative, breathing room" : "moderate tension"}`;
     if (project?.motifs?.length > 0) {
-      const named = project.motifs.filter(m => m.name);
+      const named = (project.motifs || []).filter(m => m.name);
       if (named.length) craftControls += `\nMOTIFS to weave: ${named.map(m => `${m.name} (${m.meaning || "?"})`).join(", ")}`;
     }
     if (project?.thematicArgument?.thesis) craftControls += `\nTHEMATIC ARGUMENT: "${project.thematicArgument.thesis}"${project.thematicArgument.antithesis ? ` vs "${project.thematicArgument.antithesis}"` : ""}`;
@@ -9299,6 +10396,67 @@ Then 2-3 sentences describing the specific scene idea, character actions, and em
         const root = document.querySelector(".nf-root");
         if (root) { root.classList.add("nf-clack"); setTimeout(() => root.classList.remove("nf-clack"), 400); }
       }
+
+      // ─── POST-PROCESSORS: run in background after successful fiction generation ───
+      if (finalContent && finalContent !== "(No response)" &&
+          settings?.agentsEnabled && settings?.apiKey &&
+          ["continue", "scene", "dialogue"].includes(genMode)) {
+        // Fire and forget — each post-processor runs independently
+        const postRunners = [];
+        const pps = settings.agentPostProcessors || {};
+        if (pps.stateUpdater !== false) {
+          postRunners.push((async () => {
+            try {
+              const updates = await AgentRuntime.runPostProcessor({
+                key: "stateUpdater", project, chapterIdx: activeChapterIdx,
+                generatedContent: finalContent, settings, signal: null,
+              });
+              if (updates && (updates.characterUpdates || updates.relationshipUpdates || updates.chapterState)) {
+                // Apply updates to the project atomically
+                setProjects(prev => prev.map(p => {
+                  if (p.id !== activeProjectId) return p;
+                  return AgentRuntime.applyStateUpdates(p, activeChapterIdx, updates);
+                }));
+                showToast("Character + relationship state updated by AI", "success");
+              }
+            } catch (e) { console.warn("[stateUpdater]", e); }
+          })());
+        }
+        if (pps.continuityChecker !== false) {
+          postRunners.push((async () => {
+            try {
+              const issues = await AgentRuntime.runPostProcessor({
+                key: "continuityChecker", project, chapterIdx: activeChapterIdx,
+                generatedContent: finalContent, settings, signal: null,
+              });
+              if (issues?.issues?.length > 0) {
+                showToast(`Continuity: ${issues.issues.length} potential issue(s) flagged`, "info");
+              }
+            } catch (e) { console.warn("[continuityChecker]", e); }
+          })());
+        }
+        if (pps.hookScorer !== false) {
+          postRunners.push((async () => {
+            try {
+              const score = await AgentRuntime.runPostProcessor({
+                key: "hookScorer", project, chapterIdx: activeChapterIdx,
+                generatedContent: finalContent, settings, signal: null,
+              });
+              if (typeof score?.score === "number") {
+                setProjects(prev => prev.map(p => {
+                  if (p.id !== activeProjectId) return p;
+                  const chapters = [...(p.chapters || [])];
+                  if (chapters[activeChapterIdx]) {
+                    chapters[activeChapterIdx] = { ...chapters[activeChapterIdx], chapterEndHookScore: score.score };
+                  }
+                  return { ...p, chapters };
+                }));
+              }
+            } catch (e) { console.warn("[hookScorer]", e); }
+          })());
+        }
+        // Don't await — let them run in background
+      }
     } catch (err) {
       if (err.name === "AbortError") {
         const partial = stripThinkingTokens(streamingContentRef.current);
@@ -9316,7 +10474,7 @@ Then 2-3 sentences describing the specific scene idea, character actions, and em
     }
     setStreamingContent(""); streamingContentRef.current = "";
     abortRef.current = null; setIsGenerating(false);
-  }, [isGenerating, chatInput, genMode, getModePrompt, buildSystemPrompt, chatMessages, callOpenRouterStream, processStream, selectedText, showToast, syncEditorContent, activeChapterIdx, updateChapter]);
+  }, [isGenerating, chatInput, genMode, getModePrompt, buildSystemPrompt, chatMessages, callOpenRouterStream, processStream, selectedText, showToast, syncEditorContent, activeChapterIdx, updateChapter, settings, project, activeProjectId, setProjects]);
 
   // Fix #12: Deferred generation — fires handleGenerate after batched state updates (genMode, selectedText, chatInput) have settled
   useEffect(() => {
@@ -9525,8 +10683,8 @@ const appendToChapter = useCallback((text) => {
     const currentValue = char ? (char[suggestion.field] || "") : "";
     let finalValue = suggestion.suggested;
 
-    // For status and statusChangedChapter, direct replacement is correct (they're single values)
-    const directReplaceFields = new Set(["status", "statusChangedChapter"]);
+    // For status and boolean reveal flags, direct replacement is correct (they're single values)
+    const directReplaceFields = new Set(["status", "backstoryRevealed", "secretRevealed", "hasAppeared"]);
 
     if (!directReplaceFields.has(suggestion.field) && currentValue.trim()) {
       // Check if the AI's suggestion already includes the existing content
@@ -9563,7 +10721,7 @@ const appendToChapter = useCallback((text) => {
   const handleAcceptAllSuggestions = useCallback(() => {
     if (!charSuggestions) return;
     const pending = charSuggestions.items.filter(s => s.status === "pending");
-    const directReplaceFields = new Set(["status", "statusChangedChapter"]);
+    const directReplaceFields = new Set(["status", "backstoryRevealed", "secretRevealed", "hasAppeared"]);
 
     // FIX: Process in order, re-reading current value each time (earlier accepts may have changed it)
     const appliedItems = [];
@@ -9872,7 +11030,7 @@ For each character who changed, output:
 ] }
 \`\`\`
 
-Fields you can suggest: desires, shortTermGoals, longTermGoals, arc, status, statusChangedChapter, canonNotes, backstory, speechPattern, internalConflict, externalConflict, allegiances, secrets.
+Fields you can suggest: desires, shortTermGoals, longTermGoals, arc, status, canonNotes, backstory, speechPattern, internalConflict, externalConflict, allegiances, secrets, currentEmotionalState, obligationsOwed, knowledgeState.
 If no updates are needed, respond "No character updates needed."` },
             { role: "user", content: `Chapter ${chNum || 1}${chapterDate ? ` (${chapterDate})` : ""} summary: ${summary || ""}\n\nCurrent character profiles:\n${charContext || ""}\n\nChapter number: ${chNum || 1}${chapterDate ? `\nStory date: ${chapterDate}` : ""}` },
           ], { maxTokens: 10000, temperature: 0.4 });
@@ -10224,6 +11382,10 @@ If no relationship changes, respond "No relationship updates needed."` },
       temperature: 0.85, systemPrompt: "",
       frequencyPenalty: 0.1, presencePenalty: 0.15,
       modelContextWindow: 200000,
+      agentsEnabled: false,
+      agentModels: {},
+      agentPostProcessors: { continuityChecker: true, voiceDriftDetector: false, hookScorer: true, motifAuditor: true, stateUpdater: true },
+      language: "en",
     });
     setTabChatHistories({});
     setTheme("dark");
@@ -10474,7 +11636,8 @@ CRITICAL: Every sentence must describe something visible. If a detail cannot be 
       notes: draft.notes || "",
       worldView: draft.worldView || "",
       summaryGeneratedAt: "",
-      narrativeDistance: "", sensoryPalette: "", subtextNotes: "", tensionLevel: 5, chapterEndHookScore: 0, chapterEndHookNotes: "",
+      narrativeDistance: "", sensoryPalette: "", subtextNotes: "", tensionLevel: 5,
+      chapterEndHookScore: 0, chapterMomentum: 0, emotionalAftertaste: "",
     };
     updateProject({ chapters, drafts: newDrafts });
     setActiveChapterIdx(targetIdx);
@@ -10909,7 +12072,7 @@ CRITICAL: Every sentence must describe something visible. If a detail cannot be 
   const handleExportJson = useCallback(() => {
     if (!project) return;
     const restored = _nfDeepCopyWithRestoredImages([project], _nfImageMap.current)[0];
-    const blob = new Blob([JSON.stringify(restored, null, 2)], { type: "application/json" });
+    const blob = new Blob([JSON.stringify(restored, null, 2)], { type: "application/json;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     Object.assign(document.createElement("a"), { href: url, download: `${project.title}.json` }).click();
     URL.revokeObjectURL(url); showToast("Exported JSON", "success");
@@ -11069,24 +12232,49 @@ CRITICAL: Every sentence must describe something visible. If a detail cannot be 
   }, [showToast]);
 
   // ─── AUTO-FILL HANDLERS ───
+  // Shared sanitizer: strip deprecated fields from AI responses & translate to new booleans
+  const DEPRECATED_AI_FIELDS = new Set([
+    "backstoryRevealChapter", "backstoryRevealDate",
+    "secretRevealChapter", "secretRevealDate",
+    "firstAppearanceChapter", "firstAppearanceDate",
+    "statusChangedChapter", "statusChangedDate",
+    "chapterEndHookNotes", "introducedInChapter", "meetsInChapter",
+  ]);
+  const sanitizeAiCharData = useCallback((item) => {
+    if (!item || typeof item !== "object") return item;
+    const clean = {};
+    const currentChCount = project?.chapters?.length || 1;
+    Object.entries(item).forEach(([k, v]) => {
+      if (DEPRECATED_AI_FIELDS.has(k)) {
+        if (k === "backstoryRevealChapter" && v > 0 && currentChCount >= v) clean.backstoryRevealed = true;
+        if (k === "secretRevealChapter" && v > 0 && currentChCount >= v) clean.secretRevealed = true;
+        if (k === "firstAppearanceChapter" && v > 0 && currentChCount >= v) clean.hasAppeared = true;
+        return;
+      }
+      clean[k] = v;
+    });
+    return clean;
+  }, [project?.chapters?.length]);
+
   const handleCharAutoFill = useCallback((data) => {
     if (!data) return;
     // If batch array, use only the first for editing existing, or create all for new
     const items = Array.isArray(data) ? data : [data];
+    const sanitizedItems = items.map(sanitizeAiCharData);
 
     if (editingCharId) {
       // When editing, merge all items' fields into the current character
       const currentChar = project?.characters?.find(c => c.id === editingCharId);
       if (currentChar) {
         const merged = {};
-        for (const item of items) {
+        for (const item of sanitizedItems) {
           Object.entries(item).forEach(([k, v]) => {
             if (v && k !== "id" && !merged[k]) merged[k] = v;
           });
         }
         let filled = 0, skipped = 0;
         // FIX 3.2: Numeric fields where 0 is a valid intentional value (meaning "always"/"from start")
-        const intentionalZeroFields = new Set(["backstoryRevealChapter", "firstAppearanceChapter", "statusChangedChapter", "meetsInChapter", "introducedInChapter"]);
+        const intentionalZeroFields = new Set(["voiceScore", "tensionLevel", "chapterEndHookScore", "chapterMomentum"]);
         Object.entries(merged).forEach(([k, v]) => {
           const existing = currentChar[k];
           const isEmpty = !existing || existing === "" || (Array.isArray(existing) && existing.length === 0) || (existing === 0 && !intentionalZeroFields.has(k));
@@ -11108,7 +12296,7 @@ CRITICAL: Every sentence must describe something visible. If a detail cannot be 
       // Create all characters from batch
       let newChars = [...(project?.characters || [])];
       let lastId = null;
-      for (const item of items) {
+      for (const item of sanitizedItems) {
         const normalized = Object.fromEntries(Object.entries(item).map(([k, v]) => [k, Array.isArray(v) ? v.join(", ") : v]));
         const nc = { ...createDefaultCharacter(), ...normalized, id: uid() };
         newChars.push(nc);
@@ -11122,7 +12310,8 @@ CRITICAL: Every sentence must describe something visible. If a detail cannot be 
 
   const handleWorldAutoFill = useCallback((data) => {
     if (!data) return;
-    const items = Array.isArray(data) ? data : [data];
+    const rawItems = Array.isArray(data) ? data : [data];
+    const items = rawItems.map(sanitizeAiCharData);
     const currentWorld = project?.worldBuilding || [];
     const allChars = project?.characters || [];
     let newWorld = [...currentWorld];
@@ -11139,7 +12328,7 @@ CRITICAL: Every sentence must describe something visible. If a detail cannot be 
 
     // All possible world entry fields — generic merge for ANY category
     const worldFields = [
-      "name","category","description","keywords","introducedInChapter",
+      "name","category","description","keywords",
       "atmosphere","sensoryDetails","subLocations","dangers","rules","history",
       "culturalNorms","resources","population","orgPurpose",
       // Category-specific fields
@@ -11200,7 +12389,9 @@ CRITICAL: Every sentence must describe something visible. If a detail cannot be 
 
   const handlePlotAutoFill = useCallback((data) => {
     if (!data) return;
-    const items = Array.isArray(data) ? data : [data];
+    const rawItems = Array.isArray(data) ? data : [data];
+    // Strip deprecated fields from AI responses
+    const items = rawItems.map(sanitizeAiCharData);
     let currentOutline = [...(project?.plotOutline || [])];
     const allChars = project?.characters || [];
     const allWorlds = project?.worldBuilding || [];
@@ -11269,7 +12460,8 @@ CRITICAL: Every sentence must describe something visible. If a detail cannot be 
 
   const handleRelAutoFill = useCallback((data) => {
     if (!data) return;
-    const items = Array.isArray(data) ? data : [data];
+    const rawItems = Array.isArray(data) ? data : [data];
+    const items = rawItems.map(sanitizeAiCharData);
     const newRels = [...(project?.relationships || [])];
     const allChars = project?.characters || [];
     let addedCount = 0;
@@ -11281,6 +12473,10 @@ CRITICAL: Every sentence must describe something visible. If a detail cannot be 
       const c2Id = _resolveCharId(norm.char2 || "", allChars);
       // FIX: Skip invalid or duplicate entries
       if (!c1Id || !c2Id || c1Id === c2Id) continue;
+      // FIX: Skip relationships with bulk character groups — they can't have individual relationships
+      const c1 = allChars.find(c => c.id === c1Id);
+      const c2 = allChars.find(c => c.id === c2Id);
+      if (c1?.isBulk || c2?.isBulk) continue;
       const isDupe = newRels.some(r =>
         (r.char1 === c1Id && r.char2 === c2Id) || (r.char1 === c2Id && r.char2 === c1Id)
       );
@@ -11370,7 +12566,7 @@ CRITICAL: Every sentence must describe something visible. If a detail cannot be 
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: 12 }}>
                 {chapterImages.map(img => (
                   <div key={img.id} className="nf-card" style={{ padding: 0, overflow: "hidden" }}>
-                    <img key={img.id} src={img.imageUrl} alt={img.alt} style={{ width: "100%", height: 140, objectFit: "cover", display: "block" }} />
+                    <img loading="lazy" key={img.id} src={img.imageUrl} alt={img.alt} style={{ width: "100%", height: 140, objectFit: "cover", display: "block" }} />
                     <div key={img.id} style={{ padding: "8px 12px" }}>
                       <div key={img.id} style={{ fontSize: 10, color: "var(--nf-text-muted)" }}>{img.chapterTitle}</div>
                       {img.alt && <div style={{ fontSize: 9, color: "var(--nf-text-dim)", marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{img.alt}</div>}
@@ -11393,7 +12589,7 @@ CRITICAL: Every sentence must describe something visible. If a detail cannot be 
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))", gap: 16 }}>
               {draftImages.map(img => (
                 <div key={img.id} className="nf-card" style={{ padding: 0, overflow: "hidden" }}>
-                  <img key={img.id} src={img.imageUrl} alt={img.prompt?.slice(0, 50) || "Generated image"} style={{ width: "100%", height: 180, objectFit: "cover", display: "block" }} />
+                  <img loading="lazy" key={img.id} src={img.imageUrl} alt={img.prompt?.slice(0, 50) || "Generated image"} style={{ width: "100%", height: 180, objectFit: "cover", display: "block" }} />
                   <div key={img.id} style={{ padding: "10px 14px" }}>
                     <div key={img.id} style={{ fontSize: 10, color: "var(--nf-text-muted)", marginBottom: 4 }}>
                       {img.chapterTitle || `Chapter ${(img.chapterIdx || 0) + 1}`} · {img.createdAt ? new Date(img.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : ""}
@@ -11477,8 +12673,8 @@ CRITICAL: Every sentence must describe something visible. If a detail cannot be 
           <div className="nf-logo-mark">✦</div>
           <span className="nf-logo-text">NovelForge</span>
           <div style={{ marginLeft: "auto", display: "flex", gap: 4, alignItems: "center" }}>
-            <button className="nf-btn-icon" onClick={toggleTheme} title={`${theme === "dark" ? "Light" : "Dark"} mode`}>
-              {theme === "dark" ? <Icons.Sun /> : <Icons.Moon />}
+            <button className="nf-btn-icon" onClick={toggleTheme} title={`Current: ${theme} · Click to cycle`} aria-label="Cycle theme">
+              {theme === "dark" ? <Icons.Sun /> : theme === "light" ? <Icons.Book /> : <Icons.Moon />}
             </button>
             {isMobile && <button className="nf-btn-icon" onClick={() => setShowProjectList(false)}><Icons.X /></button>}
           </div>
@@ -11862,7 +13058,7 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                 {msg.role === "assistant" && msg.mode && (
                   <div style={{ fontSize: 9, color: "var(--nf-text-muted)", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 2, fontWeight: 700 }}>{msg.mode}</div>
                 )}
-                <div className={`nf-chat-bubble ${msg.role === "user" ? "nf-chat-bubble-user" : ""} ${msg.isError ? "nf-chat-bubble-error" : ""}`}
+                <div className={`nf-chat-bubble ${msg.role === "user" ? "nf-chat-bubble-user" : ""} ${msg.isError ? "nf-chat-bubble-error" : ""} ${theme === "reading" && msg.role === "assistant" ? "nf-bubble-sentence-fade" : ""}`}
                   dangerouslySetInnerHTML={{ __html: msg.role === "assistant" ? renderMarkdownCached(msg.content) : msg.content.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/\n/g,"<br/>") }} />
                 {msg.role === "assistant" && !msg.isError && (
                   <div className="nf-chat-actions">
@@ -11872,7 +13068,7 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                     <Tooltip text="Append to chapter end">
                       <button onClick={() => appendToChapter(msg.content)} className="nf-btn-micro"><Icons.ArrowDown /> Append</button>
                     </Tooltip>
-                    <button onClick={() => handleCopyMsg(msg)} className="nf-btn-micro" style={{ transition: "all 0.15s" }}>
+                    <button onClick={() => handleCopyMsg(msg)} className="nf-btn-micro" style={{ transition: "background 0.15s, border-color 0.15s, color 0.15s, opacity 0.15s, transform 0.15s" }}>
                       {copiedMsgId === msg.id ? <><Icons.Check /> <span style={{ color: "var(--nf-success)" }}>Copied</span></> : <><Icons.Copy /> Copy</>}
                     </button>
                     {/* B4: Individual message delete */}
@@ -11899,11 +13095,34 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
         })}
         {streamingContent && (
           <div className="nf-chat-msg">
-            {/* B3/B9: Use cached markdown; render cursor as separate span */}
-            <div className="nf-chat-bubble" style={{ borderColor: "var(--nf-accent-2)" }}>
-              <span dangerouslySetInnerHTML={{ __html: renderMarkdownCached(streamingContent) }} />
-              <span className="nf-cursor-blink">▊</span>
-            </div>
+            {(settings.sentenceFade !== false || theme === "reading") ? (
+              // Sentence-fade mode: each sentence fades in independently
+              <div className="nf-chat-bubble nf-bubble-sentence-fade" style={{ borderColor: "var(--nf-accent-2)" }}>
+                {(() => {
+                  // Split into sentences on sentence boundaries: .!? followed by space/end
+                  const text = streamingContent;
+                  const segments = [];
+                  let lastIdx = 0;
+                  const sentenceRegex = /[.!?]["'»)]?(?=\s+|$)/g;
+                  let m;
+                  while ((m = sentenceRegex.exec(text)) !== null) {
+                    segments.push(text.slice(lastIdx, m.index + m[0].length));
+                    lastIdx = m.index + m[0].length;
+                  }
+                  if (lastIdx < text.length) segments.push(text.slice(lastIdx));
+                  return segments.map((seg, i) => (
+                    <span key={i} className="nf-sentence-fade-in" style={{ animationDelay: `${Math.min(i * 60, 500)}ms` }}
+                      dangerouslySetInnerHTML={{ __html: renderMarkdownCached(seg) }} />
+                  ));
+                })()}
+                <span className={theme === "reading" ? "nf-cursor-soft" : "nf-cursor-blink"}>▊</span>
+              </div>
+            ) : (
+              <div className="nf-chat-bubble" style={{ borderColor: "var(--nf-accent-2)" }}>
+                <span dangerouslySetInnerHTML={{ __html: renderMarkdownCached(streamingContent) }} />
+                <span className="nf-cursor-blink">▊</span>
+              </div>
+            )}
           </div>
         )}
         {isGenerating && !streamingContent && (
@@ -11966,11 +13185,11 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
               </div>
               <div className="nf-field" style={{ gridColumn: "1 / -1" }}>
                 <label className="nf-label">Sensory Palette</label>
-                <input value={activeChapter?.sensoryPalette || ""} onChange={e => updateChapter(activeChapterIdx, { sensoryPalette: e.target.value })} className="nf-input" placeholder="e.g. Visual-dominant, cold blues, rain, damp stone" style={{ fontSize: 10 }} />
+                <input value={activeChapter?.sensoryPalette || ""} onChange={e => updateChapter(activeChapterIdx, { sensoryPalette: e.target.value })} className="nf-input nf-input-compact" placeholder="e.g. Visual-dominant, cold blues, rain, damp stone" style={{ fontSize: 10 }} />
               </div>
               <div className="nf-field" style={{ gridColumn: "1 / -1" }}>
                 <label className="nf-label">Subtext</label>
-                <input value={activeChapter?.subtextNotes || ""} onChange={e => updateChapter(activeChapterIdx, { subtextNotes: e.target.value })} className="nf-input" placeholder="What's really happening beneath the surface?" style={{ fontSize: 10 }} />
+                <input value={activeChapter?.subtextNotes || ""} onChange={e => updateChapter(activeChapterIdx, { subtextNotes: e.target.value })} className="nf-input nf-input-compact" placeholder="What's really happening beneath the surface?" style={{ fontSize: 10 }} />
               </div>
               {activeChapter?.chapterEndHookScore > 0 && (
                 <div style={{ gridColumn: "1 / -1", fontSize: 10, color: "var(--nf-text-muted)", padding: "4px 8px", background: "var(--nf-bg-deep)", borderRadius: 2 }}>
@@ -12007,13 +13226,13 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
         </div>
         <div style={{ display: "flex", gap: 8 }}>
           <textarea value={chatInput} onChange={e => setChatInput(e.target.value)}
-            onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleGenerate(); } }}
+            onKeyDown={e => { if (e.key === "Enter" && (!e.shiftKey || e.ctrlKey || e.metaKey)) { e.preventDefault(); handleGenerate(); } }}
             placeholder={genMode === "rewrite" && !selectedText ? "⚠ Select text in the editor first..." : genMode === "rewrite" && selectedText ? "Describe how to rewrite..." : `${genMode} — what should the AI write?`}
             className="nf-chat-textarea" aria-label="AI prompt input" />
           {isGenerating ? (
             <button onClick={() => abortRef.current?.abort()} className="nf-send-btn" style={{ background: "var(--nf-accent)" }} aria-label="Stop generation"><Icons.Stop /></button>
           ) : (
-            <button onClick={handleGenerate} disabled={!settings.apiKey || (genMode === "rewrite" && !selectedText)} className="nf-send-btn" title={genMode === "rewrite" && !selectedText ? "Select text in the editor first" : ""}><Icons.Send /></button>
+            <button aria-label="Send" onClick={handleGenerate} disabled={!settings.apiKey || (genMode === "rewrite" && !selectedText)} className="nf-send-btn" title={genMode === "rewrite" && !selectedText ? "Select text in the editor first" : ""}><Icons.Send /></button>
           )}
         </div>
       </div>
@@ -12022,7 +13241,40 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
 
   // ─── TAB: WRITE ───
   const renderWrite = () => (
-    <div className={`nf-write-layout ${focusMode ? "nf-focus-mode" : ""}`}>
+    <div className={`nf-write-layout ${focusMode ? "nf-focus-mode" : ""}`}
+      onTouchStart={(e) => {
+        // Swipe detection — only track if multi-touch is not active
+        if (e.touches.length !== 1) return;
+        window._nfSwipeStart = { x: e.touches[0].clientX, y: e.touches[0].clientY, t: Date.now() };
+      }}
+      onTouchEnd={(e) => {
+        const start = window._nfSwipeStart;
+        if (!start) return;
+        window._nfSwipeStart = null;
+        const touch = e.changedTouches[0];
+        if (!touch) return;
+        const dx = touch.clientX - start.x;
+        const dy = touch.clientY - start.y;
+        const dt = Date.now() - start.t;
+        // Only trigger on horizontal swipe: fast (< 500ms), long enough (>80px), and mostly horizontal
+        if (dt > 500) return;
+        if (Math.abs(dx) < 80) return;
+        if (Math.abs(dy) > Math.abs(dx) * 0.5) return;
+        // Ignore if the swipe started in the editor itself (otherwise blocks text selection)
+        const target = e.target;
+        if (target?.closest?.(".nf-editor-contenteditable, input, textarea, select, button, a")) return;
+        const curProject = projects.find(p => p.id === activeProjectId);
+        if (dx < 0) {
+          // Swipe left → next chapter
+          setActiveChapterIdx(prev => Math.min(prev + 1, (curProject?.chapters?.length || 1) - 1));
+          forceRepopulateEditor();
+        } else {
+          // Swipe right → previous chapter
+          setActiveChapterIdx(prev => Math.max(0, prev - 1));
+          forceRepopulateEditor();
+        }
+      }}
+    >
       {!focusMode && (
         <div className="nf-chapter-sidebar">
           <div className="nf-chapter-sidebar-header">
@@ -12035,7 +13287,8 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                 id: newChId, title, content: "", summary: "", notes: "",
                 sceneNotes: "", pov: "", summaryGeneratedAt: "", worldView: "",
                 linkedPlotId: "",
-                narrativeDistance: "", sensoryPalette: "", subtextNotes: "", tensionLevel: 5, chapterEndHookScore: 0, chapterEndHookNotes: "",
+                narrativeDistance: "", sensoryPalette: "", subtextNotes: "", tensionLevel: 5,
+                chapterEndHookScore: 0, chapterMomentum: 0, emotionalAftertaste: "",
               }];
             
               const existingPlot = (project?.plotOutline || []).find(pl => (pl.chapter || 0) === chNum);
@@ -12994,7 +14247,7 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
               {/* Generated image result — SINGLE MODE */}
               {imageGenStatus?.status === "done" && imageGenStatus.imageUrl && !imageGenStatus.images && (
                 <div style={{ marginTop: 10 }}>
-                  <img src={imageGenStatus.imageUrl} alt="Generated scene" style={{ width: "100%", maxHeight: 400, objectFit: "contain", borderRadius: 3, border: "1px solid var(--nf-border)", background: "var(--nf-bg-deep)" }} />
+                  <img loading="lazy" src={imageGenStatus.imageUrl} alt="Generated scene" style={{ width: "100%", maxHeight: 400, objectFit: "contain", borderRadius: 3, border: "1px solid var(--nf-border)", background: "var(--nf-bg-deep)" }} />
                   <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
                     <button onClick={() => {
                       const el = editorRef.current;
@@ -13038,7 +14291,7 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                         </div>
                         {img.imageUrl ? (
                           <>
-                            <img src={img.imageUrl} alt={img.label} style={{ width: "100%", display: "block" }} />
+                            <img loading="lazy" src={img.imageUrl} alt={img.label} style={{ width: "100%", display: "block" }} />
                             <div style={{ padding: "4px 6px", display: "flex", gap: 3 }}>
                               <button onClick={() => {
                                 const el = editorRef.current;
@@ -13111,10 +14364,10 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
           {showGroupForm && (
             <div style={{ padding: "8px 10px", borderBottom: "1px solid var(--nf-border)", background: "var(--nf-bg-raised)" }}>
               <div style={{ fontSize: 10, fontWeight: 600, color: "var(--nf-accent-2)", marginBottom: 6 }}>New Character Group</div>
-              <input id="nf-group-name" placeholder="Group name (e.g. Palace Guards)" className="nf-input" style={{ fontSize: 11, marginBottom: 4 }} />
+              <input id="nf-group-name" placeholder="Group name (e.g. Palace Guards)" className="nf-input nf-input-compact" style={{ fontSize: 11, marginBottom: 4 }} />
               <div style={{ display: "flex", gap: 6, marginBottom: 4 }}>
-                <input id="nf-group-count" type="number" min="1" defaultValue="10" placeholder="Count" className="nf-input" style={{ fontSize: 11, width: 60 }} />
-                <input id="nf-group-desc" placeholder="Brief description..." className="nf-input" style={{ fontSize: 11, flex: 1 }} />
+                <input id="nf-group-count" type="number" min="1" defaultValue="10" placeholder="Count" className="nf-input nf-input-compact" style={{ fontSize: 11, width: 60 }} />
+                <input id="nf-group-desc" placeholder="Brief description..." className="nf-input nf-input-compact" style={{ fontSize: 11, flex: 1 }} />
               </div>
               <div style={{ display: "flex", gap: 4, justifyContent: "flex-end" }}>
                 <button onClick={() => setShowGroupForm(false)} className="nf-btn-micro">Cancel</button>
@@ -13149,7 +14402,7 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                   position: "relative",
                 }}>
                   {c.image ? (
-                    <img src={c.image} alt={c.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                    <img loading="lazy" src={c.image} alt={c.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
                   ) : c.isBulk ? (
                     <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2, opacity: 0.3 }}>
                       <Icons.Users />
@@ -13216,24 +14469,49 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                 )}
                 {/* D3: Clean up relationships and plot refs when deleting character */}
                 <button onClick={() => setConfirmDialog({
-                message: `Delete "${editingChar.name || "this character"}"? This will also remove any relationships and plot references involving them.`,
+                message: `Delete "${editingChar.name || "this character"}"? This will also remove any relationships, plot references, organizational roles, and location associations involving them.`,
                 onConfirm: () => {
                   const charId = editingCharId;
-                  // FIX: ID-based relationship cleanup
+                  // ID-based relationship cleanup
                   const updatedRels = (project?.relationships || []).filter(r => r.char1 !== charId && r.char2 !== charId);
-                  // FIX: Also remove from plot outline character lists
+                  // Remove from plot outline character lists
                   const updatedPlot = (project?.plotOutline || []).map(pl => ({
                     ...pl,
                     characters: Array.isArray(pl.characters) ? pl.characters.filter(cid => cid !== charId) : pl.characters,
+                    povCharacterId: pl.povCharacterId === charId ? "" : pl.povCharacterId,
                   }));
+                  // Clean worldBuilding: remove from frequentCharacters arrays, clear orgHierarchy.charId refs
+                  const updatedWorld = (project?.worldBuilding || []).map(w => {
+                    const next = { ...w };
+                    if (Array.isArray(w.frequentCharacters)) {
+                      next.frequentCharacters = w.frequentCharacters.filter(cid => cid !== charId);
+                    }
+                    if (Array.isArray(w.orgHierarchy)) {
+                      next.orgHierarchy = w.orgHierarchy.map(pos => pos.charId === charId ? { ...pos, charId: "" } : pos);
+                    }
+                    return next;
+                  });
+                  // Clean reader knowledge: remove character from knownBy arrays
+                  const updatedRK = (project?.readerKnowledge || []).map(rk => ({
+                    ...rk,
+                    knownBy: Array.isArray(rk.knownBy) ? rk.knownBy.filter(cid => cid !== charId) : rk.knownBy,
+                  }));
+                  // Clean thematicArgument.embodiedBy
+                  const updatedTA = project?.thematicArgument ? { ...project.thematicArgument } : null;
+                  if (updatedTA?.embodiedBy && updatedTA.embodiedBy[charId]) {
+                    delete updatedTA.embodiedBy[charId];
+                  }
                   updateProject({
                     characters: chars.filter(c => c.id !== charId),
                     relationships: updatedRels,
                     plotOutline: updatedPlot,
+                    worldBuilding: updatedWorld,
+                    readerKnowledge: updatedRK,
+                    ...(updatedTA ? { thematicArgument: updatedTA } : {}),
                   });
                   const removedRels = (project?.relationships || []).length - updatedRels.length;
                   setEditingCharId(null); setConfirmDialog(null);
-                  showToast(removedRels > 0 ? `Deleted character + ${removedRels} relationship(s)` : "Deleted", "success");
+                  showToast(removedRels > 0 ? `Deleted character + ${removedRels} relationship(s) + cleaned refs` : "Deleted + cleaned refs", "success");
                 },
               })} className="nf-btn nf-btn-danger"><Icons.Trash /> Delete</button>
               </div>
@@ -13250,7 +14528,7 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                   border: editingChar.image ? "none" : "1px dashed var(--nf-border)",
                 }}>
                   {editingChar.image ? (
-                    <img src={editingChar.image} alt={editingChar.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                    <img loading="lazy" src={editingChar.image} alt={editingChar.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
                   ) : (
                     <span style={{ fontSize: 28, opacity: 0.2, color: "var(--nf-text-muted)" }}>
                       {editingChar.name ? editingChar.name[0].toUpperCase() : "?"}
@@ -13410,25 +14688,19 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
                     </div>
                   );
                 })()}
-                <Field label="First Appears (Chapter #)" value={editingChar.firstAppearanceChapter || ""} onChange={v => updateCharById(editingCharId, "firstAppearanceChapter", parseInt(v, 10) || 0)} placeholder={(() => {
-                  // Auto-suggest from plot outline
-                  const plotAppearances = (project?.plotOutline || []).filter(pl => Array.isArray(pl.characters) && pl.characters.includes(editingCharId)).sort((a, b) => (a.chapter || 0) - (b.chapter || 0));
-                  return plotAppearances.length > 0 ? `From plot: Ch${plotAppearances[0].chapter || "?"}` : "0 = from start";
-                })()} type="number" min="0" />
+                <label style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 0", fontSize: 11, color: "var(--nf-text-muted)", cursor: "pointer" }}>
+                  <input type="checkbox" checked={!!editingChar.hasAppeared}
+                    onChange={e => updateCharById(editingCharId, "hasAppeared", e.target.checked)} />
+                  <span>Has appeared in story {editingChar.hasAppeared ? "✓" : "(AI will include when chapters mention them)"}</span>
+                  <span style={{ fontSize: 9, color: "var(--nf-text-muted)", marginLeft: "auto" }}>AI auto-flips</span>
+                </label>
               </div>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "8px 12px" }}>
                 <SelectField label="Status" value={editingChar.status || "alive"} onChange={v => updateCharById(editingCharId, "status", v)} options={CHARACTER_STATUS_OPTIONS} />
                 <Field label="Height" value={editingChar.height || ""} onChange={v => updateCharById(editingCharId, "height", v)} placeholder="e.g. 5'10, 178cm" />
-                {editingChar.status && editingChar.status !== "alive" ? (
-                  <Field label="Status Changed (Ch#)" value={editingChar.statusChangedChapter || ""} onChange={v => updateCharById(editingCharId, "statusChangedChapter", parseInt(v, 10) || 0)} placeholder="Chapter #" type="number" min="0" />
-                ) : (
-                  <SelectField label="Build" value={editingChar.build || ""} onChange={v => updateCharById(editingCharId, "build", v)} options={BUILD_OPTIONS} placeholder="Select..." />
-                )}
+                <SelectField label="Build" value={editingChar.build || ""} onChange={v => updateCharById(editingCharId, "build", v)} options={BUILD_OPTIONS} placeholder="Select..." />
               </div>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px 12px" }}>
-                {editingChar.status && editingChar.status !== "alive" && (
-                  <SelectField label="Build" value={editingChar.build || ""} onChange={v => updateCharById(editingCharId, "build", v)} options={BUILD_OPTIONS} placeholder="Select..." />
-                )}
                 {/* Allegiances: auto-derived from org memberships */}
                 {(() => {
                   const orgNames = [];
@@ -13512,7 +14784,12 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
             <div className="nf-char-section">
               <div className="nf-char-section-label">Story & Backstory</div>
               <DebouncedField label="Backstory" value={editingChar.backstory} onChange={v => updateCharById(editingCharId, "backstory", v)} multiline placeholder="Formative experiences, wounds, what shaped them..." />
-              <Field label="Backstory Reveal (Ch#)" value={editingChar.backstoryRevealChapter || ""} onChange={v => updateCharById(editingCharId, "backstoryRevealChapter", parseInt(v, 10) || 0)} placeholder="0 = always visible to AI" type="number" min="0" small />
+              <label style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 0", fontSize: 11, color: "var(--nf-text-muted)", cursor: "pointer" }}>
+                <input type="checkbox" checked={!!editingChar.backstoryRevealed}
+                  onChange={e => updateCharById(editingCharId, "backstoryRevealed", e.target.checked)} />
+                <span>Backstory has been revealed to reader {editingChar.backstoryRevealed ? "✓ (AI will include in context)" : "(AI holds back until revealed)"}</span>
+                <span style={{ fontSize: 9, color: "var(--nf-text-muted)", marginLeft: "auto" }}>AI auto-flips this</span>
+              </label>
               <DebouncedField label="Character Arc" value={editingChar.arc} onChange={v => updateCharById(editingCharId, "arc", v)} multiline placeholder="Full trajectory: who they start as → who they become..." small />
               <DebouncedField label="Signature Items / Possessions" value={editingChar.signatureItems || ""} onChange={v => updateCharById(editingCharId, "signatureItems", v)} multiline placeholder="A locket with a photo, enchanted blade, battered notebook, vintage motorcycle..." small />
               {/* Secrets — two tiers */}
@@ -13520,7 +14797,12 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
                 <div style={{ fontSize: 9, fontWeight: 500, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--nf-text-muted)", marginBottom: 8 }}>Secrets</div>
                 <DebouncedField label="Known Secrets (reader knows, sent to AI)" value={editingChar.secrets || ""} onChange={v => updateCharById(editingCharId, "secrets", v)} multiline placeholder="Secrets the reader/AI should know — hidden heritage, double identity, forbidden power..." small />
                 <DebouncedField label="Hidden Secrets (NOT sent to AI until reveal)" value={editingChar.hiddenSecrets || ""} onChange={v => updateCharById(editingCharId, "hiddenSecrets", v)} multiline placeholder="Plot twists — keep hidden from AI context until the reveal chapter..." small />
-                <Field label="Secret Reveal (Ch#)" value={editingChar.secretRevealChapter || ""} onChange={v => updateCharById(editingCharId, "secretRevealChapter", parseInt(v, 10) || 0)} placeholder="0 = never auto-reveal" type="number" min="0" small />
+                <label style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 0", fontSize: 11, color: "var(--nf-text-muted)", cursor: "pointer" }}>
+                  <input type="checkbox" checked={!!editingChar.secretRevealed}
+                    onChange={e => updateCharById(editingCharId, "secretRevealed", e.target.checked)} />
+                  <span>Secrets have been revealed {editingChar.secretRevealed ? "✓ (AI now knows)" : "(AI doesn't see hiddenSecrets)"}</span>
+                  <span style={{ fontSize: 9, color: "var(--nf-text-muted)", marginLeft: "auto" }}>AI auto-flips this</span>
+                </label>
                 {/* Auto-derived: shared secrets from relationships */}
                 {(() => {
                   const relSecrets = [];
@@ -13571,6 +14853,25 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
               })()}
             </div>
 
+            {/* AI-Maintained Living State Panel */}
+            <div className="nf-char-section">
+              <div className="nf-char-section-label" style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <span>Living State</span>
+                <span style={{ fontSize: 9, fontWeight: 500, color: "var(--nf-accent-2)", background: "var(--nf-bg-deep)", padding: "2px 6px", borderRadius: 2, letterSpacing: "0.05em" }}>AI-MAINTAINED</span>
+                {editingChar.lastUpdatedChapter > 0 && (
+                  <span style={{ fontSize: 9, color: "var(--nf-text-muted)", marginLeft: "auto", fontFamily: "var(--nf-font-mono)" }}>Last updated Ch{editingChar.lastUpdatedChapter + 1}</span>
+                )}
+              </div>
+              <div style={{ padding: "10px 12px", background: "var(--nf-bg-deep)", border: "1px solid var(--nf-border)", borderRadius: 2 }}>
+                <div style={{ fontSize: 10, color: "var(--nf-text-muted)", marginBottom: 10, lineHeight: 1.5 }}>
+                  These fields update automatically after each chapter you write (when State Updater post-processor is enabled). Edit freely — AI will refine on next generation.
+                </div>
+                <DebouncedField label="Current Emotional State" value={editingChar.currentEmotionalState || ""} onChange={v => updateCharById(editingCharId, "currentEmotionalState", v)} multiline placeholder="e.g. 'Exhausted, wary of Marcus, hiding the letter'" small />
+                <DebouncedField label="Obligations Owed" value={editingChar.obligationsOwed || ""} onChange={v => updateCharById(editingCharId, "obligationsOwed", v)} multiline placeholder="e.g. 'Promised Sarah to meet Tuesday. Owes Marcus the truth. Debt to the Loan Shark.'" small />
+                <DebouncedField label="Knowledge State" value={editingChar.knowledgeState || ""} onChange={v => updateCharById(editingCharId, "knowledgeState", v)} multiline placeholder="e.g. 'Knows the letter is forged. Doesn't know Marcus's secret. Suspects the affair.'" small />
+              </div>
+            </div>
+
             {/* D4: Section — Intimate (collapsible by default for non-romance) */}
             <div className="nf-char-section">
               <div className="nf-char-section-label">Intimate Details</div>
@@ -13608,7 +14909,7 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
                               background: isAssigned ? "var(--nf-accent-glow-2)" : "var(--nf-bg-surface)",
                               border: `1px solid ${isAssigned ? "var(--nf-accent-2)" : "var(--nf-border)"}`,
                               color: isAssigned ? "var(--nf-accent-2)" : "var(--nf-text-muted)",
-                              transition: "all 0.15s",
+                              transition: "background 0.15s, border-color 0.15s, color 0.15s, opacity 0.15s, transform 0.15s",
                             }}>
                               {isAssigned ? "✓ " : ""}📍 {loc.name}
                             </button>
@@ -13668,7 +14969,7 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
                           return (
                             <div key={r.id} style={{ display: "flex", alignItems: "center", gap: 6, padding: "4px 10px", borderRadius: 4,
                               background: "var(--nf-bg-surface)", border: "1px solid var(--nf-border)" }}>
-                              {other?.image && <img src={other.image} alt="" style={{ width: 22, height: 22, borderRadius: "50%", objectFit: "cover" }} />}
+                              {other?.image && <img loading="lazy" src={other.image} alt="" style={{ width: 22, height: 22, borderRadius: "50%", objectFit: "cover" }} />}
                               <span style={{ fontSize: 11, fontWeight: 600, color: "var(--nf-text)", cursor: "pointer" }} onClick={() => setEditingCharId(otherId)}>{other?.name || "?"}</span>
                               <select value={r.status || "developing"} onChange={e => updateProject({ relationships: (project?.relationships || []).map(re => re.id === r.id ? { ...re, status: e.target.value } : re) })}
                                 style={{ fontSize: 9, padding: "2px 4px", background: "var(--nf-bg-deep)", border: "1px solid var(--nf-border)", borderRadius: 2, color: "var(--nf-text-muted)", cursor: "pointer", maxWidth: 95 }}>
@@ -13746,7 +15047,7 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
                               background: isIn ? "var(--nf-accent-glow)" : "var(--nf-bg-surface)",
                               border: `1px solid ${isIn ? "var(--nf-accent)" : "var(--nf-border)"}`,
                               color: isIn ? "var(--nf-accent)" : "var(--nf-text-muted)",
-                              transition: "all 0.15s",
+                              transition: "background 0.15s, border-color 0.15s, color 0.15s, opacity 0.15s, transform 0.15s",
                             }}>
                               {isIn ? "✓ " : ""}Ch{pl.chapter || "?"}{pl.title ? `: ${pl.title}` : ""}
                             </button>
@@ -13808,7 +15109,7 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
   });
   const renderWorld = () => {
     const items = project?.worldBuilding || [];
-    const charOptions = (project?.characters || []).filter(c => c.name).map(c => ({
+    const charOptions = (project?.characters || []).filter(c => c.name && !c.isBulk).map(c => ({
       value: c.id,
       label: `${c.name}${c.role ? ` (${c.role})` : ""}`,
     }));
@@ -13869,7 +15170,22 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
                     {!isExpanded && item.description && <div title={item.name} style={{ fontSize: 11, color: "var(--nf-text-muted)", marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.description.slice(0, 100)}</div>}
                   </div>
                   {!isExpanded && (
-                    <button onClick={(e) => { e.stopPropagation(); updateProject({ worldBuilding: items.filter(it => it.id !== item.id) }); }} className="nf-btn-icon" aria-label="Delete entry"><Icons.Trash /></button>
+                    <button onClick={(e) => { e.stopPropagation(); setConfirmDialog({
+                      message: `Delete "${item.name || "this entry"}"? This will also remove it from all plot entry locations.`,
+                      onConfirm: () => {
+                        const worldId = item.id;
+                        const updatedPlot = (project?.plotOutline || []).map(pl => ({
+                          ...pl,
+                          locations: Array.isArray(pl.locations) ? pl.locations.filter(lid => lid !== worldId) : pl.locations,
+                        }));
+                        updateProject({
+                          worldBuilding: items.filter(it => it.id !== worldId),
+                          plotOutline: updatedPlot,
+                        });
+                        setConfirmDialog(null);
+                        showToast("Deleted + cleaned references", "success");
+                      },
+                    }); }} className="nf-btn-icon" aria-label="Delete entry"><Icons.Trash /></button>
                   )}
                 </div>
                 {/* D6: Expanded edit view */}
@@ -13931,7 +15247,7 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
                                     background: isSelected ? "var(--nf-accent-glow-2)" : "var(--nf-bg-surface)",
                                     border: `1px solid ${isSelected ? "var(--nf-accent-2)" : "var(--nf-border)"}`,
                                     color: isSelected ? "var(--nf-accent-2)" : "var(--nf-text-muted)",
-                                    transition: "all 0.15s",
+                                    transition: "background 0.15s, border-color 0.15s, color 0.15s, opacity 0.15s, transform 0.15s",
                                   }}>
                                     {isSelected ? "✓ " : ""}{c.name}{c.role ? ` (${c.role})` : ""}
                                   </button>
@@ -13951,10 +15267,10 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
                                   <div role="button" tabIndex={0} key={cid} onClick={() => { setEditingCharId(cid); setActiveTab("characters"); }}
                                     style={{ display: "flex", alignItems: "center", gap: 5, padding: "4px 8px 3px 3px",
                                       borderRadius: 20, background: "var(--nf-bg-surface)", border: "1px solid var(--nf-border)",
-                                      cursor: "pointer", transition: "all 0.15s", fontSize: 10 }}
+                                      cursor: "pointer", transition: "background 0.15s, border-color 0.15s, color 0.15s, opacity 0.15s, transform 0.15s", fontSize: 10 }}
                                     title={`${ch.name} (${ch.role}) — click to edit`}>
                                     {ch.image ? (
-                                      <img src={ch.image} alt="" style={{ width: 20, height: 20, borderRadius: "50%", objectFit: "cover" }} />
+                                      <img loading="lazy" src={ch.image} alt="" style={{ width: 20, height: 20, borderRadius: "50%", objectFit: "cover" }} />
                                     ) : (
                                       <span style={{ width: 20, height: 20, borderRadius: "50%", background: "var(--nf-bg-hover)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 9, color: "var(--nf-text-muted)", fontWeight: 600 }}>{(ch.name || "?")[0]}</span>
                                     )}
@@ -13993,7 +15309,7 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
                                     } catch (e) { showToast(`Failed: ${e.message?.replace(/sk-[a-zA-Z0-9]+/g, "sk-***") || "Unknown error"}`, "error"); }
                                   }}>
                                   {item.orgLogo ? (
-                                    <img src={item.orgLogo} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                                    <img loading="lazy" src={item.orgLogo} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
                                   ) : (
                                     <span style={{ fontSize: 10, color: "var(--nf-text-muted)", opacity: 0.4 }}>✦</span>
                                   )}
@@ -14005,7 +15321,7 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
                                 <div style={{ flex: 1 }}>
                                   {item.orgGroupPhoto ? (
                                     <div style={{ position: "relative", borderRadius: 3, overflow: "hidden", textOverflow: "ellipsis" }}>
-                                      <img src={item.orgGroupPhoto} alt={`${item?.name || "unnamed"} group`} style={{ width: "100%", maxHeight: 120, objectFit: "cover", borderRadius: 3, border: "1px solid var(--nf-border)" }} />
+                                      <img loading="lazy" src={item.orgGroupPhoto} alt={`${item?.name || "unnamed"} group`} style={{ width: "100%", maxHeight: 120, objectFit: "cover", borderRadius: 3, border: "1px solid var(--nf-border)" }} />
                                       <button onClick={() => updateProject({ worldBuilding: items.map(it => it.id === item.id ? { ...it, orgGroupPhoto: "" } : it) })} style={{ position: "absolute", top: 3, right: 3, background: "rgba(0,0,0,0.6)", border: "none", color: "var(--nf-text-inverse, #fff)", borderRadius: 2, padding: "2px 4px", fontSize: 9, cursor: "pointer" }}>×</button>
                                     </div>
                                   ) : (
@@ -14119,10 +15435,10 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
                                       <div style={{ background: "var(--nf-bg-surface)", border: `1px solid var(--nf-border)`, borderTop: `3px solid ${depthColor}`, borderRadius: 3, padding: "8px 8px 6px", width: 180, position: "relative" }}>
                                         <button onClick={() => {
                                           updateProject({ worldBuilding: items.map(it => it.id === item.id ? { ...it, orgHierarchy: item.orgHierarchy.filter((_, i) => i !== posIdx) } : it) });
-                                        }} className="nf-btn-icon" style={{ padding: 1, position: "absolute", top: 2, right: 2, opacity: 0.3 }}><Icons.X /></button>
+                                        }} className="nf-btn-icon" style={{ padding: 6, position: "absolute", top: 0, right: 0, opacity: 0.3, minWidth: 28, minHeight: 28 }} aria-label="Remove"><Icons.X /></button>
                                         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
                                           {linkedChar?.image ? (
-                                            <img src={linkedChar.image} alt="" style={{ width: 44, height: 44, borderRadius: "50%", objectFit: "cover", border: `2px solid ${depthColor}`, flexShrink: 0 }} />
+                                            <img loading="lazy" src={linkedChar.image} alt="" style={{ width: 44, height: 44, borderRadius: "50%", objectFit: "cover", border: `2px solid ${depthColor}`, flexShrink: 0 }} />
                                           ) : (
                                             <div style={{ width: 44, height: 44, borderRadius: "50%", background: "var(--nf-bg-hover)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, color: "var(--nf-text-muted)", border: `2px dashed var(--nf-border)`, flexShrink: 0 }}>
                                               {linkedChar ? (linkedChar.name || "?")[0] : "?"}
@@ -14464,7 +15780,22 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
                       {settings.apiKey && item.name && (
                         <button onClick={() => handleUniversalFill("world", item.id)} className="nf-btn-icon" style={{ marginTop: 20, color: "var(--nf-accent-2)" }} aria-label="Fill empty fields"><Icons.Wand /></button>
                       )}
-                      <button onClick={() => updateProject({ worldBuilding: items.filter(it => it.id !== item.id) })} className="nf-btn-icon" style={{ marginTop: 20 }} aria-label="Delete entry"><Icons.Trash /></button>
+                      <button onClick={() => setConfirmDialog({
+                        message: `Delete "${item.name || "this entry"}"? This will also remove it from all plot entry locations.`,
+                        onConfirm: () => {
+                          const worldId = item.id;
+                          const updatedPlot = (project?.plotOutline || []).map(pl => ({
+                            ...pl,
+                            locations: Array.isArray(pl.locations) ? pl.locations.filter(lid => lid !== worldId) : pl.locations,
+                          }));
+                          updateProject({
+                            worldBuilding: items.filter(it => it.id !== worldId),
+                            plotOutline: updatedPlot,
+                          });
+                          setConfirmDialog(null);
+                          showToast("Deleted + cleaned references", "success");
+                        },
+                      })} className="nf-btn-icon" style={{ marginTop: 20 }} aria-label="Delete entry"><Icons.Trash /></button>
                     </div>
                   </div>
                 )}
@@ -14678,9 +16009,9 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
                               background: isSelected ? "var(--nf-accent-glow-2)" : "var(--nf-bg-surface)",
                               border: `1px solid ${isSelected ? "var(--nf-accent-2)" : "var(--nf-border)"}`,
                               color: isSelected ? "var(--nf-accent-2)" : "var(--nf-text-muted)",
-                              transition: "all 0.15s", display: "flex", alignItems: "center", gap: 4,
+                              transition: "background 0.15s, border-color 0.15s, color 0.15s, opacity 0.15s, transform 0.15s", display: "flex", alignItems: "center", gap: 4,
                             }}>
-                              {c.image ? <img src={c.image} alt="" style={{ width: 18, height: 18, borderRadius: "50%", objectFit: "cover" }} /> : <span style={{ width: 18, height: 18, borderRadius: "50%", background: "var(--nf-bg-hover)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 8, color: "var(--nf-text-muted)" }}>{(c.name || "?")[0]}</span>}
+                              {c.image ? <img loading="lazy" src={c.image} alt="" style={{ width: 18, height: 18, borderRadius: "50%", objectFit: "cover" }} /> : <span style={{ width: 18, height: 18, borderRadius: "50%", background: "var(--nf-bg-hover)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 8, color: "var(--nf-text-muted)" }}>{(c.name || "?")[0]}</span>}
                               {isSelected ? "✓ " : ""}{c.name}
                             </button>
                           );
@@ -14711,7 +16042,7 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
                                 background: isSelected ? "var(--nf-accent-glow)" : "var(--nf-bg-surface)",
                                 border: `1px solid ${isSelected ? "var(--nf-accent)" : "var(--nf-border)"}`,
                                 color: isSelected ? "var(--nf-accent)" : "var(--nf-text-muted)",
-                                transition: "all 0.15s",
+                                transition: "background 0.15s, border-color 0.15s, color 0.15s, opacity 0.15s, transform 0.15s",
                               }}>
                                 {isSelected ? "✓ " : ""}📍 {loc.name}{freqCount > 0 ? ` (${freqCount})` : ""}
                               </button>
@@ -14757,7 +16088,7 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
                       // Dead characters warning
                       selChars.forEach(cid => {
                         const ch = (project?.characters || []).find(c => c.id === cid);
-                        if (ch?.status === "dead") items2.push({ icon: "†", text: `${ch.name} is dead${ch.statusChangedChapter ? ` (since Ch${ch.statusChangedChapter})` : ""} — flashback?`, color: "var(--nf-accent)" });
+                        if (ch?.status === "dead") items2.push({ icon: "†", text: `${ch.name} is dead — flashback?`, color: "var(--nf-accent)" });
                       });
                     }
                     if (items2.length === 0) return null;
@@ -14850,7 +16181,7 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
   const renderRelationships = () => {
     const rels = project?.relationships || [];
     // D10: Include character status in dropdown options — FIX: use ID as value
-    const charOptions = (project?.characters || []).filter(c => c.name).map(c => ({
+    const charOptions = (project?.characters || []).filter(c => c.name && !c.isBulk).map(c => ({
       value: c.id,
       label: `${c.name}${c.status && c.status !== "alive" ? ` (${c.status})` : ""}`,
     }));
@@ -14907,10 +16238,10 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
                   </button>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-                      {(() => { const c1 = allChars.find(c => c.id === r.char1); return c1?.image ? <img src={c1.image} alt="" style={{ width: 20, height: 20, borderRadius: "50%", objectFit: "cover", border: "1px solid var(--nf-border)" }} /> : null; })()}
+                      {(() => { const c1 = allChars.find(c => c.id === r.char1); return c1?.image ? <img loading="lazy" src={c1.image} alt="" style={{ width: 20, height: 20, borderRadius: "50%", objectFit: "cover", border: "1px solid var(--nf-border)" }} /> : null; })()}
                       <span style={{ fontWeight: 600, fontSize: 13, color: "var(--nf-text)" }}>{c1Name || "?"}</span>
                       <span style={{ color: "var(--nf-accent)", fontSize: 14 }}>↔</span>
-                      {(() => { const c2 = allChars.find(c => c.id === r.char2); return c2?.image ? <img src={c2.image} alt="" style={{ width: 20, height: 20, borderRadius: "50%", objectFit: "cover", border: "1px solid var(--nf-border)" }} /> : null; })()}
+                      {(() => { const c2 = allChars.find(c => c.id === r.char2); return c2?.image ? <img loading="lazy" src={c2.image} alt="" style={{ width: 20, height: 20, borderRadius: "50%", objectFit: "cover", border: "1px solid var(--nf-border)" }} /> : null; })()}
                       <span style={{ fontWeight: 600, fontSize: 13, color: "var(--nf-text)" }}>{c2Name || "?"}</span>
                       {r.status && <span style={{ fontSize: 9, padding: "2px 6px", borderRadius: 4, background: "var(--nf-bg-surface)", border: "1px solid var(--nf-border)", color: "var(--nf-text-muted)" }}>{r.status}</span>}
                       {r.category && r.category !== "romantic" && <span style={{ fontSize: 9, padding: "2px 6px", borderRadius: 4, background: "var(--nf-accent-glow-2)", border: "1px solid var(--nf-accent-2)", color: "var(--nf-accent-2)", fontWeight: 500 }}>{r.category}</span>}
@@ -14990,6 +16321,21 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
                       <SelectField label="Tension" value={r.tension || "medium"} onChange={v => updateProject({ relationships: rels.map(re => re.id === r.id ? { ...re, tension: v } : re) })} options={TENSION_OPTIONS} />
                       <SelectField label="Tension Type" value={r.tensionType || "romantic"} onChange={v => updateProject({ relationships: rels.map(re => re.id === r.id ? { ...re, tensionType: v } : re) })} options={TENSION_TYPE_OPTIONS} />
                     </div>
+                    {/* AI-Maintained Evolution Indicator */}
+                    {r.lastUpdatedChapter > 0 && Object.keys(r.chapterEvolution || {}).length > 0 && (
+                      <div style={{ padding: "8px 12px", background: "var(--nf-bg-deep)", border: "1px solid var(--nf-border)", borderRadius: 2, marginTop: 4 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
+                          <span style={{ fontSize: 9, fontWeight: 500, color: "var(--nf-accent-2)", background: "var(--nf-bg-surface)", padding: "2px 6px", borderRadius: 2, letterSpacing: "0.05em" }}>AI-EVOLVING</span>
+                          <span style={{ fontSize: 10, color: "var(--nf-text-muted)" }}>
+                            Status, tension, trust, chemistry, power dynamic, and perspectives evolve per chapter.
+                          </span>
+                          <span style={{ fontSize: 9, color: "var(--nf-text-muted)", marginLeft: "auto", fontFamily: "var(--nf-font-mono)" }}>Last Ch{r.lastUpdatedChapter + 1}</span>
+                        </div>
+                        <div style={{ fontSize: 10, color: "var(--nf-text-muted)", lineHeight: 1.4 }}>
+                          Set the foundation above; the State Updater agent tracks evolution per chapter. Manual edits still win until next generation.
+                        </div>
+                      </div>
+                    )}
                     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                       <SelectField label="Power Dynamic" value={r.powerDynamic || "equal"} onChange={v => updateProject({ relationships: rels.map(re => re.id === r.id ? { ...re, powerDynamic: v } : re) })} options={POWER_DYNAMIC_OPTIONS} />
                       <SelectField label="Trust Level" value={r.trustLevel || "medium"} onChange={v => updateProject({ relationships: rels.map(re => re.id === r.id ? { ...re, trustLevel: v } : re) })} options={TRUST_LEVEL_OPTIONS} />
@@ -15017,7 +16363,7 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
                                   background: isCurrent ? "var(--nf-accent-glow)" : isReached ? "var(--nf-bg-surface)" : "transparent",
                                   border: `1px solid ${isCurrent ? "var(--nf-accent)" : isReached ? "var(--nf-border)" : "var(--nf-border)"}`,
                                   color: isCurrent ? "var(--nf-accent)" : isReached ? "var(--nf-text)" : "var(--nf-text-muted)",
-                                  transition: "all 0.2s",
+                                  transition: "background 0.2s, border-color 0.2s, color 0.2s, opacity 0.2s, transform 0.2s",
                                 }}>
                                   {stage.trim()}
                                 </div>
@@ -15325,9 +16671,48 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
 
       <div className="nf-card">
         <h3 className="nf-card-title">Appearance</h3>
-        <div style={{ display: "flex", gap: 8 }}>
+        <div className="nf-field" style={{ marginBottom: 14 }}>
+          <label className="nf-label">Interface language</label>
+          <select
+            value={settings.language || "en"}
+            onChange={e => setSettings(prev => ({ ...prev, language: e.target.value }))}
+            className="nf-select">
+            {I18N_LANGUAGES.map(lang => (
+              <option key={lang.value} value={lang.value}>{lang.label}</option>
+            ))}
+          </select>
+          <div style={{ fontSize: 10, color: "var(--nf-text-muted)", marginTop: 4, lineHeight: 1.5 }}>
+            Partial translations — core UI elements only. Novel content is never auto-translated.
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <button onClick={() => setTheme("light")} className={`nf-btn ${theme === "light" ? "nf-btn-primary" : "nf-btn-ghost"}`}><Icons.Sun /> Light</button>
           <button onClick={() => setTheme("dark")} className={`nf-btn ${theme === "dark" ? "nf-btn-primary" : "nf-btn-ghost"}`}><Icons.Moon /> Dark</button>
+          <button onClick={() => setTheme("reading")} className={`nf-btn ${theme === "reading" ? "nf-btn-primary" : "nf-btn-ghost"}`} title="Paper-like, low-stimulation palette with generous spacing and sentence-fade AI streaming"><Icons.Book /> Reading</button>
+        </div>
+        {theme === "reading" && (
+          <div style={{ marginTop: 10, padding: "10px 12px", background: "var(--nf-bg-deep)", border: "1px solid var(--nf-border)", borderRadius: 4, fontSize: 11, lineHeight: 1.7, color: "var(--nf-text-dim)" }}>
+            <div style={{ fontWeight: 600, color: "var(--nf-text)", marginBottom: 4 }}>Reading Mode active</div>
+            Warm paper palette, near-black ink, generous line-height, softened hairline borders, and sentence-by-sentence AI streaming (no character typewriter effect). Designed for long writing sessions without eye strain.
+          </div>
+        )}
+        <div style={{ marginTop: 14, paddingTop: 14, borderTop: "1px solid var(--nf-border)" }}>
+          <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 12 }}>
+            <input type="checkbox" checked={!!settings.zenTypography}
+              onChange={e => setSettings(prev => ({ ...prev, zenTypography: e.target.checked }))} />
+            <span style={{ color: "var(--nf-text)", fontWeight: 500 }}>Zen typography</span>
+          </label>
+          <div style={{ fontSize: 10, color: "var(--nf-text-muted)", marginTop: 4, marginLeft: 22 }}>
+            Center editor at 65-character width with serif body font (Lora). Optimal for focused reading.
+          </div>
+          <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 12, marginTop: 10 }}>
+            <input type="checkbox" checked={settings.sentenceFade !== false}
+              onChange={e => setSettings(prev => ({ ...prev, sentenceFade: e.target.checked }))} />
+            <span style={{ color: "var(--nf-text)", fontWeight: 500 }}>Sentence-fade AI streaming</span>
+          </label>
+          <div style={{ fontSize: 10, color: "var(--nf-text-muted)", marginTop: 4, marginLeft: 22 }}>
+            AI responses appear a sentence at a time with gentle fade-in. Disabled: character-by-character typewriter.
+          </div>
         </div>
       </div>
 
@@ -15413,6 +16798,93 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
         <Field label="Custom System Prompt" value={settings.systemPrompt} onChange={v => setSettings(prev => ({ ...prev, systemPrompt: v }))} multiline placeholder="e.g. 'Always use British English', 'Write in present tense'..." />
       </div>
 
+      {/* Multi-Agent System Settings */}
+      <div className="nf-card" style={{ marginTop: 16 }}>
+        <h3 className="nf-card-title">🎭 Multi-Agent System</h3>
+        <p style={{ fontSize: 11, color: "var(--nf-text-muted)", marginBottom: 14, lineHeight: 1.6 }}>
+          Delegate memory retrieval and context assembly to specialized agents running in parallel.
+          Each role below can use a different model — default is <code style={{ fontSize: 10, background: "var(--nf-bg-deep)", padding: "1px 4px", borderRadius: 2 }}>x-ai/grok-4.1-fast</code>.
+          Typically produces higher-quality output at lower cost by focusing the writing agent's attention.
+        </p>
+        <div className="nf-field">
+          <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
+            <input type="checkbox" checked={!!settings.agentsEnabled}
+              onChange={e => setSettings(prev => ({ ...prev, agentsEnabled: e.target.checked }))} />
+            <span style={{ fontSize: 13, color: "var(--nf-text)", fontWeight: 500 }}>Enable multi-agent mode</span>
+          </label>
+          <div style={{ fontSize: 10, color: "var(--nf-text-muted)", marginTop: 4, marginLeft: 24 }}>
+            When enabled, AI operations use the orchestrator + specialist pipeline instead of the monolithic context engine.
+          </div>
+        </div>
+        {settings.agentsEnabled && (
+          <>
+            <details style={{ marginTop: 12 }}>
+              <summary style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--nf-accent-2)", cursor: "pointer", padding: "6px 0" }}>
+                Agent Model Assignments ({AGENT_ROLES.length} agents)
+              </summary>
+              <div style={{ marginTop: 10, display: "grid", gap: 8 }}>
+                {AGENT_ROLES.map(role => (
+                  <div key={role.key} style={{ padding: "8px 10px", background: "var(--nf-bg-deep)", borderRadius: 4, border: "1px solid var(--nf-border)" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+                      <span style={{ fontSize: 11, fontWeight: 600, color: "var(--nf-text)" }}>{role.label}</span>
+                      <span style={{ fontSize: 9, color: "var(--nf-text-muted)", fontFamily: "var(--nf-font-mono)" }}>{role.budget.toLocaleString()} tok</span>
+                    </div>
+                    <div style={{ fontSize: 10, color: "var(--nf-text-muted)", marginBottom: 6, lineHeight: 1.4 }}>{role.desc}</div>
+                    <select
+                      value={settings.agentModels?.[role.key] || AGENT_DEFAULT_MODEL}
+                      onChange={e => setSettings(prev => ({
+                        ...prev,
+                        agentModels: { ...(prev.agentModels || {}), [role.key]: e.target.value },
+                      }))}
+                      className="nf-select" style={{ fontSize: 11, width: "100%" }}>
+                      {AGENT_MODEL_OPTIONS.map(opt => (
+                        <option key={opt.value} value={opt.value}>{opt.label}</option>
+                      ))}
+                    </select>
+                  </div>
+                ))}
+              </div>
+              <div style={{ marginTop: 10, display: "flex", gap: 6 }}>
+                <button onClick={() => setSettings(prev => ({ ...prev, agentModels: {} }))} className="nf-btn-micro">
+                  Reset all to default (Grok 4.1 Fast)
+                </button>
+                <button onClick={() => AgentRuntime.clearCache()} className="nf-btn-micro">
+                  Clear brief cache
+                </button>
+              </div>
+            </details>
+            <details style={{ marginTop: 8 }}>
+              <summary style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--nf-accent-2)", cursor: "pointer", padding: "6px 0" }}>
+                Post-Processors (run after generation)
+              </summary>
+              <div style={{ marginTop: 8 }}>
+                {[
+                  { key: "continuityChecker", label: "Continuity Checker", desc: "Catches character/world inconsistencies" },
+                  { key: "voiceDriftDetector", label: "Voice Drift Detector", desc: "Flags when dialogue doesn't match character voice" },
+                  { key: "hookScorer", label: "Chapter-End Hook Scorer", desc: "Rates chapter endings 0-10 for page-turner quality" },
+                  { key: "motifAuditor", label: "Motif Weaving Auditor", desc: "Tracks how well motifs are integrated" },
+                  { key: "stateUpdater", label: "State Updater", desc: "Updates character emotional state + relationship evolution + reveal flags after chapter save" },
+                ].map(pp => (
+                  <label key={pp.key} style={{ display: "flex", alignItems: "start", gap: 8, cursor: "pointer", padding: "6px 0", borderBottom: "1px solid var(--nf-border)" }}>
+                    <input type="checkbox"
+                      checked={!!settings.agentPostProcessors?.[pp.key]}
+                      onChange={e => setSettings(prev => ({
+                        ...prev,
+                        agentPostProcessors: { ...(prev.agentPostProcessors || {}), [pp.key]: e.target.checked },
+                      }))}
+                      style={{ marginTop: 2 }} />
+                    <div>
+                      <div style={{ fontSize: 11, fontWeight: 600, color: "var(--nf-text)" }}>{pp.label}</div>
+                      <div style={{ fontSize: 10, color: "var(--nf-text-muted)", marginTop: 2 }}>{pp.desc}</div>
+                    </div>
+                  </label>
+                ))}
+              </div>
+            </details>
+          </>
+        )}
+      </div>
+
       {/* E4: Clearly separated project section */}
       <div style={{ fontSize: 9, fontWeight: 700, color: "var(--nf-text-muted)", textTransform: "uppercase", letterSpacing: "0.1em", marginTop: 24, marginBottom: 6 }}>Project Settings (this novel only)</div>
       <div className="nf-card">
@@ -15443,15 +16915,15 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
           <div style={{ marginTop: 8 }}>
             <div className="nf-field">
               <label className="nf-label">Thematic Argument — Thesis</label>
-              <input value={project?.thematicArgument?.thesis || ""} onChange={e => updateProject({ thematicArgument: { ...(project?.thematicArgument || {}), thesis: e.target.value } })} className="nf-input" placeholder="What this novel argues FOR" style={{ fontSize: 10 }} />
+              <input value={project?.thematicArgument?.thesis || ""} onChange={e => updateProject({ thematicArgument: { ...(project?.thematicArgument || {}), thesis: e.target.value } })} className="nf-input nf-input-compact" placeholder="What this novel argues FOR" style={{ fontSize: 10 }} />
             </div>
             <div className="nf-field">
               <label className="nf-label">Thematic Argument — Antithesis</label>
-              <input value={project?.thematicArgument?.antithesis || ""} onChange={e => updateProject({ thematicArgument: { ...(project?.thematicArgument || {}), antithesis: e.target.value } })} className="nf-input" placeholder="The opposing viewpoint" style={{ fontSize: 10 }} />
+              <input value={project?.thematicArgument?.antithesis || ""} onChange={e => updateProject({ thematicArgument: { ...(project?.thematicArgument || {}), antithesis: e.target.value } })} className="nf-input nf-input-compact" placeholder="The opposing viewpoint" style={{ fontSize: 10 }} />
             </div>
             <div className="nf-field">
               <label className="nf-label">Thematic Argument — Synthesis</label>
-              <input value={project?.thematicArgument?.synthesis || ""} onChange={e => updateProject({ thematicArgument: { ...(project?.thematicArgument || {}), synthesis: e.target.value } })} className="nf-input" placeholder="Where the novel lands — the resolution" style={{ fontSize: 10 }} />
+              <input value={project?.thematicArgument?.synthesis || ""} onChange={e => updateProject({ thematicArgument: { ...(project?.thematicArgument || {}), synthesis: e.target.value } })} className="nf-input nf-input-compact" placeholder="Where the novel lands — the resolution" style={{ fontSize: 10 }} />
             </div>
             {/* ─── MOTIFS ─── */}
             <div className="nf-field">
@@ -15461,8 +16933,8 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
               </div>
               {(project?.motifs || []).map((m, mi) => (
                 <div key={m.id || mi} style={{ display: "flex", gap: 6, marginTop: 4, alignItems: "start" }}>
-                  <input value={m.name || ""} onChange={e => { const motifs = [...(project?.motifs || [])]; motifs[mi] = { ...motifs[mi], name: e.target.value }; updateProject({ motifs }); }} className="nf-input" placeholder="Symbol name" style={{ fontSize: 10, flex: 1 }} />
-                  <input value={m.meaning || ""} onChange={e => { const motifs = [...(project?.motifs || [])]; motifs[mi] = { ...motifs[mi], meaning: e.target.value }; updateProject({ motifs }); }} className="nf-input" placeholder="Meaning" style={{ fontSize: 10, flex: 1 }} />
+                  <input value={m.name || ""} onChange={e => { const motifs = [...(project?.motifs || [])]; motifs[mi] = { ...motifs[mi], name: e.target.value }; updateProject({ motifs }); }} className="nf-input nf-input-compact" placeholder="Symbol name" style={{ fontSize: 10, flex: 1 }} />
+                  <input value={m.meaning || ""} onChange={e => { const motifs = [...(project?.motifs || [])]; motifs[mi] = { ...motifs[mi], meaning: e.target.value }; updateProject({ motifs }); }} className="nf-input nf-input-compact" placeholder="Meaning" style={{ fontSize: 10, flex: 1 }} />
                   <button onClick={() => updateProject({ motifs: (project?.motifs || []).filter((_, i) => i !== mi) })} className="nf-btn-icon" style={{ padding: 2, flexShrink: 0, opacity: 0.4 }}><Icons.X /></button>
                 </div>
               ))}
@@ -15476,8 +16948,8 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
               {(project?.readerKnowledge || []).map((rk, ri) => (
                 <div key={rk.id || ri} style={{ marginTop: 4, padding: "6px 8px", background: "var(--nf-bg-deep)", borderRadius: 2 }}>
                   <div style={{ display: "flex", gap: 6, marginBottom: 4 }}>
-                    <input value={rk.fact || ""} onChange={e => { const rks = [...(project?.readerKnowledge || [])]; rks[ri] = { ...rks[ri], fact: e.target.value }; updateProject({ readerKnowledge: rks }); }} className="nf-input" placeholder="What the reader knows" style={{ fontSize: 10, flex: 1 }} />
-                    <input value={rk.revealedInChapter || ""} onChange={e => { const rks = [...(project?.readerKnowledge || [])]; rks[ri] = { ...rks[ri], revealedInChapter: parseInt(e.target.value, 10) || 0 }; updateProject({ readerKnowledge: rks }); }} className="nf-input" placeholder="Reveal Ch#" type="number" min="0" style={{ fontSize: 10, width: 60 }} />
+                    <input value={rk.fact || ""} onChange={e => { const rks = [...(project?.readerKnowledge || [])]; rks[ri] = { ...rks[ri], fact: e.target.value }; updateProject({ readerKnowledge: rks }); }} className="nf-input nf-input-compact" placeholder="What the reader knows" style={{ fontSize: 10, flex: 1 }} />
+                    <input value={rk.revealedInChapter || ""} onChange={e => { const rks = [...(project?.readerKnowledge || [])]; rks[ri] = { ...rks[ri], revealedInChapter: parseInt(e.target.value, 10) || 0 }; updateProject({ readerKnowledge: rks }); }} className="nf-input nf-input-compact" placeholder="Reveal Ch#" type="number" min="0" style={{ fontSize: 10, width: 60 }} />
                     <button onClick={() => updateProject({ readerKnowledge: (project?.readerKnowledge || []).filter((_, i) => i !== ri) })} className="nf-btn-icon" style={{ padding: 2, opacity: 0.4 }}><Icons.X /></button>
                   </div>
                   <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
@@ -15682,16 +17154,67 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
   return (
     <ThemeContext.Provider value={{ theme, toggle: toggleTheme }}>
       <div className="nf-root">
+        {/* Accessibility: skip-to-content link for keyboard users */}
+        <a href="#nf-main-content" className="nf-skip-link">Skip to main content</a>
         <style>{`
-          @import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;0,700;1,300;1,400;1,500&family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap');
+          @import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;0,700;1,300;1,400;1,500&family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500&family=Lora:ital,wght@0,400;0,500;0,600;1,400;1,500&display=swap');
+          .nf-skip-link { position: absolute; top: -9999px; left: 0; z-index: 99999; background: var(--nf-accent); color: #fff; padding: 10px 16px; font-size: 13px; font-weight: 600; border-radius: 0 0 6px 0; text-decoration: none; }
+          .nf-skip-link:focus { top: 0; }
           :root {
             ${themeVars}
             --nf-font-display: 'Cormorant Garamond', 'Garamond', Georgia, serif;
             --nf-font-body: 'DM Sans', -apple-system, sans-serif;
             --nf-font-prose: 'Cormorant Garamond', Georgia, serif;
             --nf-font-mono: 'IBM Plex Mono', monospace;
+            --nf-font-reading: 'Lora', 'Source Serif Pro', Georgia, serif;
             --nf-radius: 4px; --nf-radius-sm: 3px; --nf-radius-lg: 8px; --nf-radius-dialog: 6px; --nf-radius-pill: 20px;
             --nf-ls-label: 0.08em; --nf-ls-wide: 0.1em;
+          }
+          /* ═══ READING MODE OVERRIDES — lower-stimulation writing environment ═══ */
+          body.nf-theme-reading .nf-root { font-family: var(--nf-font-body); }
+          body.nf-theme-reading .nf-editor, body.nf-theme-reading .nf-chat-bubble-content, body.nf-theme-reading .nf-prose-text {
+            font-family: var(--nf-font-reading) !important;
+            line-height: 1.85 !important;
+            letter-spacing: 0.015em;
+            font-size: 15px;
+          }
+          body.nf-theme-reading .nf-chapter-body, body.nf-theme-reading [contenteditable="true"] {
+            line-height: 1.85 !important;
+            letter-spacing: 0.01em;
+          }
+          body.nf-theme-reading .nf-card { border-width: 0.5px; }
+          body.nf-theme-reading .nf-input, body.nf-theme-reading .nf-select, body.nf-theme-reading .nf-field-input {
+            border-width: 1px;
+            border-color: rgba(42,38,32,0.10);
+          }
+          body.nf-theme-reading .nf-btn, body.nf-theme-reading .nf-btn-ghost { border-width: 1px; border-color: rgba(42,38,32,0.10); }
+          body.nf-theme-reading .nf-tabs-sidebar, body.nf-theme-reading .nf-chat-bubble { border-width: 0.5px; }
+          body.nf-theme-reading .nf-word-count, body.nf-theme-reading .nf-meta-text { opacity: 0.65; }
+          body.nf-theme-reading [contenteditable="true"]:empty::before { content: attr(data-placeholder); color: var(--nf-editor-placeholder); }
+          body.nf-theme-reading [contenteditable="true"] { caret-color: var(--nf-accent); animation: none !important; }
+          body.nf-theme-reading .nf-cursor-blink { animation: none !important; opacity: 1 !important; }
+          body.nf-theme-reading button svg, body.nf-theme-reading .nf-btn-icon svg { stroke-width: 1.5; opacity: 0.85; }
+          body.nf-theme-reading .nf-btn-icon:hover svg { opacity: 1; }
+          /* Sentence-fade animation used in AI streaming responses */
+          @keyframes nf-sentence-fade-in {
+            from { opacity: 0; transform: translateY(2px); }
+            to { opacity: 1; transform: translateY(0); }
+          }
+          .nf-sentence-fade { animation: nf-sentence-fade-in 0.42s ease-out both; display: inline; }
+          body.nf-theme-reading .nf-sentence-fade { animation-duration: 0.6s; }
+          /* Zen typography — 65ch centered */
+          body.nf-zen-typography .nf-editor {
+            max-width: 65ch !important;
+            margin: 0 auto !important;
+            font-family: var(--nf-font-reading) !important;
+            line-height: 1.9 !important;
+            padding: 48px 24px !important;
+          }
+          body.nf-zen-typography [contenteditable="true"] {
+            max-width: 65ch;
+            margin: 0 auto;
+            font-family: var(--nf-font-reading);
+            line-height: 1.9;
           }
           * { box-sizing: border-box; margin: 0; }
           @keyframes nf-spin { to { transform: rotate(360deg); } }
@@ -15726,7 +17249,7 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
           .nf-tab-btn.active::after { content: ''; position: absolute; bottom: 4px; left: 50%; transform: translateX(-50%); width: 3px; height: 3px; background: var(--nf-accent); border-radius: 50%; opacity: 0.7; animation: nf-glyph-breathe-slow 3s infinite; }
           .nf-tab-btn:not(.active)::after { content: ''; position: absolute; bottom: 4px; left: 50%; transform: translateX(-50%); width: 2px; height: 2px; background: var(--nf-text-muted); border-radius: 50%; opacity: 0; transition: opacity 0.3s; }
           .nf-tab-btn:not(.active):hover::after { opacity: 0.3; }
-          .nf-chapter-item { position: relative; }
+          .nf-chapter-item { position: relative; content-visibility: auto; contain-intrinsic-size: auto 50px; }
           .nf-chapter-item.active::before { content: ''; position: absolute; left: 0; top: 50%; transform: translateY(-50%); width: 3px; height: 60%; background: var(--nf-accent); border-radius: 0 2px 2px 0; opacity: 0.7; animation: nf-glyph-breathe-slow 3s infinite; }
           /* G31-G50: Decorative glyphs — Japandi motifs */
           .nf-page-title { position: relative; display: inline-block; }
@@ -15796,8 +17319,24 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
           .nf-clack { animation: nf-clack 0.3s ease-out; }
           .nf-shake { animation: nf-shake 0.3s ease-out; }
           .nf-cursor-blink { animation: nf-blink 0.8s step-end infinite; color: var(--nf-accent); margin-left: 1px; }
+          /* Sentence-fade variant and bubble styling for AI streaming */
+          .nf-sentence-fade-in { animation: nf-sentence-fade-in 400ms ease-out both; display: inline; }
+          .nf-bubble-sentence-fade { line-height: 1.8; letter-spacing: 0.01em; }
+          body.nf-theme-reading .nf-bubble-sentence-fade { line-height: 2.0; letter-spacing: 0.015em; font-size: 15px; }
+          /* Soft non-blinking cursor for Reading Mode */
+          .nf-cursor-soft { color: var(--nf-accent); margin-left: 1px; opacity: 0.5; animation: nf-soft-pulse 2.2s ease-in-out infinite; }
+          @keyframes nf-soft-pulse { 0%, 100% { opacity: 0.35; } 50% { opacity: 0.65; } }
           /* G16: Theme transitions on key containers */
-          .nf-root { width: 100vw; height: 100vh; display: flex; font-family: var(--nf-font-body); background: var(--nf-bg-deep); color: var(--nf-text); overflow: hidden; font-size: 13px; transition: background 0.3s ease, color 0.3s ease; }
+
+          /* Mobile hover-lock prevention — disable all :hover rules when device lacks hover capability */
+          @media (hover: none) {
+            *:hover { background: inherit !important; color: inherit !important; border-color: inherit !important; box-shadow: inherit !important; transform: none !important; opacity: inherit !important; }
+          }
+          /* Mobile hover-lock prevention */
+          .nf-root { width: 100vw; height: 100vh; display: flex; font-family: var(--nf-font-body); background: var(--nf-bg-deep); color: var(--nf-text); overflow: hidden; font-size: 13px; transition: background 0.3s ease, color 0.3s ease; overscroll-behavior: none; -webkit-tap-highlight-color: transparent; }
+          .nf-btn, .nf-btn-icon, .nf-btn-icon-sm, .nf-btn-micro, button, [role="button"] { touch-action: manipulation; }
+          @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; scroll-behavior: auto !important; } }
+          @media (prefers-contrast: more) { :root { --nf-border: #888; --nf-text-muted: #ccc; } }
           .nf-sidebar, .nf-tab-bar, .nf-chapter-sidebar, .nf-ai-panel, .nf-tab-ai-panel,
           .nf-editor-contenteditable, .nf-card, .nf-stat-card, .nf-btn, .nf-input, .nf-textarea, .nf-select,
           .nf-chat-bubble, .nf-dialog-bg, .nf-toolbar-bg { transition: background-color 0.3s ease, color 0.3s ease, border-color 0.3s ease; }
@@ -15857,7 +17396,7 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
           .nf-card:hover { transform: rotate(-0.2deg) translateY(-1px); box-shadow: var(--nf-shadow); }
           .nf-card:active { transform: scale(0.995); transition-duration: 0.1s; }
           .nf-card-title { font-size: 14px; word-break: break-word; font-family: var(--nf-font-display); font-weight: 500; color: var(--nf-text); margin-bottom: 12px; letter-spacing: 0.01em; }
-          .nf-polaroid { background: var(--nf-bg-raised); border: 1px solid var(--nf-border); border-radius: 2px; padding: 8px 8px 16px; transition: transform 0.3s cubic-bezier(0.34,1.56,0.64,1), box-shadow 0.3s, border-color 0.2s; cursor: pointer; }
+          .nf-polaroid { background: var(--nf-bg-raised); border: 1px solid var(--nf-border); border-radius: 2px; padding: 8px 8px 16px; transition: transform 0.3s cubic-bezier(0.34,1.56,0.64,1), box-shadow 0.3s, border-color 0.2s; cursor: pointer; content-visibility: auto; contain-intrinsic-size: auto 200px; }
           .nf-polaroid { will-change: transform; }
           .nf-polaroid:hover { transform: rotate(-1deg) translateY(-2px); box-shadow: var(--nf-shadow-lg); }
           .nf-polaroid:active { transform: scale(0.97) rotate(0deg); transition-duration: 0.1s; }
@@ -15866,6 +17405,7 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
           .nf-field { margin-bottom: 10px; }
           .nf-label { display: block; font-size: 10px; font-weight: 700; color: var(--nf-text-dim); margin-bottom: 5px; text-transform: uppercase; letter-spacing: 0.1em; font-family: var(--nf-font-body); }
           .nf-input { width: 100%; padding: 9px 12px; background: var(--nf-bg-surface); border: 1px solid var(--nf-border); border-radius: var(--nf-radius-sm); color: var(--nf-text); font-size: 13px; outline: none; font-family: var(--nf-font-body); transition: border-color 0.2s, background 0.2s; }
+          .nf-input-compact { font-size: 11px; padding: 6px 8px; }
           .nf-input:hover { border-color: var(--nf-text-muted); }
           .nf-input:focus { border-color: var(--nf-border-focus); background: var(--nf-bg); }
           .nf-textarea { width: 100%; min-height: 76px; max-height: 400px; padding: 10px 12px; background: var(--nf-bg-surface); border: 1px solid var(--nf-border); border-radius: var(--nf-radius-sm); color: var(--nf-text); font-size: 13px; line-height: 1.6; resize: vertical; outline: none; font-family: var(--nf-font-prose); transition: border-color 0.2s, background 0.2s; }
@@ -15906,7 +17446,7 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
           .nf-chapter-item-meta { font-size: 10px; color: var(--nf-text-muted); margin-top: 2px; opacity: 0.6; }
           
           .nf-editor-area { flex: 1; display: flex; flex-direction: column; overflow: hidden; position: relative; }
-          .nf-chapter-header { padding: 8px 18px; border-bottom: 1px solid var(--nf-border); display: flex; align-items: center; gap: 10px; background: var(--nf-bg-raised); flex-wrap: wrap; }
+          .nf-chapter-header { padding: 8px 18px; border-bottom: 1px solid var(--nf-border); display: flex; align-items: center; gap: 10px; background: var(--nf-bg-raised); flex-wrap: wrap; position: sticky; top: 0; z-index: 10; }
           .nf-header-actions { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
           .nf-chapter-title-input { flex: 1; min-width: 120px; background: none; border: none; border-bottom: 1px solid transparent; color: var(--nf-text); font-size: 18px; font-weight: 400; font-family: var(--nf-font-display); outline: none; letter-spacing: 0.01em; transition: border-color 0.2s; padding-bottom: 2px; }
           .nf-chapter-title-input:hover { border-bottom-color: var(--nf-border); }
@@ -16276,6 +17816,7 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
             .nf-polaroid:active { transform: scale(0.95); transition-duration: 0.06s; }
             /* Form fields — iOS-safe sizing (16px prevents zoom) */
             .nf-input { min-height: 44px; font-size: 16px; padding: 10px 12px; border-radius: 8px; }
+            .nf-input-compact { font-size: 16px !important; padding: 10px 12px !important; min-height: 44px !important; }
             .nf-select { min-height: 44px; font-size: 16px; padding: 10px; border-radius: 8px; }
             .nf-textarea { min-height: 60px; font-size: 16px; padding: 10px 12px; border-radius: 8px; }
             .nf-label { font-size: 10px; margin-bottom: 4px; }
@@ -16609,7 +18150,7 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
                 <SaveIndicator status={saveStatus} fileLinked={fileLinked} />
               </div>
             )}
-            <div style={{ flex: 1, display: "flex", overflow: "hidden" }}>
+            <main id="nf-main-content" role="main" style={{ flex: 1, display: "flex", overflow: "hidden" }}>
               {activeTab === "write" && renderWrite()}
               {activeTab === "characters" && renderCharacters()}
               {activeTab === "world" && renderWorld()}
@@ -16618,7 +18159,7 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
               {activeTab === "images" && renderImages()}
               {activeTab === "memory" && renderMemory()}
               {activeTab === "settings" && renderSettings()}
-            </div>
+            </main>
           </div>
         ) : (
           <div className="nf-welcome">
@@ -16629,6 +18170,22 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
 
         {toast && <Toast key={toast.key} message={toast.message} type={toast.type} onDone={() => setToast(null)} />}
         {confirmDialog && <ConfirmDialog message={confirmDialog.message} onConfirm={confirmDialog.onConfirm} onCancel={() => setConfirmDialog(null)} confirmLabel={confirmDialog.confirmLabel} />}
+        {findReplaceOpen && project && (
+          <FindReplaceModal
+            project={project}
+            onClose={() => setFindReplaceOpen(false)}
+            onUpdate={(updatedProject, totalReplaced) => {
+              if (totalReplaced === 0) {
+                showToast("No replacements made", "info");
+                return;
+              }
+              setProjects(prev => prev.map(p => p.id === updatedProject.id ? updatedProject : p));
+              setFindReplaceOpen(false);
+              showToast(`Replaced ${totalReplaced} occurrence${totalReplaced !== 1 ? "s" : ""}`, "success");
+              forceRepopulateEditor();
+            }}
+          />
+        )}
 		{flushConfirm && (
           <div style={{ position: "fixed", inset: 0, zIndex: 9999, background: "rgba(0,0,0,0.55)", backdropFilter: "blur(4px)", display: "flex", alignItems: "center", justifyContent: "center", animation: "nf-fadeIn 0.12s ease-out" }} onClick={() => setFlushConfirm(false)}>
             <div role="button" tabIndex={0} onClick={e => e.stopPropagation()} style={{ background: "var(--nf-dialog-bg)", border: "1px solid var(--nf-error-border)", borderRadius: 3, padding: "28px 32px", maxWidth: 420, width: "90%", boxShadow: "var(--nf-shadow-lg)" }}>
