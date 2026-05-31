@@ -875,7 +875,7 @@ YOUR OUTPUT FORMAT (follow this EXACTLY):
 
 (Include this sentence) You must decide your choices on 1-7 sequentially & completely, no summarizing) before rendering! See this instructions: For next scene, still adhering to the character’s profile, do this:
 
-(1) CHARACTER APPEARANCE: For each character, describe their EXACT physical appearance using their look-alike as the face reference. Include: build, height, skin tone, expression in THIS scene (no hair and no face description, only mention look alike). Write it as if describing a real person to a photographer. You must always mention the look-alike names for each character. VISUAL ONLY — no sound, no smell, no sensation.
+(1) CHARACTER APPEARANCE: For each character, describe their EXACT physical appearance using their look-alike as the face reference (describe everything but omit out face details except for the lookalike name). Include: build, height, skin tone, expression in THIS scene (no hair and no face description, only mention the look alike name). Write it as if describing a real person to a photographer. You must always mention the look-alike names for each character. VISUAL ONLY — no sound, no smell, no sensation.
 
 (2) CLOTHING: USE THE CLOTHING FROM THE WORLD VIEW — the world view tracks what characters are wearing scene-by-scene. Find the matching scene and use those exact clothing details. Do NOT invent new outfits. Every detail must be something a camera can see: color, fabric, fit, condition. Never describe what's under the clothing. Treats nudity like this: add a foreground blurred item(s) that blocks that specific sensitive body part without mentioning those body part(s).
 
