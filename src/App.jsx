@@ -1111,44 +1111,85 @@ const _sliceHeadAtBoundary = (text, maxLen) => {
 };
 
 // Robust character detection — word-boundary, aliases, length-prioritized
+// Common English words that are also frequently used as names — matching these case-insensitively
+// caused massive false positives ("grace", "will", "rose", "dawn", "art"...). We only treat such a
+// token as a character mention when it appears Capitalized in the prose (i.e. used as a proper noun).
+const _COMMON_WORD_NAMES = new Set([
+  "will","grace","rose","dawn","art","hope","faith","joy","mark","bill","jack","rich","mary",
+  "summer","autumn","sky","river","brook","fern","ivy","holly","jasmine","crystal","amber","ruby",
+  "pearl","violet","daisy","lily","iris","heather","june","may","jay","drew","reed","cliff","dale",
+  "frank","earl","red","grey","gray","brown","stone","king","price","love","angel","melody","star",
+]);
+
+// Build the set of characters explicitly mentioned in `text`.
+// Strategy (in priority order, designed to AVOID false positives):
+//   1. Full name (case-insensitive) or any alias → unambiguous, always counts.
+//   2. A single name-part (first OR last) → counts ONLY if that token is unique to one character
+//      AND (the token is capitalized in the text OR it isn't a common English word).
 const _detectMentionedCharacters = (text, characters) => {
   if (!text || !characters?.length) return new Set();
   const mentioned = new Set();
+
+  const escape = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const testWord = (token, caseSensitive) => {
+    if (!token || token.length < 2) return false;
+    try {
+      const re = new RegExp(`\\b${escape(token)}\\b`, caseSensitive ? "" : "i");
+      return re.test(text);
+    } catch { return false; }
+  };
+
+  // Count how many characters lay claim to each name-part token, so we can detect ambiguity
+  // (e.g. two characters both named "John ...", or a surname shared by a family).
+  const partOwners = new Map(); // token(lowercased) -> Set of character ids
+  const claim = (tok, id) => {
+    if (!tok) return;
+    const k = tok.toLowerCase();
+    if (!partOwners.has(k)) partOwners.set(k, new Set());
+    partOwners.get(k).add(id);
+  };
   for (const c of characters) {
     if (!c.name) continue;
-    // Collect all searchable names: full name, first name, last name, aliases
-    const namesSet = new Set();
-    const fullName = c.name.trim().toLowerCase();
-    namesSet.add(fullName);
-    const nameParts = c.name.trim().split(/\s+/);
-    if (nameParts.length > 0) namesSet.add(nameParts[0].toLowerCase());
-    if (nameParts.length > 1) namesSet.add(nameParts[nameParts.length - 1].toLowerCase());
+    const parts = c.name.trim().split(/\s+/);
+    if (parts[0]) claim(parts[0], c.id);
+    if (parts.length > 1) claim(parts[parts.length - 1], c.id);
+  }
+
+  for (const c of characters) {
+    if (!c.name) continue;
+
+    // 1) Full name (≥ 2 chars) — case-insensitive, unambiguous.
+    const full = c.name.trim();
+    if (full.length >= 2 && testWord(full, false)) { mentioned.add(c.id); continue; }
+
+    // Aliases — treat like full names (the writer chose them deliberately).
+    let aliasHit = false;
     if (c.aliases) {
-      const aliasList = Array.isArray(c.aliases) ? c.aliases : String(c.aliases).split(",");
-      aliasList.map(a => String(a).trim().toLowerCase()).filter(a => a.length > 0).forEach(a => namesSet.add(a));
+      const aliasList = (Array.isArray(c.aliases) ? c.aliases : String(c.aliases).split(","))
+        .map(a => String(a).trim()).filter(a => a.length >= 2);
+      for (const a of aliasList) {
+        // Short aliases (≤3) require capitalization to avoid common-word collisions.
+        const cs = a.length <= 3 || _COMMON_WORD_NAMES.has(a.toLowerCase());
+        if (testWord(a, cs)) { aliasHit = true; break; }
+      }
     }
-    // FIX 1.7: Sort by length descending — longer names are more unique, try them first
-    const sortedNames = [...namesSet].filter(n => n.length >= 2).sort((a, b) => b.length - a.length);
-    for (const name of sortedNames) {
-      if (name.length <= 3) {
-        // Short names: require exact case match to avoid "Art" matching "art"
-        const originalCaseName = [
-          c.name.trim().split(/\s+/)[0],
-          ...(c.aliases ? (Array.isArray(c.aliases) ? c.aliases : String(c.aliases).split(",")).map(a => String(a).trim()) : [])
-        ].find(n => n.toLowerCase() === name);
-        if (originalCaseName) {
-          const caseRegex = new RegExp(`\\b${originalCaseName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`);
-          if (caseRegex.test(text)) { mentioned.add(c.id); break; }
-        }
-      } else {
-		const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-		if (!escaped || escaped.length === 0) continue;
-		try {
-		  const regex = new RegExp(`\\b${escaped}\\b`, 'i');
-		  if (regex.test(text)) { mentioned.add(c.id); break; }
-		} catch(e) { continue; }
-	  }
+    if (aliasHit) { mentioned.add(c.id); continue; }
+
+    // 2) Single name-part fallback — only if unambiguous (owned by exactly one character).
+    const parts = full.split(/\s+/);
+    const candidates = [];
+    if (parts[0]) candidates.push(parts[0]);
+    if (parts.length > 1) candidates.push(parts[parts.length - 1]);
+    let hit = false;
+    for (const tok of candidates) {
+      if (tok.length < 2) continue;
+      const owners = partOwners.get(tok.toLowerCase());
+      if (!owners || owners.size !== 1) continue; // ambiguous → skip (prevents "Smith" cross-matches)
+      // Capitalized in prose, OR not a common word and length ≥ 4.
+      const needsCap = tok.length <= 3 || _COMMON_WORD_NAMES.has(tok.toLowerCase());
+      if (testWord(tok, needsCap)) { hit = true; break; }
     }
+    if (hit) mentioned.add(c.id);
   }
   return mentioned;
 };
@@ -1209,17 +1250,16 @@ const _detectRelevantWorld = (text, worldEntries) => {
 	}
 	  }
 	}
-    // Strategy 4: Description-based detection — extract key noun phrases from description
-    // and check if they appear in the text (catches entries referenced by description concepts)
+    // Strategy 4: Description-based detection — only as a LAST resort, and deliberately strict.
+    // The old version matched on any 2 words of 6+ chars from the description, which pulled in
+    // unrelated entries that merely shared generic words ("ancient", "wooden", "morning"). We now
+    // require several long, distinctive words to co-occur before calling an entry relevant.
     if (!matched && w.description) {
-      // Extract significant words from description (5+ chars, not common words)
       const descWords = w.description.toLowerCase().split(/[\s,.;:!?()[\]{}"']+/)
-        .filter(dw => dw.length >= 6 && !skipWords.has(dw));
-      // Deduplicate and take the most distinctive words (first 8)
-      const uniqueDescWords = [...new Set(descWords)].slice(0, 8);
-      // If 2+ distinctive description words appear in the text, consider it relevant
+        .filter(dw => dw.length >= 8 && !skipWords.has(dw));
+      const uniqueDescWords = [...new Set(descWords)].slice(0, 12);
       const descMatches = uniqueDescWords.filter(dw => lowerText.includes(dw)).length;
-      if (descMatches >= 2) matched = true;
+      if (descMatches >= 3) matched = true;
     }
 
     if (matched) relevant.add(w.id);
@@ -1249,6 +1289,50 @@ const _resolveCharId = (nameOrId, characters) => {
 // from a POV string, leaving just the character name (if any).
 const POV_PREFIX_RE = /^(Third person limited|Third person deep|Third person omniscient|First person|First person present tense|Second person|Multiple POV[^-—:]*|Dual POV[^-—:]*)\s*[-—:]\s*/i;
 const _stripPovPrefix = (povString) => (povString || "").replace(POV_PREFIX_RE, "").trim();
+
+// ═══ CANONICAL FIELD SCHEMAS — single source of truth ═══
+// Every place that lists "what fields exist" (AI fill, bulk-gen, system prompts, empty-field
+// detection) must reference these so the lists can never drift apart. Drift was causing the
+// AI to never be asked for — or to silently drop — fields that the editor actually renders.
+const CHARACTER_TEXT_FIELDS = [
+  "gender","age","pronouns","orientation","aliases","occupation","height","build","tags",
+  "appearance","personality","backstory","desires","shortTermGoals","longTermGoals",
+  "speechPattern","voiceSamples","habits","fears","flaws","strengths","skills",
+  "internalConflict","externalConflict","signatureItems","secrets","hiddenSecrets",
+  "allegiances","arc","canonNotes",
+];
+// World fields the editor renders, keyed by category. "description"/"keywords" + the two common
+// fields (history, culturalNorms) apply to every category; category-specific fields follow.
+const WORLD_COMMON_FIELDS = ["description","keywords","history","culturalNorms"];
+const WORLD_CATEGORY_FIELDS = {
+  "Location": ["atmosphere","sensoryDetails","subLocations","dangers","rules","population","resources"],
+  "Rule / Law": ["enforcement","scope","loopholes","publicOpinion","enactedBy"],
+  "Culture": ["values","customs","socialHierarchy","taboos","artForms","dialect","population"],
+  "Organization": ["orgPurpose"],
+  "Magic System": ["magicSource","magicRules","magicCost","magicRarity","magicTypes","magicPerception","magicPractitioners"],
+  "Technology": ["techFunction","techMechanism","techAvailability","techLimitations","techImpact","techCreator"],
+  "History": ["historyDate","historyFigures","historyCauses","historyConsequences","historyLegacy","historyDisputed"],
+  "Flora / Fauna": ["habitat","floraAppearance","behavior","floraUses","floraRarity","floraCultural"],
+  "Language": ["langSpeakers","langWriting","langPhrases","langGrammar","langRelated","langStatus"],
+  "Religion": ["deities","coreBeliefs","rituals","sacredPlaces","clergy","heresies","followers"],
+  "Other": ["additionalNotes"],
+};
+// Full fillable text-field list for a given world category (common + category-specific).
+const worldFieldsForCategory = (cat) => [
+  ...WORLD_COMMON_FIELDS.filter(f => f !== "history" && f !== "culturalNorms"),
+  ...(WORLD_CATEGORY_FIELDS[cat] || WORLD_CATEGORY_FIELDS["Location"]),
+  "history","culturalNorms",
+];
+// Every world text field across all categories (used by bulk-gen which doesn't know category yet).
+const ALL_WORLD_TEXT_FIELDS = [...new Set([
+  "description","keywords","atmosphere","sensoryDetails","subLocations","dangers","rules",
+  "population","resources","orgPurpose","history","culturalNorms",
+  ...Object.values(WORLD_CATEGORY_FIELDS).flat(),
+])];
+const RELATIONSHIP_TEXT_FIELDS = [
+  "dynamic","chemistry","conflictSource","sharedSecrets","keyScenes","terms","taboos",
+  "progression","char1Perspective","char2Perspective","evolutionTimeline","notes",
+];
 
 // ─── CROSS-REFERENCE ENGINE: derives all interconnected data from project ───
 const _deriveCrossRefs = (project, charId, opts = {}) => {
@@ -2468,6 +2552,7 @@ const ContextEngine = {
           }
           // Include category-specific details for relevant entries
           if (w.category === "Location" || !w.category) {
+            if (w.geoPin && w.geoPin.label) entry += ` | Real-world basis: ${_truncateAtBoundary(w.geoPin.label, 120)}`;
             if (w.atmosphere) entry += ` | Atmosphere: ${w.atmosphere}`;
             if (w.sensoryDetails) entry += ` | Sensory: ${_truncateAtBoundary(w.sensoryDetails, 200)}`;
             if (w.dangers) entry += ` | Dangers: ${w.dangers}`;
@@ -3745,9 +3830,27 @@ const runSpecialist = async ({ key, project, chapterIdx, memoryIndex, settings, 
 // ═══ THE MAIN AGENT RUNTIME ═══
 const AgentRuntime = {
   _briefCache: new Map(),
+  // Cheap, order-independent string hash for fingerprinting content.
+  _hash(str) {
+    let h = 5381;
+    for (let i = 0; i < str.length; i++) h = ((h << 5) + h + str.charCodeAt(i)) | 0;
+    return (h >>> 0).toString(36);
+  },
   _cacheKeyFor(key, project, chapterIdx) {
     const curCh = project.chapters?.[chapterIdx];
-    // Cache invalidates when chapter content, notes, or craft controls change
+    // Content fingerprint — busts the cache when ANY relevant entity is edited in place,
+    // not just when counts change. Previously edits that kept counts the same returned stale briefs.
+    const charFp = this._hash(JSON.stringify((project.characters || []).map(c =>
+      [c.id, c.name, c.role, c.personality, c.speechPattern, c.voiceSamples, c.desires, c.fears,
+       c.arc, c.status, c.currentEmotionalState, c.knowledgeState, c.obligationsOwed,
+       c.backstoryRevealed, c.secretRevealed, c.hasAppeared])));
+    const worldFp = this._hash(JSON.stringify((project.worldBuilding || []).map(w =>
+      [w.id, w.name, w.category, w.description, w.atmosphere, w.frequentCharacters])));
+    const relFp = this._hash(JSON.stringify((project.relationships || []).map(r =>
+      [r.id, r.char1, r.char2, r.dynamic, r.status, r.tension, r.tensionType, r.trustLevel,
+       r.progression, r.chapterEvolution])));
+    const plotFp = this._hash(JSON.stringify((project.plotOutline || []).map(p =>
+      [p.chapter, p.title, p.summary, p.sceneType, p.pov, p.date, p.characters, p.locations])));
     const sig = [
       key, chapterIdx,
       (curCh?.content || "").length,
@@ -3756,9 +3859,8 @@ const AgentRuntime = {
       curCh?.sensoryPalette || "",
       curCh?.subtextNotes || "",
       curCh?.tensionLevel || 5,
-      project.characters?.length,
-      project.worldBuilding?.length,
-      project.relationships?.length,
+      curCh?.pov || "",
+      charFp, worldFp, relFp, plotFp,
     ].join("|");
     return sig;
   },
@@ -3834,20 +3936,15 @@ const AgentRuntime = {
 Return STRICTLY valid JSON:
 {
   "characterUpdates": [
-    { "name": "Elena", "currentEmotionalState": "...", "obligationsOwed": "...", "knowledgeState": "...", "backstoryRevealed": false, "secretRevealed": false, "hasAppeared": true, "status": "alive" }
+    { "id": "<character id from the list>", "name": "Elena", "currentEmotionalState": "...", "obligationsOwed": "...", "knowledgeState": "...", "backstoryRevealed": false, "secretRevealed": false, "hasAppeared": true, "status": "alive" }
   ],
   "relationshipUpdates": [
-    { "char1": "Elena", "char2": "Marcus", "status": "...", "tension": "...", "tensionType": "...", "dynamic": "...", "trustLevel": "...", "chemistry": "...", "powerDynamic": "...", "char1Perspective": "...", "char2Perspective": "...", "sharedSecrets": "...", "progression": "..." }
+    { "char1": "<character id>", "char2": "<character id>", "status": "...", "tension": "...", "tensionType": "...", "dynamic": "...", "trustLevel": "...", "chemistry": "...", "powerDynamic": "...", "char1Perspective": "...", "char2Perspective": "...", "sharedSecrets": "...", "progression": "..." }
   ],
   "chapterState": { "chapterMomentum": 0-10, "emotionalAftertaste": "...", "chapterEndHookScore": 0-10 }
 }
-Only include fields that meaningfully changed in this chapter. Be precise and concise.`,
-        user: `CHAPTER CONTENT:\n${generatedContent}\n\nCHARACTER NAMES:\n${JSON.stringify((project.characters || []).filter(c => c.name && !c.isBulk).map(c => c.name), null, 2)}\n\nEXISTING RELATIONSHIPS:\n${JSON.stringify((project.relationships || []).map(r => {
-          const chars = project.characters || [];
-          const c1 = chars.find(c => c.id === r.char1);
-          const c2 = chars.find(c => c.id === r.char2);
-          return { char1: c1?.name, char2: c2?.name };
-        }), null, 2)}`,
+Always include the "id" for each character and use character IDs for char1/char2 (copy them exactly from the lists below). Only include fields that meaningfully changed in this chapter. Be precise and concise.`,
+        user: `CHAPTER CONTENT:\n${generatedContent}\n\nCHARACTERS (use these exact ids):\n${JSON.stringify((project.characters || []).filter(c => c.name && !c.isBulk).map(c => ({ id: c.id, name: c.name })), null, 2)}\n\nEXISTING RELATIONSHIPS (char1/char2 are ids):\n${JSON.stringify((project.relationships || []).map(r => ({ char1: r.char1, char2: r.char2 })), null, 2)}`,
       },
     };
     const p = prompts[key];
@@ -3860,11 +3957,36 @@ Only include fields that meaningfully changed in this chapter. Be precise and co
   applyStateUpdates(project, chapterIdx, updates) {
     if (!project || !updates) return project;
     const next = { ...project };
+    const allChars = project.characters || [];
+    // Resolve an AI-provided name/id reference to a single character, SAFELY.
+    // Order: exact id → exact full name → exact alias → UNAMBIGUOUS first name. Ambiguous → null
+    // (so we never write state onto the wrong same-named character).
+    const resolveChar = (ref) => {
+      if (!ref) return null;
+      const r = String(ref).trim();
+      const rl = r.toLowerCase();
+      const byId = allChars.find(c => c.id === r);
+      if (byId) return byId;
+      const byFull = allChars.filter(c => c.name && c.name.toLowerCase() === rl);
+      if (byFull.length === 1) return byFull[0];
+      if (byFull.length > 1) return null; // ambiguous full-name → bail
+      const byAlias = allChars.filter(c => {
+        if (!c.aliases) return false;
+        const list = (Array.isArray(c.aliases) ? c.aliases : String(c.aliases).split(",")).map(a => String(a).trim().toLowerCase());
+        return list.includes(rl);
+      });
+      if (byAlias.length === 1) return byAlias[0];
+      const byFirst = allChars.filter(c => c.name && c.name.trim().split(/\s+/)[0].toLowerCase() === rl);
+      if (byFirst.length === 1) return byFirst[0];
+      return null; // ambiguous or unknown
+    };
     // Update characters
     if (Array.isArray(updates.characterUpdates)) {
-      const newChars = [...(project.characters || [])];
+      const newChars = [...allChars];
       updates.characterUpdates.forEach(upd => {
-        const idx = newChars.findIndex(c => c.name && upd.name && c.name.toLowerCase() === upd.name.toLowerCase());
+        const target = resolveChar(upd.id || upd.name);
+        if (!target) return;
+        const idx = newChars.findIndex(c => c.id === target.id);
         if (idx < 0) return;
         const keys = ["currentEmotionalState", "obligationsOwed", "knowledgeState", "backstoryRevealed", "secretRevealed", "hasAppeared", "status"];
         const patch = { lastUpdatedChapter: chapterIdx };
@@ -3876,10 +3998,9 @@ Only include fields that meaningfully changed in this chapter. Be precise and co
     // Update relationships — stored as per-chapter history
     if (Array.isArray(updates.relationshipUpdates)) {
       const newRels = [...(project.relationships || [])];
-      const chars = next.characters || project.characters || [];
       updates.relationshipUpdates.forEach(upd => {
-        const c1 = chars.find(c => c.name && upd.char1 && c.name.toLowerCase() === upd.char1.toLowerCase());
-        const c2 = chars.find(c => c.name && upd.char2 && c.name.toLowerCase() === upd.char2.toLowerCase());
+        const c1 = resolveChar(upd.char1);
+        const c2 = resolveChar(upd.char2);
         if (!c1 || !c2) return;
         const idx = newRels.findIndex(r =>
           (r.char1 === c1.id && r.char2 === c2.id) || (r.char1 === c2.id && r.char2 === c1.id)
@@ -7826,6 +7947,163 @@ const ModelSelector = memo(({ apiKey, value, onChange, label = "Model" }) => {
   );
 });
 
+// ─── REAL-WORLD MAP (Leaflet + OpenStreetMap — free, no API key) ───
+// Lazy-loads Leaflet from cdnjs on first use. Lets the writer pin a real location for a world
+// entry (geoPin = { lat, lng, zoom, label }). Search uses the free Nominatim geocoder.
+let _leafletLoadPromise = null;
+const _loadLeaflet = () => {
+  if (typeof window !== "undefined" && window.L) return Promise.resolve(window.L);
+  if (_leafletLoadPromise) return _leafletLoadPromise;
+  _leafletLoadPromise = new Promise((resolve, reject) => {
+    try {
+      // CSS
+      if (!document.querySelector('link[data-leaflet]')) {
+        const link = document.createElement("link");
+        link.rel = "stylesheet";
+        link.href = "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css";
+        link.setAttribute("data-leaflet", "1");
+        document.head.appendChild(link);
+      }
+      // JS
+      const existing = document.querySelector('script[data-leaflet]');
+      if (existing) { existing.addEventListener("load", () => resolve(window.L)); return; }
+      const script = document.createElement("script");
+      script.src = "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js";
+      script.async = true;
+      script.setAttribute("data-leaflet", "1");
+      script.onload = () => resolve(window.L);
+      script.onerror = () => reject(new Error("Failed to load map library"));
+      document.body.appendChild(script);
+    } catch (e) { reject(e); }
+  });
+  return _leafletLoadPromise;
+};
+
+const LocationMap = memo(({ pin, onChange }) => {
+  const mapElRef = useRef(null);
+  const mapRef = useRef(null);
+  const markerRef = useRef(null);
+  const [status, setStatus] = useState("loading"); // loading | ready | error
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState(null);
+  const [searching, setSearching] = useState(false);
+  const onChangeRef = useRef(onChange);
+  useEffect(() => { onChangeRef.current = onChange; }, [onChange]);
+
+  // Init map once Leaflet is loaded
+  useEffect(() => {
+    let cancelled = false;
+    _loadLeaflet().then((L) => {
+      if (cancelled || !mapElRef.current || mapRef.current) return;
+      const startLat = pin?.lat ?? 51.505;
+      const startLng = pin?.lng ?? -0.09;
+      const startZoom = pin?.zoom ?? (pin ? 13 : 2);
+      const map = L.map(mapElRef.current, { attributionControl: true, scrollWheelZoom: true }).setView([startLat, startLng], startZoom);
+      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        maxZoom: 19,
+        attribution: '&copy; OpenStreetMap contributors',
+      }).addTo(map);
+      mapRef.current = map;
+
+      const placeMarker = (lat, lng) => {
+        if (markerRef.current) { markerRef.current.setLatLng([lat, lng]); }
+        else {
+          markerRef.current = L.marker([lat, lng], { draggable: true }).addTo(map);
+          markerRef.current.on("dragend", () => {
+            const ll = markerRef.current.getLatLng();
+            onChangeRef.current?.({ lat: ll.lat, lng: ll.lng, zoom: map.getZoom(), label: pin?.label || "" });
+          });
+        }
+      };
+      if (pin && typeof pin.lat === "number") placeMarker(pin.lat, pin.lng);
+
+      map.on("click", (e) => {
+        placeMarker(e.latlng.lat, e.latlng.lng);
+        onChangeRef.current?.({ lat: e.latlng.lat, lng: e.latlng.lng, zoom: map.getZoom(), label: pin?.label || "" });
+      });
+
+      // expose for search-result clicks
+      mapRef.current._nfPlaceMarker = placeMarker;
+      // Leaflet needs a size recalculation after mount inside flex/grid containers
+      setTimeout(() => { try { map.invalidateSize(); } catch {} }, 60);
+      setStatus("ready");
+    }).catch(() => { if (!cancelled) setStatus("error"); });
+    return () => {
+      cancelled = true;
+      if (mapRef.current) { try { mapRef.current.remove(); } catch {} mapRef.current = null; markerRef.current = null; }
+    };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const runSearch = useCallback(async () => {
+    const q = query.trim();
+    if (!q) return;
+    setSearching(true); setResults(null);
+    try {
+      const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&limit=5&q=${encodeURIComponent(q)}`, {
+        headers: { "Accept": "application/json" },
+      });
+      if (!res.ok) throw new Error("search failed");
+      const data = await res.json();
+      setResults(Array.isArray(data) ? data : []);
+    } catch { setResults([]); }
+    finally { setSearching(false); }
+  }, [query]);
+
+  const pickResult = (r) => {
+    const lat = parseFloat(r.lat), lng = parseFloat(r.lon);
+    const map = mapRef.current;
+    if (map) {
+      map.setView([lat, lng], 13);
+      map._nfPlaceMarker?.(lat, lng);
+    }
+    onChangeRef.current?.({ lat, lng, zoom: 13, label: r.display_name || query });
+    setResults(null);
+  };
+
+  if (status === "error") {
+    return (
+      <div style={{ padding: "10px 12px", fontSize: 11, color: "var(--nf-text-muted)", border: "1px solid var(--nf-border)", borderRadius: 3, background: "var(--nf-bg-deep)" }}>
+        Map couldn't load (offline or blocked). You can still store coordinates manually if needed.
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ border: "1px solid var(--nf-border)", borderRadius: 3, overflow: "hidden", background: "var(--nf-bg-deep)" }}>
+      <div style={{ display: "flex", gap: 6, padding: 8, borderBottom: "1px solid var(--nf-border)" }}>
+        <input
+          value={query}
+          onChange={e => setQuery(e.target.value)}
+          onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); runSearch(); } }}
+          placeholder="Search a real place (city, landmark, address)…"
+          className="nf-input" style={{ flex: 1, fontSize: 11, padding: "4px 8px" }} />
+        <button onClick={runSearch} disabled={searching || !query.trim()} className="nf-btn-micro" style={{ fontSize: 11 }}>
+          {searching ? <Spinner /> : "Search"}
+        </button>
+        {pin && (
+          <button onClick={() => { if (markerRef.current && mapRef.current) { try { mapRef.current.removeLayer(markerRef.current); } catch {} markerRef.current = null; } onChangeRef.current?.(null); }}
+            className="nf-btn-micro" style={{ fontSize: 11 }} title="Remove pin">Clear</button>
+        )}
+      </div>
+      {results && (
+        <div style={{ maxHeight: 120, overflow: "auto", borderBottom: "1px solid var(--nf-border)" }}>
+          {results.length === 0 && <div style={{ padding: "6px 10px", fontSize: 11, color: "var(--nf-text-muted)" }}>No matches.</div>}
+          {results.map((r, i) => (
+            <button key={i} onClick={() => pickResult(r)} style={{ display: "block", width: "100%", textAlign: "left", padding: "6px 10px", fontSize: 11, background: "transparent", border: "none", borderBottom: "1px solid var(--nf-border)", color: "var(--nf-text)", cursor: "pointer" }}>
+              {r.display_name}
+            </button>
+          ))}
+        </div>
+      )}
+      <div ref={mapElRef} style={{ height: 240, width: "100%" }} />
+      <div style={{ padding: "5px 10px", fontSize: 11, color: "var(--nf-text-muted)", display: "flex", justifyContent: "space-between", gap: 8 }}>
+        <span>{status === "loading" ? "Loading map…" : "Click the map or drag the pin to set the location."}</span>
+        {pin && typeof pin.lat === "number" && <span style={{ color: "var(--nf-accent-2)" }}>{pin.lat.toFixed(4)}, {pin.lng.toFixed(4)}</span>}
+      </div>
+    </div>
+  );
+});
+
 // ─── SAVE STATUS ───
 const SaveIndicator = memo(({ status, fileLinked }) => {
   const [lastSaved, setLastSaved] = useState(null);
@@ -8379,7 +8657,7 @@ Return as structured JSON with the character data wrapped in { "type": "characte
         if (editingEntityId && project?.characters) {
           const char = project.characters.find(c => c.id === editingEntityId);
           if (char) {
-            const emptyFields = ["gender","age","pronouns","orientation","aliases","occupation","height","build","tags","appearance","personality","backstory","desires","shortTermGoals","longTermGoals","speechPattern","voiceSamples","habits","fears","flaws","strengths","skills","internalConflict","externalConflict","signatureItems","secrets","hiddenSecrets","allegiances","arc","canonNotes"].filter(k => !char[k]);
+            const emptyFields = [...CHARACTER_TEXT_FIELDS].filter(k => !char[k]);
             if (emptyFields.length > 0) {
               actions.push({ label: `Fill ${emptyFields.length} empty fields`, msg: `Fill in these specific empty fields for "${char.name || "this character"}": ${emptyFields.join(", ")}. Respect the dropdown constraints (gender, orientation, role values must match exact spelling from system rules). If the character's role/occupation implies membership in an existing organization from context, include that org's exact name in 'allegiances'. Base suggestions on existing details and genre. Return structured JSON with { "type": "characters", "data": { ... } }.` });
             }
@@ -10928,7 +11206,7 @@ export default function NovelForge() {
     if (type === "character") {
       entity = project.characters?.find(c => c.id === entityId);
       if (!entity?.name) { showToast("Name the character first", "error"); return; }
-      fields = ["gender","age","pronouns","orientation","aliases","occupation","height","build","appearance","personality","backstory","desires","shortTermGoals","longTermGoals","speechPattern","voiceSamples","habits","fears","flaws","strengths","skills","internalConflict","externalConflict","signatureItems","secrets","hiddenSecrets","allegiances","arc","canonNotes","tags"];
+      fields = [...CHARACTER_TEXT_FIELDS];
       contextInfo = ContextEngine.buildTabContext(project, activeChapterIdx, "characters", entityId);
       const emptyFields = fields.filter(f => !entity[f]);
       const filledFields = fields.filter(f => entity[f]).map(f => `${f}: ${entity[f]}`);
@@ -10950,21 +11228,7 @@ CRITICAL REQUIREMENTS:
       entity = project.worldBuilding?.find(w => w.id === entityId);
       if (!entity?.name) { showToast("Name the entry first", "error"); return; }
       const cat = entity.category || "Location";
-      // Category-specific field sets
-      const catFields = {
-        "Location": ["description","keywords","atmosphere","sensoryDetails","subLocations","dangers","rules","population","resources","history"],
-        "Rule / Law": ["description","keywords","enforcement","scope","loopholes","publicOpinion","enactedBy","history"],
-        "Culture": ["description","keywords","values","customs","socialHierarchy","taboos","artForms","dialect","population","history"],
-        "Organization": ["description","keywords","orgPurpose","history","culturalNorms"],
-        "Magic System": ["description","keywords","magicSource","magicRules","magicCost","magicRarity","magicTypes","magicPerception","magicPractitioners"],
-        "Technology": ["description","keywords","techFunction","techMechanism","techAvailability","techLimitations","techImpact","techCreator"],
-        "History": ["description","keywords","historyDate","historyFigures","historyCauses","historyConsequences","historyLegacy","historyDisputed"],
-        "Flora / Fauna": ["description","keywords","habitat","floraAppearance","behavior","floraUses","floraRarity","floraCultural"],
-        "Language": ["description","keywords","langSpeakers","langWriting","langPhrases","langGrammar","langRelated","langStatus"],
-        "Religion": ["description","keywords","deities","coreBeliefs","rituals","sacredPlaces","clergy","heresies","followers"],
-        "Other": ["description","keywords","history"],
-      };
-      fields = catFields[cat] || catFields["Location"];
+      fields = worldFieldsForCategory(cat);
       contextInfo = ContextEngine.buildTabContext(project, activeChapterIdx, "world", entityId);
       const emptyFields = fields.filter(f => !entity[f]);
       const filledFields = fields.filter(f => entity[f]).map(f => `${f}: ${entity[f]}`);
@@ -10984,7 +11248,7 @@ CRITICAL REQUIREMENTS:
       if (!entity) return;
       const c1 = project.characters?.find(c => c.id === entity.char1);
       const c2 = project.characters?.find(c => c.id === entity.char2);
-      fields = ["dynamic","chemistry","conflictSource","sharedSecrets","keyScenes","terms","taboos","progression","char1Perspective","char2Perspective","evolutionTimeline"];
+      fields = RELATIONSHIP_TEXT_FIELDS;
       contextInfo = ContextEngine.buildTabContext(project, activeChapterIdx, "relationships", entityId);
       const emptyFields = fields.filter(f => !entity[f]);
       const filledFields = fields.filter(f => entity[f]).map(f => `${f}: ${entity[f]}`);
@@ -10996,7 +11260,7 @@ CRITICAL REQUIREMENTS:
         method: "POST",
         headers: { "Content-Type": "application/json", "Authorization": `Bearer ${settings.apiKey}`, "HTTP-Referer": window.location.origin, "X-Title": "NovelForge" },
         body: JSON.stringify({
-          model: settings.model,
+          model: settings.tabModels?.[type === "character" ? "characters" : type === "world" ? "world" : "relationships"] || settings.model,
           messages: [
             { role: "system", content: `You are a fiction writing assistant. Fill empty fields with creative, genre-appropriate content.\n\n${contextInfo || ""}\n\nRULES:\n- Return ONLY valid JSON — no markdown, no backticks, no explanation.\n- Only include fields that are currently empty.\n- Be creative and specific.\n- Make content consistent with existing filled fields.` },
             { role: "user", content: prompt },
@@ -11783,65 +12047,79 @@ Then 2-3 sentences describing the specific scene idea, character actions, and em
         if (root) { root.classList.add("nf-clack"); setTimeout(() => root.classList.remove("nf-clack"), 400); }
       }
 
-      // ─── POST-PROCESSORS: run in background after successful fiction generation ───
+      // ─── POST-PROCESSORS: run after successful fiction generation ───
+      // Fixes: (1) sequence so stateUpdater commits BEFORE continuityChecker reads, against fresh
+      // state; (4) include "rewrite" (it can change canon just as much); (7) single owner of
+      // chapterEndHookScore — stateUpdater writes it if present, hookScorer only fills the gap.
       if (finalContent && finalContent !== "(No response)" &&
           settings?.agentsEnabled && settings?.apiKey &&
-          ["continue", "scene", "dialogue"].includes(genMode)) {
-        // Fire and forget — each post-processor runs independently
-        const postRunners = [];
+          ["continue", "scene", "dialogue", "rewrite"].includes(genMode)) {
         const pps = settings.agentPostProcessors || {};
-        if (pps.stateUpdater !== false) {
-          postRunners.push((async () => {
+        const chapterIdxSnapshot = activeChapterIdx;
+        // Read the freshest project for this id (avoids the stale closure capturing pre-update state).
+        const getFreshProject = () => projectsRef.current?.find(p => p.id === activeProjectId) || project;
+
+        (async () => {
+          let stateUpdaterSetHook = false;
+          // 1) stateUpdater FIRST — await it so downstream checks see committed canon.
+          if (pps.stateUpdater !== false) {
             try {
               const updates = await AgentRuntime.runPostProcessor({
-                key: "stateUpdater", project, chapterIdx: activeChapterIdx,
+                key: "stateUpdater", project: getFreshProject(), chapterIdx: chapterIdxSnapshot,
                 generatedContent: finalContent, settings, signal: null,
               });
               if (updates && (updates.characterUpdates || updates.relationshipUpdates || updates.chapterState)) {
-                // Apply updates to the project atomically
-                setProjects(prev => prev.map(p => {
-                  if (p.id !== activeProjectId) return p;
-                  return AgentRuntime.applyStateUpdates(p, activeChapterIdx, updates);
-                }));
+                stateUpdaterSetHook = typeof updates?.chapterState?.chapterEndHookScore === "number";
+                setProjects(prev => prev.map(p =>
+                  p.id !== activeProjectId ? p : AgentRuntime.applyStateUpdates(p, chapterIdxSnapshot, updates)));
                 showToast("Character + relationship state updated by AI", "success");
               }
             } catch (e) { console.warn("[stateUpdater]", e); }
-          })());
-        }
-        if (pps.continuityChecker !== false) {
-          postRunners.push((async () => {
+          }
+          // 2) continuityChecker — now reads the UPDATED project, so it won't flag changes
+          //    that stateUpdater just reconciled.
+          if (pps.continuityChecker !== false) {
             try {
               const issues = await AgentRuntime.runPostProcessor({
-                key: "continuityChecker", project, chapterIdx: activeChapterIdx,
+                key: "continuityChecker", project: getFreshProject(), chapterIdx: chapterIdxSnapshot,
                 generatedContent: finalContent, settings, signal: null,
               });
               if (issues?.issues?.length > 0) {
                 showToast(`Continuity: ${issues.issues.length} potential issue(s) flagged`, "info");
               }
             } catch (e) { console.warn("[continuityChecker]", e); }
-          })());
-        }
-        if (pps.hookScorer !== false) {
-          postRunners.push((async () => {
+          }
+          // 3) hookScorer — ONLY if stateUpdater didn't already set the hook score (single authority).
+          if (pps.hookScorer !== false && !stateUpdaterSetHook) {
             try {
               const score = await AgentRuntime.runPostProcessor({
-                key: "hookScorer", project, chapterIdx: activeChapterIdx,
+                key: "hookScorer", project: getFreshProject(), chapterIdx: chapterIdxSnapshot,
                 generatedContent: finalContent, settings, signal: null,
               });
               if (typeof score?.score === "number") {
                 setProjects(prev => prev.map(p => {
                   if (p.id !== activeProjectId) return p;
                   const chapters = [...(p.chapters || [])];
-                  if (chapters[activeChapterIdx]) {
-                    chapters[activeChapterIdx] = { ...chapters[activeChapterIdx], chapterEndHookScore: score.score };
+                  if (chapters[chapterIdxSnapshot]) {
+                    chapters[chapterIdxSnapshot] = { ...chapters[chapterIdxSnapshot], chapterEndHookScore: score.score };
                   }
                   return { ...p, chapters };
                 }));
               }
             } catch (e) { console.warn("[hookScorer]", e); }
-          })());
-        }
-        // Don't await — let them run in background
+          }
+          // 4) motifAuditor + voiceDriftDetector — independent, safe to run after (no project writes).
+          if (pps.motifAuditor) {
+            try {
+              await AgentRuntime.runPostProcessor({ key: "motifAuditor", project: getFreshProject(), chapterIdx: chapterIdxSnapshot, generatedContent: finalContent, settings, signal: null });
+            } catch (e) { console.warn("[motifAuditor]", e); }
+          }
+          if (pps.voiceDriftDetector) {
+            try {
+              await AgentRuntime.runPostProcessor({ key: "voiceDriftDetector", project: getFreshProject(), chapterIdx: chapterIdxSnapshot, generatedContent: finalContent, settings, signal: null });
+            } catch (e) { console.warn("[voiceDriftDetector]", e); }
+          }
+        })();
       }
     } catch (err) {
       if (err.name === "AbortError") {
@@ -13981,20 +14259,7 @@ The FIRST attached image is the master photograph of this exact room. ${WALL_REF
     };
 
     // All possible world entry fields — generic merge for ANY category
-    const worldFields = [
-      "name","category","description","keywords",
-      "atmosphere","sensoryDetails","subLocations","dangers","rules","history",
-      "culturalNorms","resources","population","orgPurpose",
-      // Category-specific fields
-      "enforcement","scope","loopholes","publicOpinion","enactedBy",
-      "values","customs","socialHierarchy","taboos","artForms","dialect",
-      "magicSource","magicRules","magicCost","magicRarity","magicTypes","magicPerception",
-      "techFunction","techMechanism","techAvailability","techLimitations","techImpact","techCreator",
-      "historyDate","historyFigures","historyCauses","historyConsequences","historyLegacy",
-      "habitat","floraAppearance","behavior","floraUses","floraRarity","floraCultural",
-      "langSpeakers","langWriting","langPhrases","langGrammar","langRelated","langStatus",
-      "deities","coreBeliefs","rituals","sacredPlaces","clergy","heresies","followers",
-    ];
+    const worldFields = ["name","category", ...ALL_WORLD_TEXT_FIELDS];
 
     for (const raw of items) {
       const norm = Object.fromEntries(Object.entries(raw).map(([k, v]) => {
@@ -17191,6 +17456,25 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
                           <DebouncedField label="History / Origin" value={item.history || ""} onChange={v => updateProject({ worldBuilding: items.map(it => it.id === item.id ? { ...it, history: v } : it) })} multiline placeholder="How did this come to be?" small />
                           <DebouncedField label="Connections / Influences" value={item.culturalNorms || ""} onChange={v => updateProject({ worldBuilding: items.map(it => it.id === item.id ? { ...it, culturalNorms: v } : it) })} multiline placeholder="How does this connect to other elements?" small />
                         </div>
+
+                        {/* ─── NEW: Real-world location pin (Location entries only) ─── */}
+                        {(item.category === "Location" || !item.category) && (
+                          <details style={{ marginTop: 12 }} open={!!item.geoPin}>
+                            <summary style={{ fontSize: 11, fontWeight: 500, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--nf-text-muted)", cursor: "pointer", padding: "4px 0", fontFamily: "var(--nf-font-body)" }}>
+                              Real-world location {item.geoPin ? "📍" : "(optional)"}
+                            </summary>
+                            <div style={{ fontSize: 11, color: "var(--nf-text-muted)", margin: "4px 0 8px", lineHeight: 1.5 }}>
+                              If this place is based on a real location, pin it on the map. Useful for grounding distances, travel times, and geography.
+                            </div>
+                            <LocationMap
+                              pin={item.geoPin || null}
+                              onChange={(geoPin) => updateProject({ worldBuilding: items.map(it => it.id === item.id ? { ...it, geoPin: geoPin || undefined } : it) })}
+                            />
+                            {item.geoPin?.label && (
+                              <div style={{ fontSize: 11, color: "var(--nf-text-dim)", marginTop: 4 }}>📍 {item.geoPin.label}</div>
+                            )}
+                          </details>
+                        )}
 
                         {/* ─── NEW: Characters who frequent this location (Location entries only) ─── */}
                         {(item.category === "Location" || !item.category) && (
