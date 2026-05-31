@@ -705,6 +705,7 @@ const Icons = {
   Book: mkIcon(<><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></>),
   Users: mkIcon(<><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></>),
   Map: mkIcon(<><polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6"/><line x1="8" y1="2" x2="8" y2="18"/><line x1="16" y1="6" x2="16" y2="22"/></>),
+  MapPin: mkIcon(<><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></>, 14),
   Pen: mkIcon(<><path d="M12 19l7-7 3 3-7 7-3-3z"/><path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"/><path d="M2 2l7.586 7.586"/><circle cx="11" cy="11" r="2"/></>),
   Brain: mkIcon(<><path d="M9.5 2A5.5 5.5 0 0 0 4 7.5c0 1.58.67 3 1.74 4.01L4 14l2.5 1L5 18l3 2 1.5-3 2 1V22h1V18.07a5.5 5.5 0 0 0 0-11.14V2z"/><path d="M14.5 2A5.5 5.5 0 0 1 20 7.5c0 1.58-.67 3-1.74 4.01L20 14l-2.5 1L19 18l-3 2-1.5-3-2 1V22h-1V18.07"/></>),
   Heart: mkIcon(<path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/>),
@@ -1192,6 +1193,70 @@ const _detectMentionedCharacters = (text, characters) => {
     if (hit) mentioned.add(c.id);
   }
   return mentioned;
+};
+
+// Classify HOW each detected character appears: actually present in the scene, or merely
+// referenced/talked-about while absent. The old code treated any mention as "in scene", so a
+// character that another character merely talks about (e.g. "I haven't seen Elena in years")
+// was wrongly described to the writing AI as present. This separates the two.
+// Returns { present: Set<id>, referenced: Set<id> }.
+const _classifyCharacterPresence = (text, characters, detectedIds, opts = {}) => {
+  const present = new Set();
+  const referenced = new Set();
+  if (!detectedIds || detectedIds.size === 0) return { present, referenced };
+  // Characters the author explicitly tagged for this scene (plot `characters`, scene notes
+  // mentions, POV) are ALWAYS present regardless of prose phrasing.
+  const forcedPresent = opts.forcedPresent instanceof Set ? opts.forcedPresent : new Set();
+
+  // Absence/reference cue words near a name strongly imply the character is NOT in the scene.
+  const ABSENCE_CUES = /\b(ha(?:d|s|ve)(?:n't| not)? (?:seen|met|heard from|spoken to|been with)|never (?:seen|met)|hasn't seen|haven't seen|used to|years? ago|long ago|in years|since (?:then|the)|missed|missing|gone|absent|away|left for|departed|thinking (?:of|about)|remembered|recalled|reminded (?:of|her of|him of)|dreamed (?:of|about)|wished|if only|where (?:was|is|were|had)|letter from|message from|note from|news of|word from|spoke of|speaks of|talked about|talking about|told (?:her|him|them) about|mentioned|story about|stories of|legend of|memory of|memories of|in memoriam|the late|deceased|buried|grave of|funeral|ghost of|portrait of|photograph of|picture of)\b/i;
+  // Presence cues: the name directly drives an action or speech, or possesses a body part / nearby object.
+  const buildPresenceRe = (nm) => {
+    const n = nm.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return new RegExp(
+      `\\b${n}\\b\\s+(said|asked|replied|whispered|shouted|muttered|nodded|shrugged|smiled|laughed|frowned|turned|walked|stepped|moved|reached|grabbed|looked|glanced|stared|stood|sat|leaned|crossed|entered|paused|sighed|gasped|breathed|gestured|pointed|raised|lowered|opened|closed|drew|pulled|pushed|ran|stopped|spoke|answered|called|cried|screamed|nodded|stiffened|flinched)\\b` +
+      `|\\b${n}'s\\s+(hand|hands|eyes|face|voice|fingers|arm|arms|chest|breath|gaze|lips|mouth|head|shoulder|shoulders|heart)\\b` +
+      `|(?:said|asked|told|whispered|shouted|replied|called|warned|reminded|snapped)\\s+${n}\\b` +
+      `|\\b(?:beside|next to|behind|in front of|across from|facing|near|toward|towards|at)\\s+${n}\\b`,
+      "i");
+  };
+
+  for (const c of characters) {
+    if (!detectedIds.has(c.id)) continue;
+    if (forcedPresent.has(c.id)) { present.add(c.id); continue; }
+    if (!c.name) { referenced.add(c.id); continue; }
+
+    // Build the set of name tokens to scan for (full name + first name).
+    const names = [c.name.trim()];
+    const first = c.name.trim().split(/\s+/)[0];
+    if (first && first !== c.name.trim()) names.push(first);
+    if (c.aliases) {
+      (Array.isArray(c.aliases) ? c.aliases : String(c.aliases).split(",")).forEach(a => { const t = String(a).trim(); if (t.length >= 2) names.push(t); });
+    }
+
+    let sawPresence = false;
+    let sawAbsence = false;
+    for (const nm of names) {
+      try {
+        if (buildPresenceRe(nm).test(text)) { sawPresence = true; }
+      } catch {}
+      // Check absence cue within ~40 chars of the name occurrence.
+      try {
+        const re = new RegExp(`(.{0,40}\\b${nm.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b.{0,40})`, "gi");
+        let m;
+        while ((m = re.exec(text)) !== null) {
+          if (ABSENCE_CUES.test(m[1])) { sawAbsence = true; break; }
+          if (re.lastIndex === m.index) re.lastIndex++;
+        }
+      } catch {}
+      if (sawPresence) break;
+    }
+
+    if (sawPresence) present.add(c.id);
+    else if (sawAbsence) referenced.add(c.id);
+    else present.add(c.id); // ambiguous default: treat as present (conservative — old behavior)
+  }
+  return { present, referenced };
 };
 
 // FIX: Completely rewritten world detection — multi-strategy, includes description scanning
@@ -2037,13 +2102,20 @@ const ContextEngine = {
     const mentionedCharIds = _detectMentionedCharacters(detectionText, project.characters);
 
     // FIX: Directly inject character IDs listed in the plot outline's characters array
+    const forcedPresentIds = new Set();
     if (curPlotEntry?.characters) {
       const plotCharIds = Array.isArray(curPlotEntry.characters) ? curPlotEntry.characters : [];
       for (const cid of plotCharIds) {
         if ((project.characters || []).some(c => c.id === cid)) {
           mentionedCharIds.add(cid);
+          forcedPresentIds.add(cid); // author tagged them for the scene → definitely present
         }
       }
+    }
+    // Characters named in the scene notes are authorial intent → present.
+    if (sceneNotes) {
+      const noteIds = _detectMentionedCharacters(sceneNotes, project.characters);
+      noteIds.forEach(id => { mentionedCharIds.add(id); forcedPresentIds.add(id); });
     }
 
     const relevantWorldIds = _detectRelevantWorld(detectionText, project.worldBuilding);
@@ -2110,11 +2182,18 @@ const ContextEngine = {
       if (protagonist) povCharId = protagonist.id;
     }
 
+    // POV character is, by definition, present in their own scene.
+    if (povCharId) forcedPresentIds.add(povCharId);
+    // Separate genuine scene presence from "talked about but absent" (e.g. one character
+    // mentioning another who isn't there). Referenced-absent chars get lighter treatment.
+    const { present: presentCharIds, referenced: referencedCharIds } =
+      _classifyCharacterPresence(detectionText, project.characters, mentionedCharIds, { forcedPresent: forcedPresentIds });
+
     // --- Sections 2-5 extracted into helpers operating on a shared ctx bag ---
     const ctx = {
       project, chapterIdx, opts, currentChNum, _charOrgCtx,
       sceneType, isIntimateScene, isDialogueScene, isActionScene, isEmotionalScene, isRevelationScene,
-      heatLevel, mentionedCharIds, ambientCharIds, relevantWorldIds, povCharId, curPlotEntry,
+      heatLevel, mentionedCharIds, presentCharIds, referencedCharIds, ambientCharIds, relevantWorldIds, povCharId, curPlotEntry,
       budgetChars, budgetRels, budgetWorld, budgetPlot,
       tokensUsed,
     };
@@ -2139,6 +2218,9 @@ const ContextEngine = {
       isIntimateScene, isDialogueScene, isActionScene, isEmotionalScene, isRevelationScene,
       heatLevel, mentionedCharIds, ambientCharIds, relevantWorldIds, povCharId, budgetChars,
     } = ctx;
+    // Presence sets (may be absent on older callers → fall back to "all mentioned are present").
+    const presentCharIds = ctx.presentCharIds || mentionedCharIds;
+    const referencedCharIds = ctx.referencedCharIds || new Set();
     // --- Section 2: Characters (priority-sorted, temporally-aware) ---
     const charParts = [];
     if (project.characters?.length) {
@@ -2286,10 +2368,11 @@ const ContextEngine = {
         return (ROLE_PRIORITY[a.role] ?? 99) - (ROLE_PRIORITY[b.role] ?? 99);
       });
 
-      const mentioned = allChars.filter(c => mentionedCharIds.has(c.id));
+      const mentioned = allChars.filter(c => presentCharIds.has(c.id));
+      const referencedOnly = allChars.filter(c => referencedCharIds.has(c.id) && !presentCharIds.has(c.id));
       const others = allChars.filter(c => !mentionedCharIds.has(c.id));
 
-      // Full detail for mentioned/in-scene characters
+      // Full detail for present/in-scene characters
       for (const c of mentioned) {
         // FIX 1.6: Dead characters get compact treatment starting from the chapter AFTER death
         if (c.status === "dead" && ContextEngine._hasStatusChanged(project, c, chapterIdx, currentChNum)) {
@@ -2309,6 +2392,23 @@ const ContextEngine = {
         if (ctx.tokensUsed + this._estimateLen(entry) < budgetChars) {
           charParts.push(entry);
           ctx.tokensUsed += this._estimateLen(entry);
+        }
+      }
+
+      // Referenced but NOT present — talked about / remembered / absent. The writing AI should
+      // NOT place these characters in the scene; they're context for what's being discussed.
+      if (referencedOnly.length) {
+        charParts.push(`\n— Referenced but NOT in the scene (talked about / remembered — do not place them physically in this scene):`);
+        for (const c of referencedOnly) {
+          const statusTag = (c.status && c.status !== "alive") ? ` {${c.status}}` : "";
+          let line = `  ◇ ${c.name} (${c.role || "supporting"})${statusTag}`;
+          if (c.pronouns) line += ` [${c.pronouns}]`;
+          if (c.personality) line += ` — ${_truncateAtBoundary(c.personality, 160)}`;
+          if (c.occupation) line += ` | ${c.occupation}`;
+          if (ctx.tokensUsed + this._estimateLen(line) < budgetChars) {
+            charParts.push(line);
+            ctx.tokensUsed += this._estimateLen(line);
+          }
         }
       }
 
@@ -10890,7 +10990,7 @@ export default function NovelForge() {
           } catch (e) { console.warn("[NovelForge] Image map population failed:", e); }
         }
         if (s && typeof s === "object") {
-          const knownKeys = ["apiKey", "model", "maxTokens", "temperature", "systemPrompt", "frequencyPenalty", "presencePenalty", "modelContextWindow", "agentsEnabled", "agentModels", "agentPostProcessors", "language", "ambientSound", "ambientVolume", "silentWritingMode", "lineFocusMode", "typewriterPacing", "circadianDimming", "breathingPauser", "breathingPauserInterval", "sessionDecompression", "chapterCelebration", "questionOfTheDay", "forgeChanGoodNight", "ambientBrightness"];
+          const knownKeys = ["apiKey", "model", "imageModel", "tabModels", "maxTokens", "temperature", "systemPrompt", "frequencyPenalty", "presencePenalty", "modelContextWindow", "agentsEnabled", "agentModels", "agentPostProcessors", "language", "ambientSound", "ambientVolume", "silentWritingMode", "lineFocusMode", "typewriterPacing", "circadianDimming", "breathingPauser", "breathingPauserInterval", "sessionDecompression", "chapterCelebration", "questionOfTheDay", "forgeChanGoodNight", "ambientBrightness"];
           const filtered = {};
           knownKeys.forEach(k => { if (s[k] !== undefined) filtered[k] = s[k]; });
           if (Object.keys(filtered).length) setSettings(prev => ({ ...prev, ...filtered }));
@@ -12111,12 +12211,16 @@ Then 2-3 sentences describing the specific scene idea, character actions, and em
           // 4) motifAuditor + voiceDriftDetector — independent, safe to run after (no project writes).
           if (pps.motifAuditor) {
             try {
-              await AgentRuntime.runPostProcessor({ key: "motifAuditor", project: getFreshProject(), chapterIdx: chapterIdxSnapshot, generatedContent: finalContent, settings, signal: null });
+              const m = await AgentRuntime.runPostProcessor({ key: "motifAuditor", project: getFreshProject(), chapterIdx: chapterIdxSnapshot, generatedContent: finalContent, settings, signal: null });
+              const neglected = Array.isArray(m?.motifsNeglected) ? m.motifsNeglected.length : 0;
+              if (neglected > 0) showToast(`Motifs: ${neglected} motif(s) underused this chapter`, "info");
             } catch (e) { console.warn("[motifAuditor]", e); }
           }
           if (pps.voiceDriftDetector) {
             try {
-              await AgentRuntime.runPostProcessor({ key: "voiceDriftDetector", project: getFreshProject(), chapterIdx: chapterIdxSnapshot, generatedContent: finalContent, settings, signal: null });
+              const v = await AgentRuntime.runPostProcessor({ key: "voiceDriftDetector", project: getFreshProject(), chapterIdx: chapterIdxSnapshot, generatedContent: finalContent, settings, signal: null });
+              const drifts = v?.issues?.length || 0;
+              if (drifts > 0) showToast(`Voice drift: ${drifts} line(s) may be off-voice`, "info");
             } catch (e) { console.warn("[voiceDriftDetector]", e); }
           }
         })();
@@ -14500,9 +14604,14 @@ The FIRST attached image is the master photograph of this exact room. ${WALL_REF
     const chapterImages = [];
     (project?.chapters || []).forEach((ch, chIdx) => {
       if (!ch.content) return;
-      const matches = [...ch.content.matchAll(/<img\s[^>]*src="([^"]+)"[^>]*alt="([^"]*)"[^>]*/g)];
-      matches.forEach((m, imgIdx) => {
-        let imgUrl = m[1];
+      // Match every <img> tag, then pull src/alt regardless of attribute order (alt optional).
+      const tagMatches = [...ch.content.matchAll(/<img\b[^>]*>/gi)];
+      tagMatches.forEach((tm, imgIdx) => {
+        const tag = tm[0];
+        const srcM = tag.match(/\bsrc="([^"]*)"/i);
+        if (!srcM) return;
+        let imgUrl = srcM[1];
+        const altM = tag.match(/\balt="([^"]*)"/i);
         if (imgUrl.startsWith("GDRIVE_IMAGE:")) return; // Skip placeholder markers
         if (imgUrl.startsWith("NFIMG:")) {
           imgUrl = _nfImageMap.current.get(imgUrl.slice(6)) || imgUrl; // Restore from map
@@ -14511,7 +14620,7 @@ The FIRST attached image is the master photograph of this exact room. ${WALL_REF
         chapterImages.push({
           id: `ch-${ch.id}-${imgIdx}`,
           imageUrl: imgUrl,
-          alt: m[2] || "",
+          alt: altM ? altM[1] : "",
           chapterIdx: chIdx,
           chapterTitle: ch.title || `Chapter ${chIdx + 1}`,
           isChapterImage: true,
@@ -14536,8 +14645,8 @@ The FIRST attached image is the master photograph of this exact room. ${WALL_REF
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: 12 }}>
                 {chapterImages.map(img => (
                   <div key={img.id} className="nf-card" style={{ padding: 0, overflow: "hidden" }}>
-                    <img loading="lazy" key={img.id} src={img.imageUrl} alt={img.alt} style={{ width: "100%", height: 140, objectFit: "cover", display: "block" }} />
-                    <div key={img.id} style={{ padding: "8px 12px" }}>
+                    <img loading="lazy" src={img.imageUrl} alt={img.alt} style={{ width: "100%", height: 140, objectFit: "cover", display: "block" }} />
+                    <div style={{ padding: "8px 12px" }}>
                       <div key={img.id} style={{ fontSize: 11, color: "var(--nf-text-muted)" }}>{img.chapterTitle}</div>
                       {img.alt && <div style={{ fontSize: 11, color: "var(--nf-text-dim)", marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{img.alt}</div>}
                     </div>
@@ -17129,7 +17238,7 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
                               <span style={{ fontSize: 11, fontWeight: 600, color: "var(--nf-text)", cursor: "pointer" }} onClick={() => setEditingCharId(otherId)}>{other?.name || "?"}</span>
                               <select value={r.status || "developing"} onChange={e => updateProject({ relationships: (project?.relationships || []).map(re => re.id === r.id ? { ...re, status: e.target.value } : re) })}
                                 style={{ fontSize: 11, padding: "2px 4px", background: "var(--nf-bg-deep)", border: "1px solid var(--nf-border)", borderRadius: 2, color: "var(--nf-text-muted)", cursor: "pointer", maxWidth: 95 }}>
-                                {RELATIONSHIP_STATUS_OPTIONS.map(o => <option value={o.value}>{o.label}</option>)}
+                                {RELATIONSHIP_STATUS_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
                               </select>
                               <select value={r.tension || "medium"} onChange={e => updateProject({ relationships: (project?.relationships || []).map(re => re.id === r.id ? { ...re, tension: e.target.value } : re) })}
                                 style={{ fontSize: 11, padding: "2px 4px", background: "var(--nf-bg-deep)", border: `1px solid ${tensionColors[r.tension] || "var(--nf-border)"}`, borderRadius: 2, color: tensionColors[r.tension] || "var(--nf-text-muted)", cursor: "pointer", fontWeight: 600, maxWidth: 80 }}>
@@ -17459,21 +17568,31 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
 
                         {/* ─── NEW: Real-world location pin (Location entries only) ─── */}
                         {(item.category === "Location" || !item.category) && (
-                          <details style={{ marginTop: 12 }} open={!!item.geoPin}>
-                            <summary style={{ fontSize: 11, fontWeight: 500, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--nf-text-muted)", cursor: "pointer", padding: "4px 0", fontFamily: "var(--nf-font-body)" }}>
-                              Real-world location {item.geoPin ? "📍" : "(optional)"}
-                            </summary>
-                            <div style={{ fontSize: 11, color: "var(--nf-text-muted)", margin: "4px 0 8px", lineHeight: 1.5 }}>
-                              If this place is based on a real location, pin it on the map. Useful for grounding distances, travel times, and geography.
+                          <div style={{ marginTop: 12 }}>
+                            <div style={{ fontSize: 11, fontWeight: 500, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--nf-text-muted)", marginBottom: 8, fontFamily: "var(--nf-font-body)", display: "flex", alignItems: "center", gap: 8 }}>
+                              <Icons.MapPin /> Real-World Location {item.geoPin && <span style={{ color: "var(--nf-accent-2)", textTransform: "none", letterSpacing: 0 }}>· pinned</span>}
                             </div>
-                            <LocationMap
-                              pin={item.geoPin || null}
-                              onChange={(geoPin) => updateProject({ worldBuilding: items.map(it => it.id === item.id ? { ...it, geoPin: geoPin || undefined } : it) })}
-                            />
-                            {item.geoPin?.label && (
-                              <div style={{ fontSize: 11, color: "var(--nf-text-dim)", marginTop: 4 }}>📍 {item.geoPin.label}</div>
+                            {!item._showMap && !item.geoPin ? (
+                              <button
+                                onClick={() => updateProject({ worldBuilding: items.map(it => it.id === item.id ? { ...it, _showMap: true } : it) })}
+                                className="nf-btn-micro" style={{ fontSize: 11, borderColor: "var(--nf-accent-2)", color: "var(--nf-accent-2)" }}>
+                                <Icons.MapPin /> Pin this place on a real map
+                              </button>
+                            ) : (
+                              <>
+                                <div style={{ fontSize: 11, color: "var(--nf-text-muted)", margin: "0 0 8px", lineHeight: 1.5 }}>
+                                  Search a real place, then click the map or drag the pin. Useful for grounding distances, travel times, and geography.
+                                </div>
+                                <LocationMap
+                                  pin={item.geoPin || null}
+                                  onChange={(geoPin) => updateProject({ worldBuilding: items.map(it => it.id === item.id ? { ...it, geoPin: geoPin || undefined } : it) })}
+                                />
+                                {item.geoPin?.label && (
+                                  <div style={{ fontSize: 11, color: "var(--nf-text-dim)", marginTop: 4 }}>📍 {item.geoPin.label}</div>
+                                )}
+                              </>
                             )}
-                          </details>
+                          </div>
                         )}
 
                         {/* ─── NEW: Characters who frequent this location (Location entries only) ─── */}
@@ -18236,8 +18355,11 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
             </div>
           </div>
           {sortedOutline.map((p, i) => {
-            // D9: Check if a matching chapter exists
-            const chIdx = (p.chapter || i + 1) - 1;
+            // D9: Resolve the matching chapter by its explicit link first (robust to reordering),
+            // then fall back to chapter-number → index. Prevents "go to chapter" / title-sync from
+            // hitting the wrong chapter after reorders or deletions.
+            const linkedIdx = (project?.chapters || []).findIndex(ch => ch.linkedPlotId === p.id);
+            const chIdx = linkedIdx >= 0 ? linkedIdx : (p.chapter || i + 1) - 1;
             const hasMatchingChapter = project?.chapters?.[chIdx];
             const isPlotExpanded = expandedPlotIds.has(p.id);
             const beatsCount = Array.isArray(p.beats) ? p.beats.length : 0;
@@ -18289,7 +18411,6 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
                     }} type="number" min="0" small />
                     <DebouncedField label="Title" value={p.title} onChange={v => {
                       updateProject({ plotOutline: outline.map(pl => pl.id === p.id ? { ...pl, title: v } : pl) });
-                      const chIdx = (p.chapter || i + 1) - 1;
                       if (project?.chapters?.[chIdx]) {
                         updateChapter(chIdx, { title: v });
                       }
@@ -19134,14 +19255,34 @@ Speech pattern: ${char.speechPattern || ""}` },
         {(detectedCharIds.size > 0 || detectedWorldIds.size > 0) && (
           <div className="nf-card" style={{ marginBottom: 26 }}>
             <div className="nf-card-title" style={{ fontSize: 12, marginBottom: 8 }}>Detected in Current Chapter</div>
-            {detectedCharIds.size > 0 && (
-              <div style={{ marginBottom: 6 }}>
-                <span style={{ fontSize: 11, color: "var(--nf-text-muted)", fontWeight: 600 }}>Characters (full detail): </span>
-                {(project?.characters || []).filter(c => detectedCharIds.has(c.id)).map(c => (
-                  <span style={{ fontSize: 11, padding: "2px 8px", margin: "0 3px 3px 0", borderRadius: 4, background: "var(--nf-success-bg)", border: "1px solid var(--nf-success)", color: "var(--nf-success)", fontWeight: 600, display: "inline-block" }}>{c.name}</span>
-                ))}
-              </div>
-            )}
+            {detectedCharIds.size > 0 && (() => {
+              // Mirror what buildFullContext does: split detected chars into present vs referenced-absent.
+              const forced = new Set();
+              if (curPlotEntry?.characters) (Array.isArray(curPlotEntry.characters) ? curPlotEntry.characters : []).forEach(cid => forced.add(cid));
+              const { present, referenced } = _classifyCharacterPresence(memDetectionText, project?.characters || [], detectedCharIds, { forcedPresent: forced });
+              const presentChars = (project?.characters || []).filter(c => present.has(c.id));
+              const refChars = (project?.characters || []).filter(c => referenced.has(c.id) && !present.has(c.id));
+              return (
+                <>
+                  {presentChars.length > 0 && (
+                    <div style={{ marginBottom: 6 }}>
+                      <span style={{ fontSize: 11, color: "var(--nf-text-muted)", fontWeight: 600 }}>In scene (full detail): </span>
+                      {presentChars.map(c => (
+                        <span key={c.id} style={{ fontSize: 11, padding: "2px 8px", margin: "0 3px 3px 0", borderRadius: 4, background: "var(--nf-success-bg)", border: "1px solid var(--nf-success)", color: "var(--nf-success)", fontWeight: 600, display: "inline-block" }}>{c.name}</span>
+                      ))}
+                    </div>
+                  )}
+                  {refChars.length > 0 && (
+                    <div style={{ marginBottom: 6 }}>
+                      <span style={{ fontSize: 11, color: "var(--nf-text-muted)", fontWeight: 600 }}>Referenced but not present: </span>
+                      {refChars.map(c => (
+                        <span key={c.id} style={{ fontSize: 11, padding: "2px 8px", margin: "0 3px 3px 0", borderRadius: 4, background: "var(--nf-bg-surface)", border: "1px dashed var(--nf-border)", color: "var(--nf-text-muted)", fontWeight: 400, display: "inline-block", fontStyle: "italic" }}>{c.name}</span>
+                      ))}
+                    </div>
+                  )}
+                </>
+              );
+            })()}
             {/* Ambient characters from locations */}
             {(() => {
               const ambientIds = new Set();
@@ -19169,7 +19310,7 @@ Speech pattern: ${char.speechPattern || ""}` },
                 <div style={{ marginBottom: 6 }}>
                   <span style={{ fontSize: 11, color: "var(--nf-text-muted)", fontWeight: 600 }}>Nearby at location (compact): </span>
                   {(project?.characters || []).filter(c => ambientIds.has(c.id)).map(c => (
-                    <span style={{ fontSize: 11, padding: "2px 8px", margin: "0 3px 3px 0", borderRadius: 4, background: "var(--nf-accent-glow-2)", border: "1px dashed var(--nf-accent-2)", color: "var(--nf-accent-2)", fontWeight: 400, display: "inline-block", fontStyle: "italic" }}>{c.name}</span>
+                    <span key={c.id} style={{ fontSize: 11, padding: "2px 8px", margin: "0 3px 3px 0", borderRadius: 4, background: "var(--nf-accent-glow-2)", border: "1px dashed var(--nf-accent-2)", color: "var(--nf-accent-2)", fontWeight: 400, display: "inline-block", fontStyle: "italic" }}>{c.name}</span>
                   ))}
                   <div style={{ fontSize: 11, color: "var(--nf-text-muted)", marginTop: 2, fontStyle: "italic" }}>
                     These characters frequent the current location — sent as compact summaries (name + role + one-line personality only)
@@ -19181,7 +19322,7 @@ Speech pattern: ${char.speechPattern || ""}` },
               <div>
                 <span style={{ fontSize: 11, color: "var(--nf-text-muted)", fontWeight: 600 }}>World entries: </span>
                 {(project?.worldBuilding || []).filter(w => detectedWorldIds.has(w.id)).map(w => (
-                  <span style={{ fontSize: 11, padding: "2px 8px", margin: "0 3px 3px 0", borderRadius: 4, background: "var(--nf-accent-glow-2)", border: "1px solid var(--nf-accent-2)", color: "var(--nf-accent-2)", fontWeight: 600, display: "inline-block" }}>{w.name}</span>
+                  <span key={w.id} style={{ fontSize: 11, padding: "2px 8px", margin: "0 3px 3px 0", borderRadius: 4, background: "var(--nf-accent-glow-2)", border: "1px solid var(--nf-accent-2)", color: "var(--nf-accent-2)", fontWeight: 600, display: "inline-block" }}>{w.name}</span>
                 ))}
               </div>
             )}
