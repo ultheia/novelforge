@@ -3668,7 +3668,7 @@ const _callAgent = async ({ role, system, user, settings, signal, temperature = 
       { role: "user", content: user },
     ],
     temperature,
-    max_tokens: Math.min(budget, 8000),
+    max_tokens: Math.min(budget, 24000),
   };
   if (json) body.response_format = { type: "json_object" };
 
