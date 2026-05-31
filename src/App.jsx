@@ -13343,7 +13343,7 @@ SCENE BOUNDARY RULE: A new [SCENE] block starts whenever a character PHYSICALLY 
 For each scene:
 1. [SCENE: description] — state the EXACT physical location (apartment, stairwell, street, park, etc.)
 2. Environment — describe ONLY what exists in THIS location. Visual details only. No sounds, smells, or non-visual sensations.
-3. Each character: Clothing (enhance described clothing or INFER if not described), appearance (enhance or infer), positioning — all VISUAL ONLY
+3. Each character: Clothing (enhance described clothing or INFER if not described), appearance (only mention the lookalike name), positioning — all VISUAL ONLY
 4. Clothing continuity — if no change is described, carry forward the outfit from the previous scene
 
 CRITICAL: Every sentence must describe something visible. If a detail cannot be seen in a photograph, remove it. Write for an image renderer that is completely blind to sound, smell, touch, and taste` },
