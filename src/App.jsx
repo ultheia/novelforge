@@ -1245,6 +1245,11 @@ const _resolveCharId = (nameOrId, characters) => {
   return byName ? byName.id : nameOrId; // Return original if no match
 };
 
+// Strip a POV-style prefix ("Third person limited - Elena", "First person — Marcus", etc.)
+// from a POV string, leaving just the character name (if any).
+const POV_PREFIX_RE = /^(Third person limited|Third person deep|Third person omniscient|First person|First person present tense|Second person|Multiple POV[^-—:]*|Dual POV[^-—:]*)\s*[-—:]\s*/i;
+const _stripPovPrefix = (povString) => (povString || "").replace(POV_PREFIX_RE, "").trim();
+
 // ─── CROSS-REFERENCE ENGINE: derives all interconnected data from project ───
 const _deriveCrossRefs = (project, charId, opts = {}) => {
   if (!project) return {};
@@ -1996,7 +2001,7 @@ const ContextEngine = {
     // Strategy 1: Extract character name from POV string like "Third person limited - Elena"
     if (!povCharId) {
       const povString = curChapter?.pov || project?.pov || "";
-      const povCharName = povString.replace(/^(Third person limited|Third person deep|Third person omniscient|First person|First person present tense|Second person|Multiple POV[^-—:]*|Dual POV[^-—:]*)\s*[-—:]\s*/i, "").trim();
+      const povCharName = _stripPovPrefix(povString);
       if (povCharName && povCharName.length > 1) {
         const exactMatch = (project.characters || []).find(c => c.name && c.name.toLowerCase() === povCharName.toLowerCase());
         const partialMatch = !exactMatch && (project.characters || []).find(c => c.name && (
@@ -2021,6 +2026,35 @@ const ContextEngine = {
       if (protagonist) povCharId = protagonist.id;
     }
 
+    // --- Sections 2-5 extracted into helpers operating on a shared ctx bag ---
+    const ctx = {
+      project, chapterIdx, opts, currentChNum, _charOrgCtx,
+      sceneType, isIntimateScene, isDialogueScene, isActionScene, isEmotionalScene, isRevelationScene,
+      heatLevel, mentionedCharIds, ambientCharIds, relevantWorldIds, povCharId, curPlotEntry,
+      budgetChars, budgetRels, budgetWorld, budgetPlot,
+      tokensUsed,
+    };
+    const charParts = this._sectionCharacters(ctx);
+    const relParts = this._sectionRelationships(ctx);
+    const worldParts = this._sectionWorld(ctx);
+    const plotParts = this._sectionPlot(ctx);
+    tokensUsed = ctx.tokensUsed;
+    const sections = [metaStr, ...charParts, ...relParts, ...worldParts, ...plotParts, `</novel_bible>`];
+    // Context size safety check
+    const totalEstimate = sections.reduce((sum, s) => sum + (s?.length || 0), 0);
+    if (totalEstimate > 200000) {
+      console.warn(`[NovelForge] Context is very large (~${Math.round(totalEstimate/1000)}k chars / ~${Math.round(totalEstimate/4)}  tokens). May exceed model limits.`);
+    }
+    return sections.filter(s => s).join("\n");
+  },
+
+  // ─── _sectionCharacters (extracted from buildFullContext; shared ctx bag) ───
+  _sectionCharacters(ctx) {
+    const {
+      project, chapterIdx, currentChNum, _charOrgCtx,
+      isIntimateScene, isDialogueScene, isActionScene, isEmotionalScene, isRevelationScene,
+      heatLevel, mentionedCharIds, ambientCharIds, relevantWorldIds, povCharId, budgetChars,
+    } = ctx;
     // --- Section 2: Characters (priority-sorted, temporally-aware) ---
     const charParts = [];
     if (project.characters?.length) {
@@ -2179,7 +2213,7 @@ const ContextEngine = {
           let compact = `  ○ ${c.name} (${c.role}) [DECEASED] — referenced in scene as memory/mention only`;
           if (c.pronouns) compact += ` [${c.pronouns}]`;
           charParts.push(compact);
-          tokensUsed += this._estimateLen(compact);
+          ctx.tokensUsed += this._estimateLen(compact);
           continue;
         }
         const isPov = c.id === povCharId;
@@ -2188,9 +2222,9 @@ const ContextEngine = {
         const fields = getCharFields(c, true);
         fields.forEach(([label, val]) => l.push(`  ${label}: ${val}`));
         const entry = l.join("\n");
-        if (tokensUsed + this._estimateLen(entry) < budgetChars) {
+        if (ctx.tokensUsed + this._estimateLen(entry) < budgetChars) {
           charParts.push(entry);
-          tokensUsed += this._estimateLen(entry);
+          ctx.tokensUsed += this._estimateLen(entry);
         }
       }
 
@@ -2239,9 +2273,9 @@ const ContextEngine = {
               const phase = prog > 0.75 ? "late" : prog > 0.5 ? "mid-to-late" : prog > 0.25 ? "mid" : "early";
               compact += ` | Arc phase: ${phase}`;
             }
-            if (tokensUsed + this._estimateLen(compact) < budgetChars) {
+            if (ctx.tokensUsed + this._estimateLen(compact) < budgetChars) {
               charParts.push(compact);
-              tokensUsed += this._estimateLen(compact);
+              ctx.tokensUsed += this._estimateLen(compact);
             }
           }
           const omittedCount = others.length - relevantOthers.length;
@@ -2279,9 +2313,9 @@ const ContextEngine = {
               const words = c.personality.split(/\s+/).slice(0, 8).join(" ");
               line += ` — ${words}${c.personality.split(/\s+/).length > 8 ? "…" : ""}`;
             }
-            if (tokensUsed + this._estimateLen(line) < budgetChars) {
+            if (ctx.tokensUsed + this._estimateLen(line) < budgetChars) {
               charParts.push(line);
-              tokensUsed += this._estimateLen(line);
+              ctx.tokensUsed += this._estimateLen(line);
             }
           }
         }
@@ -2294,6 +2328,12 @@ const ContextEngine = {
       charParts.push(`</characters>`);
     }
 
+     return charParts;
+  },
+
+  // ─── _sectionRelationships (extracted from buildFullContext; shared ctx bag) ───
+  _sectionRelationships(ctx) {
+    const { project, currentChNum, mentionedCharIds, povCharId, budgetRels } = ctx;
     // --- Section 3: Relationships (evolution-aware, filtered) --- B1-B18
     // FIX: Use ID-based matching for relationships, resolve to names for display
     const relParts = [];
@@ -2360,9 +2400,9 @@ const ContextEngine = {
           }
           // B6: Sentence-boundary truncation for notes
           if (r.notes) line += ` | ${_truncateAtBoundary(r.notes, 1000)}`;
-          if (tokensUsed + this._estimateLen(line) < budgetRels) {
+          if (ctx.tokensUsed + this._estimateLen(line) < budgetRels) {
             relParts.push(line);
-            tokensUsed += this._estimateLen(line);
+            ctx.tokensUsed += this._estimateLen(line);
           }
         });
         relParts.push(`</relationships>`);
@@ -2375,6 +2415,12 @@ const ContextEngine = {
       }
     }
 
+     return relParts;
+  },
+
+  // ─── _sectionWorld (extracted from buildFullContext; shared ctx bag) ───
+  _sectionWorld(ctx) {
+    const { project, currentChNum, sceneType, relevantWorldIds, budgetWorld } = ctx;
     // --- Section 4: World-building (relevance-sorted, scope-aware) --- C1-C12
     const worldParts = [];
     if (project.worldBuilding?.length) {
@@ -2493,9 +2539,9 @@ const ContextEngine = {
             }).filter(Boolean);
             if (charNames.length) entry += ` | Characters here: ${charNames.join(", ")}`;
           }
-          if (tokensUsed + this._estimateLen(entry) < budgetWorld) {
+          if (ctx.tokensUsed + this._estimateLen(entry) < budgetWorld) {
             worldParts.push(entry);
-            tokensUsed += this._estimateLen(entry);
+            ctx.tokensUsed += this._estimateLen(entry);
           }
         }
         // C5: Compact entries for non-scene world items — category + key field
@@ -2510,9 +2556,9 @@ const ContextEngine = {
             else if (w.category === "Technology" && w.techFunction) e += ` (${_truncateAtBoundary(w.techFunction, 80)})`;
             else if (w.category === "Rule / Law" && w.enforcement) e += ` (enforced: ${_truncateAtBoundary(w.enforcement, 80)})`;
             else if ((w.category === "Location" || !w.category) && w.atmosphere) e += ` (${w.atmosphere})`;
-            if (tokensUsed + this._estimateLen(e) < budgetWorld) {
+            if (ctx.tokensUsed + this._estimateLen(e) < budgetWorld) {
               worldParts.push(e);
-              tokensUsed += this._estimateLen(e);
+              ctx.tokensUsed += this._estimateLen(e);
             }
           }
         }
@@ -2520,6 +2566,12 @@ const ContextEngine = {
       }
     }
 
+     return worldParts;
+  },
+
+  // ─── _sectionPlot (extracted from buildFullContext; shared ctx bag) ───
+  _sectionPlot(ctx) {
+    const { project, opts, currentChNum, _charOrgCtx, budgetPlot } = ctx;
     // --- Section 5: Plot outline (mark current, hide distant future details) --- D4 partial
     const plotParts = [];
     if (project.plotOutline?.length) {
@@ -2612,21 +2664,14 @@ const ContextEngine = {
             }
           });
         }
-        if (tokensUsed + this._estimateLen(line) < budgetPlot) {
+        if (ctx.tokensUsed + this._estimateLen(line) < budgetPlot) {
           plotParts.push(line);
-          tokensUsed += this._estimateLen(line);
+          ctx.tokensUsed += this._estimateLen(line);
         }
       });
       plotParts.push(`</plot_outline>`);
     }
-
-    const sections = [metaStr, ...charParts, ...relParts, ...worldParts, ...plotParts, `</novel_bible>`];
-    // Context size safety check
-    const totalEstimate = sections.reduce((sum, s) => sum + (s?.length || 0), 0);
-    if (totalEstimate > 200000) {
-      console.warn(`[NovelForge] Context is very large (~${Math.round(totalEstimate/1000)}k chars / ~${Math.round(totalEstimate/4)}  tokens). May exceed model limits.`);
-    }
-    return sections.filter(s => s).join("\n");
+     return plotParts;
   },
 
   // Fix #2, #3, #4: Improved chapter context with adaptive lookback and head+tail extraction
@@ -3361,20 +3406,6 @@ const ContextEngine = {
 const AGENT_DEFAULT_MODEL = "x-ai/grok-4.1-fast";
 
 // Available models for each agent role (user can pick in Settings)
-const AGENT_MODEL_OPTIONS = [
-  { value: "x-ai/grok-4.1-fast", label: "Grok 4.1 Fast (default)" },
-  { value: "anthropic/claude-haiku-4.5", label: "Claude Haiku 4.5 (fast, cheap)" },
-  { value: "anthropic/claude-sonnet-4.6", label: "Claude Sonnet 4.6 (balanced)" },
-  { value: "anthropic/claude-opus-4.7", label: "Claude Opus 4.7 (best quality)" },
-  { value: "google/gemini-2.5-flash", label: "Gemini 2.5 Flash" },
-  { value: "google/gemini-2.5-pro", label: "Gemini 2.5 Pro" },
-  { value: "openai/gpt-5-mini", label: "GPT-5 Mini" },
-  { value: "openai/gpt-5", label: "GPT-5" },
-  { value: "deepseek/deepseek-v3.2", label: "DeepSeek v3.2" },
-  { value: "meta-llama/llama-4-maverick", label: "Llama 4 Maverick" },
-  { value: "mistralai/mistral-large-2.1", label: "Mistral Large 2.1" },
-];
-
 // Agent roles — each has its own model setting and budget
 const AGENT_ROLES = [
   { key: "orchestrator", label: "Orchestrator", desc: "Routes requests and plans the run", budget: 4000 },
@@ -4499,47 +4530,27 @@ const FindReplaceModal = memo(({ project, onClose, onUpdate }) => {
   const replaceAll = useCallback(() => {
     if (!find || !project) return;
     let totalReplaced = 0;
+    // Replace across the listed string fields of an object, using a FRESH regex per field
+    // (global regexes are stateful, so each field needs its own instance). Returns a patched copy.
+    const replaceInFields = (obj, fields) => {
+      const patch = {};
+      for (const k of fields) {
+        if (!obj[k]) continue;
+        const next = obj[k].replace(makeRegex(), () => { totalReplaced++; return replace; });
+        if (next !== obj[k]) patch[k] = next;
+      }
+      return { ...obj, ...patch };
+    };
     const updatedProject = { ...project };
-    // Chapter content
-    updatedProject.chapters = (project.chapters || []).map(ch => {
-      const re = makeRegex(); const re2 = makeRegex(); const re3 = makeRegex(); const re4 = makeRegex();
-      const newContent = (ch.content || "").replace(re, () => { totalReplaced++; return replace; });
-      const newTitle = (ch.title || "").replace(re2, () => { totalReplaced++; return replace; });
-      const newSummary = (ch.summary || "").replace(re3, () => { totalReplaced++; return replace; });
-      const newSceneNotes = (ch.sceneNotes || "").replace(re4, () => { totalReplaced++; return replace; });
-      return { ...ch, content: newContent, title: newTitle, summary: newSummary, sceneNotes: newSceneNotes };
-    });
+    updatedProject.chapters = (project.chapters || []).map(ch =>
+      replaceInFields(ch, ["content", "title", "summary", "sceneNotes"]));
     if (scope === "all") {
-      updatedProject.characters = (project.characters || []).map(c => {
-        const patch = {};
-        ["name", "role", "personality", "backstory", "desires", "speechPattern", "arc", "notes", "secrets", "appearance"].forEach(k => {
-          if (!c[k]) return;
-          const re = makeRegex();
-          const next = c[k].replace(re, () => { totalReplaced++; return replace; });
-          if (next !== c[k]) patch[k] = next;
-        });
-        return { ...c, ...patch };
-      });
-      updatedProject.worldBuilding = (project.worldBuilding || []).map(w => {
-        const patch = {};
-        ["name", "description", "keywords", "history", "atmosphere", "culturalNorms"].forEach(k => {
-          if (!w[k]) return;
-          const re = makeRegex();
-          const next = w[k].replace(re, () => { totalReplaced++; return replace; });
-          if (next !== w[k]) patch[k] = next;
-        });
-        return { ...w, ...patch };
-      });
-      updatedProject.plotOutline = (project.plotOutline || []).map(pl => {
-        const patch = {};
-        ["title", "summary"].forEach(k => {
-          if (!pl[k]) return;
-          const re = makeRegex();
-          const next = pl[k].replace(re, () => { totalReplaced++; return replace; });
-          if (next !== pl[k]) patch[k] = next;
-        });
-        return { ...pl, ...patch };
-      });
+      updatedProject.characters = (project.characters || []).map(c =>
+        replaceInFields(c, ["name", "role", "personality", "backstory", "desires", "speechPattern", "arc", "notes", "secrets", "appearance"]));
+      updatedProject.worldBuilding = (project.worldBuilding || []).map(w =>
+        replaceInFields(w, ["name", "description", "keywords", "history", "atmosphere", "culturalNorms"]));
+      updatedProject.plotOutline = (project.plotOutline || []).map(pl =>
+        replaceInFields(pl, ["title", "summary"]));
     }
     onUpdate(updatedProject, totalReplaced);
   }, [find, replace, project, scope, makeRegex, onUpdate]);
@@ -7704,7 +7715,7 @@ const SelectField = memo(({ label, value, onChange, options, placeholder }) => (
 ));
 
 // ─── MODEL SELECTOR ───
-const ModelSelector = memo(({ apiKey, value, onChange }) => {
+const ModelSelector = memo(({ apiKey, value, onChange, label = "Model" }) => {
   const [models, setModels] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -7744,7 +7755,7 @@ const ModelSelector = memo(({ apiKey, value, onChange }) => {
     return models.filter(m => m.id.toLowerCase().includes(q) || (m.name || "").toLowerCase().includes(q)).slice(0, 50);
   }, [models, search]);
 
-  const displayName = models.find(m => m.id === value)?.name || value || "Select model...";
+  const displayName = models.find(m => m.id === value)?.name || value || "Use main model";
 
   const formatPrice = (p) => {
     if (!p) return "–";
@@ -7755,7 +7766,7 @@ const ModelSelector = memo(({ apiKey, value, onChange }) => {
 
   return (
     <div className="nf-field" ref={dropdownRef} style={{ position: "relative" }}>
-      <label className="nf-label">Model</label>
+      {label && <label className="nf-label">{label}</label>}
       <button type="button" onClick={() => { setOpen(!open); if (!open) setTimeout(() => inputRef.current?.focus(), 50); }}
         className="nf-input" style={{ textAlign: "left", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, width: "100%" }}>
         <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, fontSize: 12 }}>{displayName}</span>
@@ -8107,7 +8118,7 @@ AI-EVOLVING: dynamic, status, tension, tensionType, powerDynamic, trustLevel, ch
       const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
         method: "POST",
         headers: { "Content-Type": "application/json", "Authorization": `Bearer ${settings.apiKey}`, "HTTP-Referer": window.location.origin, "X-Title": "NovelForge" },
-        body: JSON.stringify({ model: settings.model, messages: allMessages, max_tokens: tabMaxTokens[tabName] || 2048, temperature: tabTemperatures[tabName] || 0.8 }),
+        body: JSON.stringify({ model: settings.tabModels?.[tabName] || settings.model, messages: allMessages, max_tokens: tabMaxTokens[tabName] || 2048, temperature: tabTemperatures[tabName] || 0.8 }),
         signal: controller.signal,
       });
       if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error?.message || `API error ${res.status}`); }
@@ -10248,6 +10259,8 @@ export default function NovelForge() {
     temperature: 0.85, systemPrompt: "",
     frequencyPenalty: 0.1, presencePenalty: 0.15,
     modelContextWindow: 200000,
+    imageModel: "google/gemini-3.1-flash-image-preview", // model used for all image generation
+    tabModels: {}, // per-tab model overrides (characters/world/plot/relationships); empty = use main model
     // Multi-agent system settings
     agentsEnabled: false, // opt-in: user must enable in settings
     agentModels: {}, // per-role model overrides; defaults to x-ai/grok-4.1-fast
@@ -12770,6 +12783,8 @@ If no relationship changes, respond "No relationship updates needed."` },
       temperature: 0.85, systemPrompt: "",
       frequencyPenalty: 0.1, presencePenalty: 0.15,
       modelContextWindow: 200000,
+      imageModel: "google/gemini-3.1-flash-image-preview",
+      tabModels: {},
       agentsEnabled: false,
       agentModels: {},
       agentPostProcessors: { continuityChecker: true, voiceDriftDetector: false, hookScorer: true, motifAuditor: true, stateUpdater: true },
@@ -13306,10 +13321,22 @@ CRITICAL: Every sentence must describe something visible. If a detail cannot be 
 
   useEffect(() => () => { if (gdriveSyncTimerRef.current) clearInterval(gdriveSyncTimerRef.current); }, []);
 
-  const _generateSingleImage = useCallback(async (prompt, aspectRatio = null) => {
+  const _generateSingleImage = useCallback(async (prompt, aspectRatio = null, referenceImages = null) => {
+    // referenceImages: optional array of image URLs / data URLs to use as visual base (image-to-image).
+    // When present, the prompt + images are sent as a multimodal user message so the model
+    // renders the scene INTO / CONSISTENT WITH the supplied images.
+    const refs = (Array.isArray(referenceImages) ? referenceImages : [])
+      .filter(u => typeof u === "string" && (u.startsWith("data:") || u.startsWith("http")))
+      .slice(0, 4);
+    const userContent = refs.length > 0
+      ? [
+          { type: "text", text: prompt.trim() },
+          ...refs.map(url => ({ type: "image_url", image_url: { url } })),
+        ]
+      : prompt.trim();
     const body = {
-      model: "google/gemini-3.1-flash-image-preview",
-      messages: [{ role: "user", content: prompt.trim() }],
+      model: settings.imageModel || "google/gemini-3.1-flash-image-preview",
+      messages: [{ role: "user", content: userContent }],
       modalities: ["image", "text"],
       max_tokens: 4096,
     };
@@ -13340,16 +13367,16 @@ CRITICAL: Every sentence must describe something visible. If a detail cannot be 
       }
     }
     return null;
-  }, [settings.apiKey]);
+  }, [settings.apiKey, settings.imageModel]);
 
-  const handleGenerateImage = useCallback(async (prompt, use4x = false, aspectRatio = null) => {
+  const handleGenerateImage = useCallback(async (prompt, use4x = false, aspectRatio = null, referenceImages = null) => {
     if (!settings.apiKey || !prompt?.trim()) return;
 
     if (!use4x) {
       // Single image mode — use selected aspect ratio
       setImageGenStatus({ status: "generating", imageUrl: null, images: null, retryCount: 0, error: null });
       try {
-        const imageUrl = await _generateSingleImage(prompt, aspectRatio);
+        const imageUrl = await _generateSingleImage(prompt, aspectRatio, referenceImages);
         if (imageUrl) {
           setImageGenStatus({ status: "done", imageUrl, images: null, retryCount: 0, error: null });
         } else {
@@ -13385,7 +13412,7 @@ CRITICAL: Every sentence must describe something visible. If a detail cannot be 
         return { ...prev, images: imgs };
       });
       try {
-        const imageUrl = await _generateSingleImage(prompt, r.ratio);
+        const imageUrl = await _generateSingleImage(prompt, r.ratio, referenceImages);
         setImageGenStatus(prev => {
           if (!prev?.images) return prev;
           const imgs = [...prev.images];
@@ -13404,6 +13431,68 @@ CRITICAL: Every sentence must describe something visible. If a detail cannot be 
       }
     }));
   }, [settings.apiKey, _generateSingleImage]);
+
+  // ─── CHAINED 4-WALL RENDER ───
+  // Renders the 4 room walls SEQUENTIALLY, feeding each completed wall as a reference
+  // image into the next render. This makes the 4 angles share the SAME materials, lighting,
+  // furniture and palette — solving the "4 distinct text-only images don't match" problem.
+  const [chainedWallRender, setChainedWallRender] = useState(null); // { itemId, current, total } | null
+  const handleRenderAllWallsChained = useCallback(async (itemId) => {
+    if (!settings.apiKey) { showToast("Set your OpenRouter API key in Settings first", "error"); return; }
+    const item = project?.worldBuilding?.find(w => w.id === itemId);
+    if (!item) return;
+    const WALL_KEYS = ["wall_a", "wall_b", "wall_c", "wall_d"];
+    const WALL_NAMES = {
+      wall_a: "Entry view (facing into the room from the doorway)",
+      wall_b: "Right wall (90° clockwise from entry view)",
+      wall_c: "Left wall (90° counter-clockwise from entry view)",
+      wall_d: "Behind the entry (the door wall, facing back toward where you came in)",
+    };
+    const prompts = item.imagePrompts || {};
+    const keysToRender = WALL_KEYS.filter(k => prompts[k]);
+    if (!keysToRender.length) { showToast("Generate the 4 wall prompts first", "error"); return; }
+
+    setChainedWallRender({ itemId, current: 0, total: keysToRender.length });
+    const renderedSoFar = []; // accumulates rendered image URLs to use as references
+    const updatedRefs = { ...(item.referenceImages || {}) };
+    let okCount = 0;
+
+    for (let i = 0; i < keysToRender.length; i++) {
+      const wallKey = keysToRender[i];
+      setChainedWallRender({ itemId, current: i + 1, total: keysToRender.length });
+      showToast(`Rendering ${wallKey.replace("_", " ").toUpperCase()} (${i + 1}/${keysToRender.length})...`, "info");
+      // Build a prompt that explicitly references the established look from prior walls
+      let chainedPrompt = prompts[wallKey];
+      if (renderedSoFar.length > 0) {
+        chainedPrompt = `${prompts[wallKey]}
+
+CRITICAL CONSISTENCY REQUIREMENT: The attached reference image(s) show OTHER ANGLES of THIS EXACT SAME ROOM that have already been rendered. You MUST keep everything visually identical to them: the same wall material and color, the same flooring, the same ceiling, the same lighting temperature and direction, the same furniture style, the same props, and the same overall palette and mood. This view shows the ${WALL_NAMES[wallKey] || wallKey}. Render the SAME room from this new angle — do NOT invent a different room. Match the established look exactly.`;
+      }
+      try {
+        // Pass already-rendered walls as image-to-image references (max 4 handled inside)
+        const imageUrl = await _generateSingleImage(chainedPrompt, "4:3", renderedSoFar.length ? renderedSoFar : null);
+        if (imageUrl) {
+          updatedRefs[wallKey] = imageUrl;
+          renderedSoFar.push(imageUrl);
+          okCount++;
+          // Persist progressively so the user sees walls fill in live
+          setProjects(prev => prev.map(p => {
+            if (p.id !== activeProjectId) return p;
+            return { ...p, worldBuilding: (p.worldBuilding || []).map(w =>
+              w.id === itemId ? { ...w, referenceImages: { ...updatedRefs } } : w
+            )};
+          }));
+        }
+      } catch (e) {
+        showToast(`${wallKey} failed: ${e.message?.replace(/sk-[a-zA-Z0-9]+/g, "sk-***") || "error"}`, "error");
+      }
+    }
+
+    setChainedWallRender(null);
+    showToast(okCount === keysToRender.length
+      ? `All ${okCount} walls rendered consistently`
+      : `Rendered ${okCount}/${keysToRender.length} walls`, okCount ? "success" : "error");
+  }, [project, settings.apiKey, activeProjectId, _generateSingleImage, showToast]);
 
   const handleSaveImageDraft = useCallback((imageUrl, prompt, chapterIdx) => {
     const chTitle = project?.chapters?.[chapterIdx]?.title || "";
@@ -15825,6 +15914,53 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                 <button onClick={() => { if (imagePromptAbortRef.current) { imagePromptAbortRef.current.abort(); imagePromptAbortRef.current = null; } setImagePromptData(null); setImageGenStatus(null); }} className="nf-btn-icon" aria-label="Close"><Icons.X /></button>
               </div>
 
+              {/* ─── LOCATION IMAGE BASE (image-to-image) ─── */}
+              {(() => {
+                const locsWithImgs = (project?.worldBuilding || []).filter(w =>
+                  (w.category === "Location" || !w.category) && w.referenceImages &&
+                  (Array.isArray(w.referenceImages) ? w.referenceImages.some(Boolean) : Object.values(w.referenceImages).some(Boolean))
+                );
+                if (!locsWithImgs.length) return null;
+                const collectImgs = (w) => !w ? [] : (Array.isArray(w.referenceImages) ? w.referenceImages : Object.values(w.referenceImages || {})).filter(Boolean);
+                const activeImgs = imagePromptData.worldRefImages || [];
+                const useRefs = imagePromptData._useLocationRefs !== false && activeImgs.length > 0;
+                return (
+                  <div style={{ marginBottom: 12, padding: "8px 10px", background: "var(--nf-bg-deep)", border: "1px solid var(--nf-border)", borderRadius: 3 }}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: activeImgs.length ? 8 : 0 }}>
+                      <span style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--nf-text-muted)" }}>Render scene inside a location</span>
+                      <select
+                        value={imagePromptData._refLocationId || ""}
+                        onChange={e => {
+                          const loc = locsWithImgs.find(w => w.id === e.target.value);
+                          setImagePromptData(prev => prev ? { ...prev, _refLocationId: e.target.value || null, worldRefImages: collectImgs(loc), _useLocationRefs: true, primaryWorld: loc || prev.primaryWorld } : prev);
+                        }}
+                        className="nf-select" style={{ width: "auto", minWidth: 160, fontSize: 11, padding: "3px 6px" }}>
+                        <option value="">None (text only)</option>
+                        {locsWithImgs.map(w => (
+                          <option key={w.id} value={w.id}>{w.name || "Unnamed"} ({collectImgs(w).length} img)</option>
+                        ))}
+                      </select>
+                    </div>
+                    {activeImgs.length > 0 && (
+                      <>
+                        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
+                          {activeImgs.slice(0, 4).map((src, i) => (
+                            <img key={i} src={src} alt={`ref ${i + 1}`} loading="lazy"
+                              style={{ width: 56, height: 42, objectFit: "cover", borderRadius: 2, border: "1px solid var(--nf-border)", opacity: useRefs ? 1 : 0.4 }} />
+                          ))}
+                        </div>
+                        <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", fontSize: 11, color: "var(--nf-text-dim)" }}>
+                          <input type="checkbox" checked={useRefs}
+                            onChange={e => setImagePromptData(prev => prev ? { ...prev, _useLocationRefs: e.target.checked } : prev)}
+                            style={{ accentColor: "var(--nf-accent)" }} />
+                          Use these {activeImgs.length} image(s) as the visual base — the characters/scene will be rendered into this exact environment for consistency.
+                        </label>
+                      </>
+                    )}
+                  </div>
+                );
+              })()}
+
               {/* Warnings */}
               {imagePromptData.mentionedChars?.some(c => !c.lookAlike) && (
                 <div style={{ padding: "6px 10px", background: "var(--nf-error-bg)", border: "1px solid var(--nf-error-border)", borderRadius: 3, marginBottom: 8, color: "var(--nf-accent)" }}>
@@ -15872,7 +16008,9 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                 <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap", alignItems: "center" }}>
                   <button onClick={() => {
                     const currentPrompt = imagePromptData._showDesensitized && imagePromptData.desensitizedPrompt ? imagePromptData.desensitizedPrompt : imagePromptData.prompt;
-                    handleGenerateImage(currentPrompt, imageGen4x, imageGenAspect || null);
+                    // Attach location reference images (image-to-image) so the scene renders INSIDE the location.
+                    const refImgs = imagePromptData._useLocationRefs === false ? null : (imagePromptData.worldRefImages || null);
+                    handleGenerateImage(currentPrompt, imageGen4x, imageGenAspect || null, refImgs);
                   }} disabled={imageGenStatus?.status === "generating"} className="nf-btn nf-btn-primary" style={{ fontSize: 11, padding: "6px 14px" }}>
                     {imageGenStatus?.status === "generating" ? <><Spinner /> Generating...</> : <><Icons.Sparkle /> {imageGen4x ? "Generate 4 Variants" : "Generate Image"}</>}
                   </button>
@@ -16228,7 +16366,7 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
                         method: "POST",
                         headers: { "Content-Type": "application/json", "Authorization": `Bearer ${settings.apiKey}`, "HTTP-Referer": window.location.origin, "X-Title": "NovelForge" },
                         body: JSON.stringify({
-                          model: "google/gemini-3.1-flash-image-preview",
+                          model: settings.imageModel || "google/gemini-3.1-flash-image-preview",
                           messages: [{ role: "user", content: prompt }],
                           modalities: ["image", "text"],
                           temperature: 0.8, max_tokens: 4096,
@@ -17110,7 +17248,7 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
                                       const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
                                         method: "POST",
                                         headers: { "Content-Type": "application/json", "Authorization": `Bearer ${settings.apiKey}`, "HTTP-Referer": window.location.origin, "X-Title": "NovelForge" },
-                                        body: JSON.stringify({ model: "google/gemini-3.1-flash-image-preview", messages: [{ role: "user", content: `Create a simple, clean logo/emblem/crest for an organization called "${item?.name || "unnamed"}". ${item.orgPurpose ? `Purpose: ${item.orgPurpose}. ` : ""}Style: minimalist Japandi aesthetic, clean lines, muted earth tones, on a plain dark background. Square format, icon-only, no text.` }], modalities: ["image", "text"], temperature: 0.8, max_tokens: 4096 }),
+                                        body: JSON.stringify({ model: settings.imageModel || "google/gemini-3.1-flash-image-preview", messages: [{ role: "user", content: `Create a simple, clean logo/emblem/crest for an organization called "${item?.name || "unnamed"}". ${item.orgPurpose ? `Purpose: ${item.orgPurpose}. ` : ""}Style: minimalist Japandi aesthetic, clean lines, muted earth tones, on a plain dark background. Square format, icon-only, no text.` }], modalities: ["image", "text"], temperature: 0.8, max_tokens: 4096 }),
                                       });
                                       if (!res.ok) { const errData = await res.json().catch(() => ({})); throw new Error(errData.error?.message || `API error (${res.status})`); }
                                       const data = await res.json();
@@ -17140,7 +17278,7 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
                                             <button onClick={async () => {
                                               showToast("Re-rendering...", "info");
                                               try {
-                                                const res = await fetch("https://openrouter.ai/api/v1/chat/completions", { method: "POST", headers: { "Content-Type": "application/json", "Authorization": `Bearer ${settings.apiKey}`, "HTTP-Referer": window.location.origin, "X-Title": "NovelForge" }, body: JSON.stringify({ model: "google/gemini-3.1-flash-image-preview", messages: [{ role: "user", content: item.orgGroupPhotoPrompt }], modalities: ["image", "text"], temperature: 0.8, max_tokens: 4096 }) });
+                                                const res = await fetch("https://openrouter.ai/api/v1/chat/completions", { method: "POST", headers: { "Content-Type": "application/json", "Authorization": `Bearer ${settings.apiKey}`, "HTTP-Referer": window.location.origin, "X-Title": "NovelForge" }, body: JSON.stringify({ model: settings.imageModel || "google/gemini-3.1-flash-image-preview", messages: [{ role: "user", content: item.orgGroupPhotoPrompt }], modalities: ["image", "text"], temperature: 0.8, max_tokens: 4096 }) });
                                                 if (!res.ok) throw new Error(`API error (${res.status})`);
                                                 const data = await res.json();
                                                 const img = data.choices?.[0]?.message?.images?.[0]?.image_url?.url;
@@ -17170,7 +17308,7 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
                                       {item.orgGroupPhotoPrompt && <button onClick={async () => {
                                         showToast("Rendering...", "info");
                                         try {
-                                          const res = await fetch("https://openrouter.ai/api/v1/chat/completions", { method: "POST", headers: { "Content-Type": "application/json", "Authorization": `Bearer ${settings.apiKey}`, "HTTP-Referer": window.location.origin, "X-Title": "NovelForge" }, body: JSON.stringify({ model: "google/gemini-3.1-flash-image-preview", messages: [{ role: "user", content: item.orgGroupPhotoPrompt }], modalities: ["image", "text"], temperature: 0.8, max_tokens: 4096 }) });
+                                          const res = await fetch("https://openrouter.ai/api/v1/chat/completions", { method: "POST", headers: { "Content-Type": "application/json", "Authorization": `Bearer ${settings.apiKey}`, "HTTP-Referer": window.location.origin, "X-Title": "NovelForge" }, body: JSON.stringify({ model: settings.imageModel || "google/gemini-3.1-flash-image-preview", messages: [{ role: "user", content: item.orgGroupPhotoPrompt }], modalities: ["image", "text"], temperature: 0.8, max_tokens: 4096 }) });
                                           if (!res.ok) { const errData = await res.json().catch(() => ({})); throw new Error(errData.error?.message || `API error (${res.status})`); }
                                           const data = await res.json();
                                           const img = data.choices?.[0]?.message?.images?.[0]?.image_url?.url;
@@ -17463,6 +17601,18 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
                                 ? <><Spinner /> Generating...</>
                                 : <><Icons.Wand /> {Object.values(item.imagePrompts || {}).some(p => p) ? "Regenerate" : "Generate 4 Prompts"}</>}
                             </button>
+                            {Object.values(item.imagePrompts || {}).some(p => p) && (
+                              <button
+                                onClick={() => handleRenderAllWallsChained(item.id)}
+                                disabled={!settings.apiKey || (chainedWallRender && chainedWallRender.itemId === item.id)}
+                                className="nf-btn-micro"
+                                title="Render all 4 walls in sequence, each matching the previous ones for a consistent room"
+                                style={{ borderColor: "var(--nf-accent-2)", color: "var(--nf-accent-2)", fontSize: 11, marginLeft: 6 }}>
+                                {chainedWallRender && chainedWallRender.itemId === item.id
+                                  ? <><Spinner /> Wall {chainedWallRender.current}/{chainedWallRender.total}...</>
+                                  : <><Icons.Sparkle /> Render All 4 (consistent)</>}
+                              </button>
+                            )}
                           </div>
                           {!item.description && (
                             <div style={{ fontSize: 11, color: "var(--nf-accent)", fontStyle: "italic", padding: "8px 0" }}>
@@ -17567,25 +17717,13 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
                                             if (!settings.apiKey) { showToast("Set API key first", "error"); return; }
                                             showToast(`Rendering ${WALL_LABELS[idx]}...`, "info");
                                             try {
-                                              const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-                                                method: "POST",
-                                                headers: { "Content-Type": "application/json", "Authorization": `Bearer ${settings.apiKey}`, "HTTP-Referer": window.location.origin, "X-Title": "NovelForge" },
-                                                body: JSON.stringify({
-                                                  model: "google/gemini-3.1-flash-image-preview",
-                                                  messages: [{ role: "user", content: prompts[wallKey] }],
-                                                  modalities: ["image", "text"],
-                                                  temperature: 0.8, max_tokens: 4096,
-                                                }),
-                                              });
-                                              if (!res.ok) { const errData = await res.json().catch(() => ({})); throw new Error(errData.error?.message || `API error (${res.status})`); }
-                                              const data = await res.json();
-                                              const message = data.choices?.[0]?.message;
-                                              let imageUrl = null;
-                                              if (message?.images && Array.isArray(message.images)) {
-                                                for (const img of message.images) {
-                                                  if (img.image_url?.url) { imageUrl = img.image_url.url; break; }
-                                                }
+                                              // Use any sibling walls already rendered as visual references for consistency
+                                              const siblingImgs = WALL_KEYS.filter(k => k !== wallKey).map(k => refs[k]).filter(Boolean);
+                                              let renderPrompt = prompts[wallKey];
+                                              if (siblingImgs.length > 0) {
+                                                renderPrompt = `${prompts[wallKey]}\n\nCRITICAL: The attached reference image(s) are OTHER ANGLES of THIS EXACT SAME ROOM. Keep the wall material, flooring, ceiling, lighting, furniture, props and palette IDENTICAL to them. Render the same room from this angle only.`;
                                               }
+                                              const imageUrl = await _generateSingleImage(renderPrompt, "4:3", siblingImgs.length ? siblingImgs : null);
                                               if (imageUrl) {
                                                 const updatedRefs = { ...(item.referenceImages || {}) };
                                                 updatedRefs[wallKey] = imageUrl;
@@ -19017,6 +19155,27 @@ Speech pattern: ${char.speechPattern || ""}` },
           </div>
         </div>
         <ModelSelector apiKey={settings.apiKey} value={settings.model} onChange={(v, ctxLen) => setSettings(prev => ({ ...prev, model: v, modelContextWindow: ctxLen || prev.modelContextWindow }))} />
+        <ModelSelector apiKey={settings.apiKey} value={settings.imageModel} onChange={(v) => setSettings(prev => ({ ...prev, imageModel: v }))} label="Image Model" />
+        <details style={{ marginTop: 4 }}>
+          <summary style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--nf-accent-2)", cursor: "pointer", padding: "6px 0" }}>
+            Per-Tab Model Overrides
+          </summary>
+          <div style={{ fontSize: 11, color: "var(--nf-text-muted)", margin: "4px 0 10px", lineHeight: 1.5 }}>
+            Optionally use a different model for each builder tab's AI chat. Leave blank to use the main model.
+          </div>
+          <div style={{ display: "grid", gap: 10 }}>
+            {[{ key: "characters", label: "Characters Tab" }, { key: "world", label: "World Tab" }, { key: "plot", label: "Plot Tab" }, { key: "relationships", label: "Relationships Tab" }].map(tab => (
+              <div key={tab.key} style={{ display: "flex", alignItems: "flex-end", gap: 6 }}>
+                <div style={{ flex: 1 }}>
+                  <ModelSelector apiKey={settings.apiKey} value={settings.tabModels?.[tab.key] || ""} onChange={(v) => setSettings(prev => ({ ...prev, tabModels: { ...(prev.tabModels || {}), [tab.key]: v } }))} label={tab.label} />
+                </div>
+                {settings.tabModels?.[tab.key] && (
+                  <button onClick={() => setSettings(prev => { const tm = { ...(prev.tabModels || {}) }; delete tm[tab.key]; return { ...prev, tabModels: tm }; })} className="nf-btn-icon" style={{ marginBottom: 1 }} title="Reset to main model"><Icons.X /></button>
+                )}
+              </div>
+            ))}
+          </div>
+        </details>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
           {/* E6: Reasonable max tokens clamp */}
           <div className="nf-field">
@@ -19111,17 +19270,15 @@ Speech pattern: ${char.speechPattern || ""}` },
                       <span style={{ fontSize: 11, color: "var(--nf-text-muted)", fontFamily: "var(--nf-font-mono)" }}>{role.budget.toLocaleString()} tok</span>
                     </div>
                     <div style={{ fontSize: 11, color: "var(--nf-text-muted)", marginBottom: 6, lineHeight: 1.4 }}>{role.desc}</div>
-                    <select
+                    <ModelSelector
+                      apiKey={settings.apiKey}
+                      label=""
                       value={settings.agentModels?.[role.key] || AGENT_DEFAULT_MODEL}
-                      onChange={e => setSettings(prev => ({
+                      onChange={(v) => setSettings(prev => ({
                         ...prev,
-                        agentModels: { ...(prev.agentModels || {}), [role.key]: e.target.value },
+                        agentModels: { ...(prev.agentModels || {}), [role.key]: v },
                       }))}
-                      className="nf-select"style={{ width: "100%" }}>
-                      {AGENT_MODEL_OPTIONS.map(opt => (
-                        <option key={opt.value} value={opt.value}>{opt.label}</option>
-                      ))}
-                    </select>
+                    />
                   </div>
                 ))}
               </div>
@@ -20775,7 +20932,7 @@ Speech pattern: ${char.speechPattern || ""}` },
               const curPlotEntry = (project?.plotOutline || []).find(pl => (pl.chapter || 0) === activeChapterIdx + 1);
               if (curPlotEntry?.povCharacterId) { const m = chars.find(c => c.id === curPlotEntry.povCharacterId); if (m) return m.id; }
               const povStr = curChapter?.pov || project?.pov || "";
-              const povName = povStr.replace(/^(Third person limited|Third person deep|Third person omniscient|First person|First person present tense|Second person|Multiple POV[^-—:]*|Dual POV[^-—:]*)\s*[-—:]\s*/i, "").trim();
+              const povName = _stripPovPrefix(povStr);
               if (povName) { const m = chars.find(c => c.name && c.name.toLowerCase() === povName.toLowerCase()); if (m) return m.id; }
               const p = chars.find(c => c.role === "protagonist"); return p?.id || null;
             })()}
