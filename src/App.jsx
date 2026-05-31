@@ -1964,8 +1964,12 @@ const ContextEngine = {
     // --- Determine scene context for intelligent filtering ---
     const curChapter = project.chapters?.[chapterIdx];
     const sceneNotes = curChapter?.sceneNotes || "";
-    // D6: Detect scene type from plot outline
-    const curPlotEntry = (project.plotOutline || []).find(pl => (pl.chapter || 0) === currentChNum);
+    // D6: Detect scene type from plot outline. Resolve by linkedPlotId first (robust to plot
+    // reordering), then by chapter number. Deliberately NOT using the "any entry with beats"
+    // last-resort fallback here — an unrelated entry must never define this chapter's cast.
+    const curPlotEntry = (curChapter?.linkedPlotId
+      ? (project.plotOutline || []).find(pl => pl.id === curChapter.linkedPlotId)
+      : null) || (project.plotOutline || []).find(pl => (pl.chapter || 0) === currentChNum);
     const sceneType = curPlotEntry?.sceneType || "";
     const isIntimateScene = sceneType === "intimate" || /\b(intimate|sex|love\s*scene|bedroom|kiss|sensual)\b/i.test(sceneNotes);
     const isDialogueScene = sceneType === "dialogue" || /\b(conversation|discuss|argue|negotiate|confess|interview)\b/i.test(sceneNotes);
@@ -2101,16 +2105,18 @@ const ContextEngine = {
 
     const mentionedCharIds = _detectMentionedCharacters(detectionText, project.characters);
 
-    // FIX: Directly inject character IDs listed in the plot outline's characters array
+    // The Plot tab's `characters` array is the AUTHOR'S explicit statement of who is in this
+    // chapter. When it's non-empty, it is authoritative: those characters are present, and any
+    // other character merely detected in the prose is at most "referenced" (talked about), never
+    // auto-promoted into the scene. When it's empty, we fall back to prose detection + heuristics.
     const forcedPresentIds = new Set();
-    if (curPlotEntry?.characters) {
-      const plotCharIds = Array.isArray(curPlotEntry.characters) ? curPlotEntry.characters : [];
-      for (const cid of plotCharIds) {
-        if ((project.characters || []).some(c => c.id === cid)) {
-          mentionedCharIds.add(cid);
-          forcedPresentIds.add(cid); // author tagged them for the scene → definitely present
-        }
-      }
+    const plotCharIds = Array.isArray(curPlotEntry?.characters)
+      ? curPlotEntry.characters.filter(cid => (project.characters || []).some(c => c.id === cid))
+      : [];
+    const authorCuratedCast = plotCharIds.length > 0;
+    for (const cid of plotCharIds) {
+      mentionedCharIds.add(cid);
+      forcedPresentIds.add(cid); // author tagged them for the scene → definitely present
     }
     // Characters named in the scene notes are authorial intent → present.
     if (sceneNotes) {
@@ -2184,10 +2190,23 @@ const ContextEngine = {
 
     // POV character is, by definition, present in their own scene.
     if (povCharId) forcedPresentIds.add(povCharId);
-    // Separate genuine scene presence from "talked about but absent" (e.g. one character
-    // mentioning another who isn't there). Referenced-absent chars get lighter treatment.
-    const { present: presentCharIds, referenced: referencedCharIds } =
-      _classifyCharacterPresence(detectionText, project.characters, mentionedCharIds, { forcedPresent: forcedPresentIds });
+    // Determine present vs referenced-absent.
+    let presentCharIds, referencedCharIds;
+    if (authorCuratedCast) {
+      // Author curated the cast → it is authoritative. Present = the curated list (+ POV + scene
+      // notes). Any OTHER character merely detected in the prose is "referenced" (talked about),
+      // never auto-added to the scene.
+      presentCharIds = new Set(forcedPresentIds);
+      referencedCharIds = new Set();
+      for (const id of mentionedCharIds) {
+        if (!presentCharIds.has(id)) referencedCharIds.add(id);
+      }
+    } else {
+      // No curated cast → fall back to prose detection + presence heuristics.
+      const classified = _classifyCharacterPresence(detectionText, project.characters, mentionedCharIds, { forcedPresent: forcedPresentIds });
+      presentCharIds = classified.present;
+      referencedCharIds = classified.referenced;
+    }
 
     // --- Sections 2-5 extracted into helpers operating on a shared ctx bag ---
     const ctx = {
@@ -2419,19 +2438,18 @@ const ContextEngine = {
       //    appeared in recent chapters (within lookback window)
       if (others.length) {
         const keyRoles = new Set(["protagonist", "antagonist", "love interest", "deuteragonist", "villain"]);
+        // Detect characters in recent chapter summaries ONCE (shared detector → consistent guards).
+        const recentSummaries = (project.chapters || []).slice(Math.max(0, chapterIdx - 3), chapterIdx)
+          .map(ch => ch.summary || "").join(" ");
+        const recentSummaryIds = recentSummaries ? _detectMentionedCharacters(recentSummaries, project.characters) : new Set();
         // Determine which non-scene characters are relevant enough to include
         const relevantOthers = others.filter(c => {
           // Filter out characters not yet introduced
           if (!ContextEngine._hasAppeared(project, c, chapterIdx, currentChNum) && (c.hasAppeared || (project.plotOutline || []).some(pl => Array.isArray(pl.characters) && pl.characters.includes(c.id)))) return false;
           // Always include key roles
           if (keyRoles.has(c.role)) return true;
-          // Include if mentioned in recent chapter summaries (within last 3 chapters)
-          const recentSummaries = (project.chapters || []).slice(Math.max(0, chapterIdx - 3), chapterIdx)
-            .map(ch => ch.summary || "").join(" ");
-          if (recentSummaries && c.name) {
-            const nameRegex = new RegExp(`\\b${c.name.split(/\s+/)[0].replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
-            if (nameRegex.test(recentSummaries)) return true;
-          }
+          // Include if detected in recent chapter summaries.
+          if (recentSummaryIds.has(c.id)) return true;
           return false;
         });
 
@@ -2584,6 +2602,21 @@ const ContextEngine = {
           }
           // B6: Sentence-boundary truncation for notes
           if (r.notes) line += ` | ${_truncateAtBoundary(r.notes, 1000)}`;
+          // AI-tracked per-chapter evolution (written by the stateUpdater agent). Surface the most
+          // recent snapshot AT OR BEFORE the current chapter so the writer sees where the
+          // relationship actually stands now, not just the static authored fields.
+          if (r.chapterEvolution && typeof r.chapterEvolution === "object") {
+            const keys = Object.keys(r.chapterEvolution).map(Number).filter(n => !isNaN(n) && n <= currentChNum).sort((a, b) => b - a);
+            if (keys.length > 0) {
+              const latest = r.chapterEvolution[keys[0]];
+              const evoBits = [];
+              if (latest.status) evoBits.push(`status ${latest.status}`);
+              if (latest.tension) evoBits.push(`tension ${latest.tension}`);
+              if (latest.trustLevel) evoBits.push(`trust ${latest.trustLevel}`);
+              if (latest.progression) evoBits.push(_truncateAtBoundary(latest.progression, 120));
+              if (evoBits.length) line += ` | Current state (as of Ch${keys[0]}): ${evoBits.join(", ")}`;
+            }
+          }
           if (ctx.tokensUsed + this._estimateLen(line) < budgetRels) {
             relParts.push(line);
             ctx.tokensUsed += this._estimateLen(line);
@@ -21400,7 +21433,7 @@ Speech pattern: ${char.speechPattern || ""}` },
             povCharId={(() => {
               const chars = project?.characters || [];
               const curChapter = project?.chapters?.[activeChapterIdx];
-              const curPlotEntry = (project?.plotOutline || []).find(pl => (pl.chapter || 0) === activeChapterIdx + 1);
+              const curPlotEntry = ContextEngine._plotEntryForChapter(project, activeChapterIdx);
               if (curPlotEntry?.povCharacterId) { const m = chars.find(c => c.id === curPlotEntry.povCharacterId); if (m) return m.id; }
               const povStr = curChapter?.pov || project?.pov || "";
               const povName = _stripPovPrefix(povStr);
