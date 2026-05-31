@@ -7437,8 +7437,14 @@ Render a photorealistic environment that matches every environmental detail desc
   const nsfwIndicators = /\bnaked\b|\bnude\b|\bundress|\bstrip|\bbare\s*(chest|torso|body|skin)|\bshirtless\b|\bjockstrap\b|\bunderwear\b|\blingerie\b|\bbra\b|\bpanties\b|\bboxers\b|\bbriefs\b|\bkiss|\bmake\s*out|\bgrind|\bstraddle|\blap\b.*\bdance|\bbound\b|\btied\b|\bcuff|\bfasten|\brestraint|\bblindfolded?\b|\bwhip|\bcollar\b|\bchoke|\bgag\b|\bsweat|\boil|\bdrenched|\bwet\b.*\bbody|\bintimate|\bsensual|\berotic|\bpassion|\blust|\bdesire|\bcaress|\btouch|\bgrope|\bfondl|\bpin.*down/i;
   const isLikelyNSFW = nsfwIndicators.test(selectedText);
 
-  // Collect reference image data URLs — only when scene is INSIDE the matched world entry
-  const worldRefImages = useWorldImages && primaryWorld ? (Array.isArray(primaryWorld.referenceImages) ? primaryWorld.referenceImages : Object.values(primaryWorld.referenceImages || {})).filter(img => img) : [];
+  // Collect reference image data URLs — only when scene is INSIDE the matched world entry.
+  // The master room shot (if present) is the strongest single anchor, so it goes FIRST.
+  const worldRefImages = useWorldImages && primaryWorld
+    ? [
+        primaryWorld.roomMasterImage,
+        ...(Array.isArray(primaryWorld.referenceImages) ? primaryWorld.referenceImages : Object.values(primaryWorld.referenceImages || {})),
+      ].filter(img => img)
+    : [];
 
   // Return raw data for AI-powered prompt generation
   return {
@@ -7468,7 +7474,7 @@ const generateWorldImagePrompts = async (item, project, callOpenRouter) => {
     project?.tone ? `Tone: ${project.tone}` : "",
   ].filter(Boolean).join("\n");
 
-  const systemPrompt = `You are an architectural visualization specialist. Given a literary description of a location, produce 4 photorealistic image prompts that together cover every wall and surface of the room.
+  const systemPrompt = `You are an architectural visualization specialist. Given a literary description of a location, produce a MASTER establishing shot prompt plus 4 wall-view prompts that together cover every wall and surface of the room. ALL views depict ONE single, specific, physically-consistent room.
 
 PROCESS:
 1. Build a DETAILED TECHNICAL SPEC SHEET from the description. Invent all missing data:
@@ -7478,44 +7484,44 @@ PROCESS:
    - Lighting: fixture type, position, wattage, color temperature (Kelvin)
    - Architectural trim: baseboards, crown molding, door/window hardware, outlets, switches
 
-2. Divide the room into 4 WALL ZONES based on the description. Each prompt shows ONE wall/area:
-   - WALL_A: First wall you see when entering — typically the most prominent feature wall or the far wall
-   - WALL_B: The wall to the RIGHT of the entry point — second most visible area
-   - WALL_C: The wall to the LEFT of the entry point — remaining major area
-   - WALL_D: The wall BEHIND the entry point (the wall you face when you turn around) — door wall, hallway side
+2. Write a MASTER establishing shot prompt:
+   - An ultra-wide / fisheye photograph (e.g. 14mm lens) taken from the CENTER of the room, ceiling height, angled slightly down, capturing as MUCH of all four walls and the floor as physically possible in one frame
+   - This master image is the single SOURCE OF TRUTH for the room's materials, colors, furniture, layout, and lighting
+   - State ALL dimensions, colors (HEX), materials, lighting, and every major object with its position, inline
 
-   Adapt the zones to the actual room. If the room has an open kitchen on one side, make that its own zone. If there's a bedroom alcove, dedicate a zone to it. The 4 prompts should show EVERY corner of the room when viewed together.
-
-3. Write 4 prompts — one per wall zone. Each prompt:
-   - Camera is positioned in the CENTER of the room, looking at the designated wall
-   - Shows the target wall in detail PLUS glimpses of adjacent walls on either side
-   - States ALL dimensions, colors, materials, lighting inline (image LLM has NO other context)
-   - References the SAME spec sheet (identical room size, colors, object positions across all 4)
-   - Is 250-400 words, copy-paste ready
+3. Divide the room into 4 WALL ZONES. Each wall prompt describes ONE wall as it appears IN the master image — same materials, same furniture, same lighting — just framed tighter on that wall:
+   - WALL_A: The wall directly ahead when entering (far / feature wall)
+   - WALL_B: The wall to the RIGHT of the entry
+   - WALL_C: The wall to the LEFT of the entry
+   - WALL_D: The wall BEHIND the entry (door wall)
+   Each wall prompt must reference the EXACT SAME spec sheet (identical room size, colors, object positions) and read like a tighter crop/reframe of the master, NOT a new room.
 
 OUTPUT FORMAT — use exactly these separators:
 
 ===SPEC_SHEET===
 [Full technical specification]
 
+===PROMPT_MASTER===
+[Ultra-wide establishing shot of the whole room from its center]
+
 ===PROMPT_WALL_A===
-[Walking in from the door — what's directly ahead]
+[The far/feature wall, same room as master]
 
 ===PROMPT_WALL_B===
-[Right wall from entry — what's on the right side]
+[Right wall from entry, same room as master]
 
 ===PROMPT_WALL_C===
-[Left wall from entry — what's on the left side]
+[Left wall from entry, same room as master]
 
 ===PROMPT_WALL_D===
-[Behind you when facing into the room — the door wall]
+[Door wall behind entry, same room as master]
 
 RULES:
 - NEVER say "assign", "derive", "determine" — you have already done the analysis
-- Every prompt must include: room dimensions, wall colors (HEX), floor/ceiling details, ALL visible furniture with dimensions and positions, lighting specs
-- All 4 prompts share identical base specs
+- Every prompt includes: room dimensions, wall colors (HEX), floor/ceiling details, ALL visible furniture with dimensions and positions, lighting specs
+- All prompts share identical base specs — it is literally the same room
 - No people, no text overlays
-- 35mm lens, f/4, eye-level (150cm), moderate depth of field`;
+- Master: 14mm ultra-wide, f/5.6, from room center. Walls: 35mm, f/4, eye-level (150cm)`;
 
   const userMessage = `LOCATION: ${item.name || "Unnamed"}
 ${item.category ? `TYPE: ${item.category}` : ""}
@@ -7532,12 +7538,12 @@ ${desc}`;
 
   if (!response) return null;
 
-  // Parse into 4 wall prompts
-  const result = { wall_a: "", wall_b: "", wall_c: "", wall_d: "" };
-  const keys = ["PROMPT_WALL_A", "PROMPT_WALL_B", "PROMPT_WALL_C", "PROMPT_WALL_D"];
-  const resultKeys = ["wall_a", "wall_b", "wall_c", "wall_d"];
+  // Parse into master + 4 wall prompts
+  const result = { master: "", wall_a: "", wall_b: "", wall_c: "", wall_d: "" };
+  const keys = ["PROMPT_MASTER", "PROMPT_WALL_A", "PROMPT_WALL_B", "PROMPT_WALL_C", "PROMPT_WALL_D"];
+  const resultKeys = ["master", "wall_a", "wall_b", "wall_c", "wall_d"];
 
-  const parts = response.split(/===(PROMPT_WALL_[A-D])===/);
+  const parts = response.split(/===(PROMPT_(?:MASTER|WALL_[A-D]))===/);
   for (let i = 1; i < parts.length; i += 2) {
     const tag = parts[i].trim();
     const idx = keys.indexOf(tag);
@@ -13436,52 +13442,78 @@ CRITICAL: Every sentence must describe something visible. If a detail cannot be 
   // Renders the 4 room walls SEQUENTIALLY, feeding each completed wall as a reference
   // image into the next render. This makes the 4 angles share the SAME materials, lighting,
   // furniture and palette — solving the "4 distinct text-only images don't match" problem.
-  const [chainedWallRender, setChainedWallRender] = useState(null); // { itemId, current, total } | null
+  // ─── MASTER-ANCHORED 4-WALL RENDER ───
+  // Radically different strategy for consistency: instead of rendering 4 independent images and
+  // hoping they match, we first render ONE wide-angle MASTER establishing shot of the whole room.
+  // That master becomes the single source of truth. Each of the 4 walls is then rendered as an
+  // image-to-image REFRAME of the master (master is ALWAYS the primary reference), so every wall
+  // is anchored to the same physical room rather than re-invented from text.
+  const [chainedWallRender, setChainedWallRender] = useState(null); // { itemId, current, total, phase } | null
   const handleRenderAllWallsChained = useCallback(async (itemId) => {
     if (!settings.apiKey) { showToast("Set your OpenRouter API key in Settings first", "error"); return; }
     const item = project?.worldBuilding?.find(w => w.id === itemId);
     if (!item) return;
     const WALL_KEYS = ["wall_a", "wall_b", "wall_c", "wall_d"];
-    const WALL_NAMES = {
-      wall_a: "Entry view (facing into the room from the doorway)",
-      wall_b: "Right wall (90° clockwise from entry view)",
-      wall_c: "Left wall (90° counter-clockwise from entry view)",
-      wall_d: "Behind the entry (the door wall, facing back toward where you came in)",
+    const WALL_REFRAME = {
+      wall_a: "Reframe to show the FAR / FEATURE wall (the wall directly ahead as you enter) and the floor and ceiling meeting it.",
+      wall_b: "Reframe to show the wall to the RIGHT of the entry, with the same furniture and materials visible in the master.",
+      wall_c: "Reframe to show the wall to the LEFT of the entry, with the same furniture and materials visible in the master.",
+      wall_d: "Reframe to show the wall BEHIND the entry (the door wall) as seen when turning around inside the same room.",
     };
     const prompts = item.imagePrompts || {};
     const keysToRender = WALL_KEYS.filter(k => prompts[k]);
-    if (!keysToRender.length) { showToast("Generate the 4 wall prompts first", "error"); return; }
+    if (!keysToRender.length) { showToast("Generate the prompts first", "error"); return; }
 
-    setChainedWallRender({ itemId, current: 0, total: keysToRender.length });
-    const renderedSoFar = []; // accumulates rendered image URLs to use as references
+    const totalSteps = keysToRender.length + 1; // +1 for the master
+    setChainedWallRender({ itemId, current: 0, total: totalSteps, phase: "master" });
+
+    // ── Step 1: render (or reuse) the MASTER establishing shot ──
+    let masterUrl = item.roomMasterImage || "";
+    const persistMaster = (url) => setProjects(prev => prev.map(p =>
+      p.id !== activeProjectId ? p : { ...p, worldBuilding: (p.worldBuilding || []).map(w =>
+        w.id === itemId ? { ...w, roomMasterImage: url } : w) }));
+
+    try {
+      setChainedWallRender({ itemId, current: 1, total: totalSteps, phase: "master" });
+      showToast("Rendering master room shot (1/" + totalSteps + ")...", "info");
+      const masterPrompt = (prompts.master && prompts.master.trim())
+        ? `${prompts.master}\n\nThis is the definitive wide establishing photograph of the entire room — every later view must match THIS image exactly.`
+        : `Ultra-wide 14mm establishing photograph taken from the CENTER of this room, showing as much of all four walls, the floor and ceiling as possible in one frame. Photorealistic, no people, no text.\n\nROOM: ${item.description || item.name || "interior room"}`;
+      // Master uses any pre-uploaded wall images as soft references if present, else pure text.
+      const seedRefs = WALL_KEYS.map(k => (item.referenceImages || {})[k]).filter(Boolean).slice(0, 4);
+      const m = await _generateSingleImage(masterPrompt, "16:9", seedRefs.length ? seedRefs : null);
+      if (m) { masterUrl = m; persistMaster(m); }
+    } catch (e) {
+      showToast(`Master render failed: ${e.message?.replace(/sk-[a-zA-Z0-9]+/g, "sk-***") || "error"}`, "error");
+    }
+
+    if (!masterUrl) {
+      setChainedWallRender(null);
+      showToast("Could not render the master room shot — try again", "error");
+      return;
+    }
+
+    // ── Step 2: render each wall as a REFRAME of the master image ──
     const updatedRefs = { ...(item.referenceImages || {}) };
     let okCount = 0;
-
     for (let i = 0; i < keysToRender.length; i++) {
       const wallKey = keysToRender[i];
-      setChainedWallRender({ itemId, current: i + 1, total: keysToRender.length });
-      showToast(`Rendering ${wallKey.replace("_", " ").toUpperCase()} (${i + 1}/${keysToRender.length})...`, "info");
-      // Build a prompt that explicitly references the established look from prior walls
-      let chainedPrompt = prompts[wallKey];
-      if (renderedSoFar.length > 0) {
-        chainedPrompt = `${prompts[wallKey]}
+      setChainedWallRender({ itemId, current: i + 2, total: totalSteps, phase: wallKey });
+      showToast(`Rendering ${wallKey.replace("_", " ").toUpperCase()} (${i + 2}/${totalSteps})...`, "info");
+      const reframePrompt = `${prompts[wallKey] || ""}
 
-CRITICAL CONSISTENCY REQUIREMENT: The attached reference image(s) show OTHER ANGLES of THIS EXACT SAME ROOM that have already been rendered. You MUST keep everything visually identical to them: the same wall material and color, the same flooring, the same ceiling, the same lighting temperature and direction, the same furniture style, the same props, and the same overall palette and mood. This view shows the ${WALL_NAMES[wallKey] || wallKey}. Render the SAME room from this new angle — do NOT invent a different room. Match the established look exactly.`;
-      }
+CRITICAL — THIS IS THE SAME ROOM AS THE ATTACHED IMAGE(S):
+The FIRST attached image is the master photograph of this exact room. ${WALL_REFRAME[wallKey] || ""} Treat this as re-photographing the SAME physical room from a slightly different camera angle — keep the wall colors, materials, flooring, ceiling, furniture, props, lighting temperature and overall palette IDENTICAL to the master image. Do NOT invent a different room, different furniture, or different colors. Same room, new framing only.`;
+      // Always anchor to the master FIRST, then include up to 3 already-rendered walls for extra coherence.
+      const refsForThisWall = [masterUrl, ...WALL_KEYS.filter(k => k !== wallKey).map(k => updatedRefs[k]).filter(Boolean)].slice(0, 4);
       try {
-        // Pass already-rendered walls as image-to-image references (max 4 handled inside)
-        const imageUrl = await _generateSingleImage(chainedPrompt, "4:3", renderedSoFar.length ? renderedSoFar : null);
+        const imageUrl = await _generateSingleImage(reframePrompt, "4:3", refsForThisWall);
         if (imageUrl) {
           updatedRefs[wallKey] = imageUrl;
-          renderedSoFar.push(imageUrl);
           okCount++;
-          // Persist progressively so the user sees walls fill in live
-          setProjects(prev => prev.map(p => {
-            if (p.id !== activeProjectId) return p;
-            return { ...p, worldBuilding: (p.worldBuilding || []).map(w =>
-              w.id === itemId ? { ...w, referenceImages: { ...updatedRefs } } : w
-            )};
-          }));
+          setProjects(prev => prev.map(p =>
+            p.id !== activeProjectId ? p : { ...p, worldBuilding: (p.worldBuilding || []).map(w =>
+              w.id === itemId ? { ...w, referenceImages: { ...updatedRefs } } : w) }));
         }
       } catch (e) {
         showToast(`${wallKey} failed: ${e.message?.replace(/sk-[a-zA-Z0-9]+/g, "sk-***") || "error"}`, "error");
@@ -13490,8 +13522,8 @@ CRITICAL CONSISTENCY REQUIREMENT: The attached reference image(s) show OTHER ANG
 
     setChainedWallRender(null);
     showToast(okCount === keysToRender.length
-      ? `All ${okCount} walls rendered consistently`
-      : `Rendered ${okCount}/${keysToRender.length} walls`, okCount ? "success" : "error");
+      ? `Master + all ${okCount} walls rendered from one consistent room`
+      : `Rendered master + ${okCount}/${keysToRender.length} walls`, okCount ? "success" : "error");
   }, [project, settings.apiKey, activeProjectId, _generateSingleImage, showToast]);
 
   const handleSaveImageDraft = useCallback((imageUrl, prompt, chapterIdx) => {
@@ -15916,11 +15948,13 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
               {/* ─── LOCATION IMAGE BASE (image-to-image) ─── */}
               {(() => {
                 const locsWithImgs = (project?.worldBuilding || []).filter(w =>
-                  (w.category === "Location" || !w.category) && w.referenceImages &&
-                  (Array.isArray(w.referenceImages) ? w.referenceImages.some(Boolean) : Object.values(w.referenceImages).some(Boolean))
+                  (w.category === "Location" || !w.category) && (
+                    !!w.roomMasterImage ||
+                    (w.referenceImages && (Array.isArray(w.referenceImages) ? w.referenceImages.some(Boolean) : Object.values(w.referenceImages).some(Boolean)))
+                  )
                 );
                 if (!locsWithImgs.length) return null;
-                const collectImgs = (w) => !w ? [] : (Array.isArray(w.referenceImages) ? w.referenceImages : Object.values(w.referenceImages || {})).filter(Boolean);
+                const collectImgs = (w) => !w ? [] : [w.roomMasterImage, ...(Array.isArray(w.referenceImages) ? w.referenceImages : Object.values(w.referenceImages || {}))].filter(Boolean);
                 const activeImgs = imagePromptData.worldRefImages || [];
                 const useRefs = imagePromptData._useLocationRefs !== false && activeImgs.length > 0;
                 return (
@@ -17598,7 +17632,7 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
                               style={{ borderColor: "var(--nf-accent)", color: "var(--nf-accent)", fontSize: 11 }}>
                               {item._generatingPrompts
                                 ? <><Spinner /> Generating...</>
-                                : <><Icons.Wand /> {Object.values(item.imagePrompts || {}).some(p => p) ? "Regenerate" : "Generate 4 Prompts"}</>}
+                                : <><Icons.Wand /> {Object.values(item.imagePrompts || {}).some(p => p) ? "Regenerate" : "Generate Prompts"}</>}
                             </button>
                             {Object.values(item.imagePrompts || {}).some(p => p) && (
                               <button
@@ -17608,14 +17642,25 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
                                 title="Render all 4 walls in sequence, each matching the previous ones for a consistent room"
                                 style={{ borderColor: "var(--nf-accent-2)", color: "var(--nf-accent-2)", fontSize: 11, marginLeft: 6 }}>
                                 {chainedWallRender && chainedWallRender.itemId === item.id
-                                  ? <><Spinner /> Wall {chainedWallRender.current}/{chainedWallRender.total}...</>
-                                  : <><Icons.Sparkle /> Render All 4 (consistent)</>}
+                                  ? <><Spinner /> {chainedWallRender.phase === "master" ? "Master room" : "Wall"} {chainedWallRender.current}/{chainedWallRender.total}...</>
+                                  : <><Icons.Sparkle /> Render All (consistent)</>}
                               </button>
                             )}
                           </div>
                           {!item.description && (
                             <div style={{ fontSize: 11, color: "var(--nf-accent)", fontStyle: "italic", padding: "8px 0" }}>
                               Add a description above first, then click Generate.
+                            </div>
+                          )}
+                          {item.roomMasterImage && (
+                            <div style={{ marginBottom: 10 }}>
+                              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+                                <span style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--nf-accent-2)" }}>Master room (anchor for all walls)</span>
+                                <button onClick={() => setProjects(prev => prev.map(p => p.id !== activeProjectId ? p : { ...p, worldBuilding: (p.worldBuilding || []).map(w => w.id === item.id ? { ...w, roomMasterImage: "" } : w) }))} className="nf-btn-micro" style={{ fontSize: 11 }} title="Clear master — next render will create a new one"><Icons.X /></button>
+                              </div>
+                              <img loading="lazy" src={item.roomMasterImage} alt="Master room"
+                                style={{ width: "100%", maxHeight: 220, objectFit: "contain", background: "var(--nf-bg-deep)", border: "1px solid var(--nf-accent-2)", borderRadius: 3, display: "block" }} />
+                              <div style={{ fontSize: 11, color: "var(--nf-text-muted)", marginTop: 3, lineHeight: 1.4 }}>Every wall below is rendered as a reframe of this image, so they stay the same room.</div>
                             </div>
                           )}
                           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
@@ -17716,13 +17761,15 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
                                             if (!settings.apiKey) { showToast("Set API key first", "error"); return; }
                                             showToast(`Rendering ${WALL_LABELS[idx]}...`, "info");
                                             try {
-                                              // Use any sibling walls already rendered as visual references for consistency
+                                              // Anchor to the master room image first (if rendered), then sibling walls.
+                                              const masterImg = item.roomMasterImage;
                                               const siblingImgs = WALL_KEYS.filter(k => k !== wallKey).map(k => refs[k]).filter(Boolean);
+                                              const refStack = [masterImg, ...siblingImgs].filter(Boolean).slice(0, 4);
                                               let renderPrompt = prompts[wallKey];
-                                              if (siblingImgs.length > 0) {
-                                                renderPrompt = `${prompts[wallKey]}\n\nCRITICAL: The attached reference image(s) are OTHER ANGLES of THIS EXACT SAME ROOM. Keep the wall material, flooring, ceiling, lighting, furniture, props and palette IDENTICAL to them. Render the same room from this angle only.`;
+                                              if (refStack.length > 0) {
+                                                renderPrompt = `${prompts[wallKey]}\n\nCRITICAL: ${masterImg ? "The FIRST attached image is the master photo of this exact room. " : ""}The attached reference image(s) are the SAME ROOM. Keep the wall material, flooring, ceiling, lighting, furniture, props and palette IDENTICAL to them. Re-photograph the same room from this angle only — do not invent a different room.`;
                                               }
-                                              const imageUrl = await _generateSingleImage(renderPrompt, "4:3", siblingImgs.length ? siblingImgs : null);
+                                              const imageUrl = await _generateSingleImage(renderPrompt, "4:3", refStack.length ? refStack : null);
                                               if (imageUrl) {
                                                 const updatedRefs = { ...(item.referenceImages || {}) };
                                                 updatedRefs[wallKey] = imageUrl;
