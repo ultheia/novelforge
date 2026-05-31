@@ -10415,16 +10415,22 @@ const _syncCrossRefs = (oldP, newP) => {
     const op = (oldP.plotOutline || []).find(pl => pl.id === np.id);
     if (!op) return;
 
+    // Resolve the chapter this plot entry actually syncs to: by explicit link first (robust to
+    // reorders), then by chapter-number position. Prevents title/POV sync writing to the wrong
+    // chapter when plot numbers and chapter array positions diverge.
+    const linkedChIdx = newChapters.findIndex(ch => ch.linkedPlotId === np.id);
+    const syncChIdx = linkedChIdx >= 0 ? linkedChIdx : (np.chapter || 1) - 1;
+
     // D1: Title changed → sync chapter title
     if (op.title !== np.title && np.title) {
-      const chIdx = (np.chapter || 1) - 1;
+      const chIdx = syncChIdx;
       if (newChapters[chIdx] && newChapters[chIdx].title !== np.title) {
         newChapters[chIdx] = { ...newChapters[chIdx], title: np.title }; dirty = true;
       }
     }
     // D2: POV character set → write to chapter pov
     if (op.povCharacterId !== np.povCharacterId && np.povCharacterId) {
-      const chIdx = (np.chapter || 1) - 1;
+      const chIdx = syncChIdx;
       const povChar = newChars.find(c => c.id === np.povCharacterId);
       if (newChapters[chIdx] && povChar?.name) {
         const style = np.pov || p.pov || "Third person limited";
@@ -10433,7 +10439,7 @@ const _syncCrossRefs = (oldP, newP) => {
     }
     // D3: POV style changed → update chapter pov if POV char is set
     if (op.pov !== np.pov && np.pov && np.povCharacterId) {
-      const chIdx = (np.chapter || 1) - 1;
+      const chIdx = syncChIdx;
       const povChar = newChars.find(c => c.id === np.povCharacterId);
       if (newChapters[chIdx] && povChar?.name) {
         newChapters[chIdx] = { ...newChapters[chIdx], pov: `${np.pov} - ${povChar.name}` }; dirty = true;
@@ -11879,7 +11885,7 @@ CRITICAL REQUIREMENTS:
   }, [settings]);
 
   // REWRITTEN: System prompt — F1-F5/F10/F11
-  const buildSystemPrompt = useCallback((mode) => {
+  const buildSystemPrompt = useCallback((mode, selectedTextForCtx = null) => {
     const currentChapter = project?.chapters?.[activeChapterIdx];
     const effectivePov = currentChapter?.pov || project?.pov || "";
     const currentSceneNotes = currentChapter?.sceneNotes || "";
@@ -11965,7 +11971,7 @@ ${craftFocus}
       : "";
 
     // Tier 3: Novel context (mode-optimized)
-    const novelContext = ContextEngine.buildForMode(project, activeChapterIdx, currentSceneNotes, mode, null, settings.modelContextWindow);
+    const novelContext = ContextEngine.buildForMode(project, activeChapterIdx, currentSceneNotes, mode, selectedTextForCtx, settings.modelContextWindow);
 
     // F10: User directives sandwiched between context (high position) and actual content
     return `${directives}${craftControls}\n\n${novelContext}${customDirectives}`;
@@ -12162,7 +12168,7 @@ Then 2-3 sentences describing the specific scene idea, character actions, and em
         presencePenalty: offsets.presencePenalty,
       };
 
-      const messages = [{ role: "system", content: buildSystemPrompt(genMode) }, ...history, { role: "user", content: contextualUserMsg }];
+      const messages = [{ role: "system", content: buildSystemPrompt(genMode, genMode === "rewrite" ? selectedText : null) }, ...history, { role: "user", content: contextualUserMsg }];
       const res = await callOpenRouterStream(messages, {
         temperature: params.temperature,
         frequencyPenalty: params.frequencyPenalty,
@@ -18746,6 +18752,11 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
             const c2Name = _resolveCharName(r.char2, allChars);
             // D16: Self-relationship warning
             const isSelfRel = r.char1 && r.char2 && r.char1 === r.char2;
+            // Duplicate-pair warning — two entries for the same A↔B pair cause inconsistent
+            // agent writeback (only the first matches) and confusing context.
+            const isDupePair = r.char1 && r.char2 && rels.some(other =>
+              other.id !== r.id && other.char1 && other.char2 &&
+              ((other.char1 === r.char1 && other.char2 === r.char2) || (other.char1 === r.char2 && other.char2 === r.char1)));
             const tColor = tensionColors[r.tension] || "var(--nf-text-muted)";
             return (
               <div key={r.id} className="nf-card" style={{ borderColor: isSelfRel ? "var(--nf-error-border)" : undefined }}>
@@ -18778,6 +18789,7 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
                 </div>
                 {/* D16: Self-relationship warning */}
                 {isSelfRel && <div style={{ margin: "8px 0 0 30px", fontSize: 11, color: "var(--nf-accent)", fontWeight: 500 }}>⚠ Both characters are the same — is this intentional?</div>}
+                {isDupePair && !isSelfRel && <div style={{ margin: "8px 0 0 30px", fontSize: 11, color: "var(--nf-accent)", fontWeight: 500 }}>⚠ Another relationship already exists for this pair — duplicates cause inconsistent AI updates. Consider merging.</div>}
                 {/* Expanded form */}
                 {isExpanded && (
                   <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid var(--nf-border)" }}>
