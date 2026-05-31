@@ -15830,7 +15830,6 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                 }
                 syncEditorContent();
               }}
-              data-placeholder="Begin writing your chapter..."
               onDragOver={(e) => {
                 if (e.dataTransfer?.types?.includes('Files')) {
                   e.preventDefault();
@@ -19199,7 +19198,7 @@ Speech pattern: ${char.speechPattern || ""}` },
               if (!isNaN(n)) setSettings(prev => ({ ...prev, temperature: n }));
             }}
               onBlur={e => setSettings(prev => ({ ...prev, temperature: clamp(parseFloat(e.target.value) || 0.85, 0, 2) }))}
-              className="nf-input" type="number" min="0" step="0.05" min="0" max="2" />
+              className="nf-input" type="number" min="0" max="2" step="0.05" />
           </div>
           {/* E5: Editable context window */}
           <div className="nf-field">
@@ -19222,7 +19221,7 @@ Speech pattern: ${char.speechPattern || ""}` },
               setSettings(prev => ({ ...prev, frequencyPenalty: v === "" || v.endsWith(".") ? v : (isNaN(n) ? prev.frequencyPenalty : n) }));
             }}
               onBlur={e => setSettings(prev => ({ ...prev, frequencyPenalty: clamp(parseFloat(e.target.value) || 0.1, 0, 2) }))}
-              className="nf-input" type="number" min="0" step="0.05" min="0" max="2" />
+              className="nf-input" type="number" min="0" max="2" step="0.05" />
           </div>
           <div className="nf-field">
             <label className="nf-label">Presence Penalty</label>
@@ -19232,7 +19231,7 @@ Speech pattern: ${char.speechPattern || ""}` },
               setSettings(prev => ({ ...prev, presencePenalty: v === "" || v.endsWith(".") ? v : (isNaN(n) ? prev.presencePenalty : n) }));
             }}
               onBlur={e => setSettings(prev => ({ ...prev, presencePenalty: clamp(parseFloat(e.target.value) || 0.15, 0, 2) }))}
-              className="nf-input" type="number" min="0" step="0.05" min="0" max="2" />
+              className="nf-input" type="number" min="0" max="2" step="0.05" />
           </div>
         </div>
         <Field label="Custom System Prompt" value={settings.systemPrompt} onChange={v => setSettings(prev => ({ ...prev, systemPrompt: v }))} multiline placeholder="e.g. 'Always use British English', 'Write in present tense'..." />
