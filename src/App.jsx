@@ -977,42 +977,6 @@ const analyzeRegister = (project) => {
   return flags;
 };
 
-// Minimal store-only ZIP writer (no compression, no dependency) — produces a valid .zip Blob from
-// {name, text} entries. Used for the Markdown manuscript bundle so the project is portable as plain
-// files readable in any editor, even if this app disappears.
-const _crc32 = (() => {
-  let table = null;
-  const build = () => { table = []; for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; table[n] = c >>> 0; } };
-  return (bytes) => { if (!table) build(); let crc = 0xFFFFFFFF; for (let i = 0; i < bytes.length; i++) crc = (crc >>> 8) ^ table[(crc ^ bytes[i]) & 0xFF]; return (crc ^ 0xFFFFFFFF) >>> 0; };
-})();
-const makeZip = (files) => {
-  const enc = new TextEncoder();
-  const chunks = [], central = [];
-  let offset = 0;
-  const u16 = n => [n & 0xFF, (n >>> 8) & 0xFF];
-  const u32 = n => [n & 0xFF, (n >>> 8) & 0xFF, (n >>> 16) & 0xFF, (n >>> 24) & 0xFF];
-  for (const f of files) {
-    const nameB = enc.encode(f.name), dataB = enc.encode(f.text);
-    const crc = _crc32(dataB);
-    const local = [...u32(0x04034b50), ...u16(20), ...u16(0), ...u16(0), ...u16(0), ...u16(0),
-      ...u32(crc), ...u32(dataB.length), ...u32(dataB.length), ...u16(nameB.length), ...u16(0)];
-    chunks.push(new Uint8Array(local), nameB, dataB);
-    central.push({ crc, size: dataB.length, nameB, offset });
-    offset += local.length + nameB.length + dataB.length;
-  }
-  const cdStart = offset;
-  for (const c of central) {
-    const cd = [...u32(0x02014b50), ...u16(20), ...u16(20), ...u16(0), ...u16(0), ...u16(0), ...u16(0),
-      ...u32(c.crc), ...u32(c.size), ...u32(c.size), ...u16(c.nameB.length), ...u16(0), ...u16(0), ...u16(0), ...u16(0), ...u32(0), ...u32(c.offset)];
-    chunks.push(new Uint8Array(cd), c.nameB);
-    offset += cd.length + c.nameB.length;
-  }
-  const cdSize = offset - cdStart;
-  const end = [...u32(0x06054b50), ...u16(0), ...u16(0), ...u16(central.length), ...u16(central.length), ...u32(cdSize), ...u32(cdStart), ...u16(0)];
-  chunks.push(new Uint8Array(end));
-  return new Blob(chunks, { type: "application/zip" });
-};
-
 // Reading time estimate — ~250 wpm for fiction prose
 const readingTime = (words) => {
   if (!words || words <= 0) return "0 min";
@@ -14207,41 +14171,6 @@ If no relationship changes, respond "No relationship updates needed."` },
     setIsSummarizing(false);
   }, [project, callOpenRouter, updateChapter, showToast, setChatMessages]);
 
-  // Markdown bundle export — one .md per chapter + manifest.json, zipped. Portable, plain-text,
-  // readable anywhere even without this app. Reference notes are stripped from compiled prose.
-  const handleExportMarkdownBundle = useCallback(() => {
-    if (!project) return;
-    const slug = (s) => (s || "untitled").toLowerCase().replace(/[^\w]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 50);
-    const files = [];
-    const htmlToMd = (html) => {
-      let c = _stripRefBlocks(html || "");
-      c = c.replace(/<(strong|b)>(.*?)<\/\1>/gi, "**$2**").replace(/<(em|i)>(.*?)<\/\1>/gi, "*$2*");
-      c = c.replace(/<h([1-3])[^>]*>(.*?)<\/h\1>/gi, (_, n, t) => "\n" + "#".repeat(+n) + " " + t + "\n");
-      c = c.replace(/<br\s*\/?>/gi, "\n").replace(/<\/p>\s*<p[^>]*>/gi, "\n\n").replace(/<[^>]*>/g, "");
-      c = c.replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'");
-      return c.replace(/\n{3,}/g, "\n\n").trim();
-    };
-    (project.chapters || []).forEach((ch, i) => {
-      const num = String(i + 1).padStart(3, "0");
-      files.push({ name: `chapters/${num}-${slug(ch.title)}.md`, text: `# ${ch.title || `Chapter ${i + 1}`}\n\n${htmlToMd(ch.content)}\n` });
-    });
-    // Manifest with structure + metadata (so the app or a human can reconstruct order).
-    const manifest = {
-      title: project.title, genre: project.genre, pov: project.pov,
-      exportedAt: new Date().toISOString(), format: "novelforge-md-bundle",
-      chapters: (project.chapters || []).map((ch, i) => ({ index: i, title: ch.title, file: `chapters/${String(i + 1).padStart(3, "0")}-${slug(ch.title)}.md`, words: compiledWordCount(ch.content), summary: ch.summary || "", pov: ch.pov || "" })),
-      characters: (project.characters || []).map(c => ({ name: c.name, role: c.role })),
-    };
-    files.push({ name: "manifest.json", text: JSON.stringify(manifest, null, 2) });
-    // A readable outline too.
-    files.push({ name: "outline.md", text: `# ${project.title}\n\n${(project.chapters || []).map((ch, i) => `${i + 1}. **${ch.title || "Untitled"}** (${compiledWordCount(ch.content)} words)${ch.summary ? `\n   ${ch.summary}` : ""}`).join("\n\n")}\n` });
-    const blob = makeZip(files);
-    const url = URL.createObjectURL(blob);
-    Object.assign(document.createElement("a"), { href: url, download: `${slug(project.title)}-manuscript.zip` }).click();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
-    showToast("Exported Markdown bundle (.zip)", "success");
-  }, [project, showToast]);
-
   const handleExportTxt = useCallback(() => {
     if (!project) return;
     // E10: Preserve formatting markers in export
@@ -20376,30 +20305,6 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
                         </div>
                       </div>
                     )}
-                    {/* Relationship Vector Map — timeline of how status/tension shifted per chapter */}
-                    {Object.keys(r.chapterEvolution || {}).length > 0 && (() => {
-                      const evoKeys = Object.keys(r.chapterEvolution).map(Number).filter(n => !isNaN(n)).sort((a, b) => a - b);
-                      const points = evoKeys.map(k => ({ ch: k, ...r.chapterEvolution[k] }));
-                      const tensionVal = { low: 1, medium: 2, high: 3, extreme: 4 };
-                      return (
-                        <div style={{ margin: "4px 0 12px", padding: "10px 14px", background: "var(--nf-bg-deep)", border: "1px solid var(--nf-border)", borderRadius: 2 }}>
-                          <div style={{ fontSize: 11, fontWeight: 500, color: "var(--nf-text-muted)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 }}>Vector Map — tracked evolution</div>
-                          <div style={{ display: "flex", alignItems: "stretch", gap: 0, overflowX: "auto", paddingBottom: 4 }}>
-                            {points.map((p, pi) => (
-                              <div key={p.ch} style={{ display: "flex", alignItems: "center", flexShrink: 0 }}>
-                                <div style={{ minWidth: 92, padding: "6px 8px", background: "var(--nf-bg-surface)", border: "1px solid var(--nf-border)", borderRadius: 4, fontSize: 10 }}>
-                                  <div style={{ color: "var(--nf-accent-2)", fontWeight: 600, fontFamily: "var(--nf-font-mono)" }}>Ch{p.ch + 1}</div>
-                                  {p.status && <div style={{ color: "var(--nf-text)", marginTop: 2 }}>{p.status}</div>}
-                                  {p.tension && <div style={{ color: "var(--nf-text-muted)" }}>tension: {p.tension}</div>}
-                                  {p.trustLevel && <div style={{ color: "var(--nf-text-muted)" }}>trust: {p.trustLevel}</div>}
-                                </div>
-                                {pi < points.length - 1 && <span style={{ color: "var(--nf-text-muted)", padding: "0 4px" }}>→</span>}
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      );
-                    })()}
                     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                       <SelectField label="Power Dynamic" value={r.powerDynamic || "equal"} onChange={v => updateProject({ relationships: rels.map(re => re.id === r.id ? { ...re, powerDynamic: v } : re) })} options={POWER_DYNAMIC_OPTIONS} />
                       <SelectField label="Trust Level" value={r.trustLevel || "medium"} onChange={v => updateProject({ relationships: rels.map(re => re.id === r.id ? { ...re, trustLevel: v } : re) })} options={TRUST_LEVEL_OPTIONS} />
@@ -21834,7 +21739,6 @@ Speech pattern: ${char.speechPattern || ""}` },
         <h3 className="nf-card-title">Export & Import</h3>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <button onClick={handleExportTxt} className="nf-btn nf-btn-ghost"><Icons.Export /> .txt</button>
-          <button onClick={handleExportMarkdownBundle} className="nf-btn nf-btn-ghost"><Icons.Export /> .md bundle (.zip)</button>
           <button onClick={handleExportJson} className="nf-btn nf-btn-ghost"><Icons.Export /> JSON</button>
           <label className="nf-btn nf-btn-ghost" style={{ cursor: "pointer" }}><Icons.Save /> Import<input type="file" accept=".json" style={{ display: "none" }} onChange={handleImportJson} /></label>
         </div>
