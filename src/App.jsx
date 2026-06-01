@@ -12065,6 +12065,7 @@ export default function NovelForge() {
   // Use refs so the handler always reads current values without re-registering
   const projectsRef = useRef(projects);
   const handleImportJsonRef = useRef(null);
+  const _genSingleImageRef = useRef(null);
   const settingsRef = useRef(settings);
   const themeRef = useRef(theme);
   const tabChatHistoriesRef = useRef(tabChatHistories);
@@ -13249,7 +13250,7 @@ Then 2-3 sentences describing the specific scene idea, character actions, and em
       const styleRef = project?.styleLockImage;
       const refs = styleRef && styleRef.startsWith("data:") ? [styleRef] : null;
       if (refs) prompt += " Match the artistic style, line weight, and color grading of the reference image.";
-      const img = await _generateSingleImage(prompt, ratio, refs);
+      const img = await _genSingleImageRef.current(prompt, ratio, refs);
       if (img) {
         // Lineage: tag each generation with the variant kind + the image it was derived from
         // (the most recent moodBoard entry), so the gallery can show a branching tree.
@@ -13259,7 +13260,7 @@ Then 2-3 sentences describing the specific scene idea, character actions, and em
         showToast("Image added to mood board", "success");
       }
     } catch (e) { showToast("Generation failed", "error"); }
-  }, [settings.apiKey, buildCharacterArtPrompt, _generateSingleImage, updateCharById, showToast, project?.styleLockImage]);
+  }, [settings.apiKey, buildCharacterArtPrompt, updateCharById, showToast, project?.styleLockImage]);
 
   // Entity-safe rename: replace a character's name across all prose using whole-word boundaries
   // (so "Will" → "Sam" never corrupts "will go"), and update the character record. Scoped to the
@@ -15132,6 +15133,7 @@ CRITICAL: Every sentence must describe something visible. If a detail cannot be 
     }
     return null;
   }, [settings.apiKey, settings.imageModel]);
+  useEffect(() => { _genSingleImageRef.current = _generateSingleImage; }, [_generateSingleImage]);
 
   const handleGenerateImage = useCallback(async (prompt, use4x = false, aspectRatio = null, referenceImages = null) => {
     if (!settings.apiKey || !prompt?.trim()) return;
