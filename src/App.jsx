@@ -898,6 +898,154 @@ const _stripRefBlocks = (html) => {
 };
 const compiledWordCount = (html) => wordCount(_stripRefBlocks(html));
 
+// ─── TEMPORAL LOGIC VALIDATOR ───
+// Anchors chapters to their story dates (via ContextEngine._parseStoryDate) and flags relative-time
+// phrases in the prose that contradict the actual gap to the next dated chapter. Heuristic: it can
+// only check chapters that HAVE dates set, and only catches common phrasings — but it surfaces the
+// classic "see you tomorrow" → next chapter is 3 days later kind of slip.
+const _dateToDayNumber = (n) => {
+  if (n == null) return null;
+  // _parseStoryDate returns either YYYYMMDD-ish ints or ms timestamps. Normalize to a day count.
+  if (n > 1e11) return Math.floor(n / 86400000); // ms timestamp
+  // YYYYMMDD integer → approximate absolute day (y*365 + m*30 + d)
+  const y = Math.floor(n / 10000), m = Math.floor((n % 10000) / 100), d = n % 100;
+  return y * 365 + m * 30 + d;
+};
+const analyzeTemporal = (project) => {
+  const chapters = project?.chapters || [];
+  const flags = [];
+  // gather day numbers per chapter
+  const days = chapters.map((_, i) => _dateToDayNumber(ContextEngine._currentStoryDate(project, i)));
+  for (let i = 0; i < chapters.length; i++) {
+    if (days[i] == null) continue;
+    // find the next chapter with a date
+    let j = i + 1;
+    while (j < chapters.length && days[j] == null) j++;
+    if (j >= chapters.length || days[j] == null) continue;
+    const gap = days[j] - days[i]; // days until next dated chapter
+    const plain = _htmlToPlain(chapters[i].content || "").toLowerCase();
+    // Relative-time cues near the end of the chapter and what gap they imply.
+    const cues = [
+      { re: /\b(see you |back )?tomorrow\b/, impliesMax: 1, label: '"tomorrow"' },
+      { re: /\btonight\b/, impliesMax: 0, label: '"tonight"' },
+      { re: /\bin an hour\b/, impliesMax: 0, label: '"in an hour"' },
+      { re: /\bnext week\b|\bin a week\b/, impliesMin: 5, impliesMax: 9, label: '"next week / in a week"' },
+      { re: /\bin (?:a|one) month\b|\bnext month\b/, impliesMin: 25, impliesMax: 35, label: '"in a month"' },
+      { re: /\byesterday\b/, impliesMax: 0, label: '"yesterday"' }, // about a past day; gap-agnostic but flag if huge
+    ];
+    for (const c of cues) {
+      if (!c.re.test(plain)) continue;
+      const tooLong = c.impliesMax != null && gap > c.impliesMax;
+      const tooShort = c.impliesMin != null && gap < c.impliesMin;
+      if (tooLong) {
+        flags.push({ chapter: i, title: chapters[i].title || `Chapter ${i + 1}`, cue: c.label, gap, expected: c.impliesMax });
+      } else if (tooShort) {
+        flags.push({ chapter: i, title: chapters[i].title || `Chapter ${i + 1}`, cue: c.label, gap, expectedMin: c.impliesMin });
+      }
+    }
+  }
+  return flags;
+};
+
+// ─── PROSE REGISTER GUARD ───
+// Flags vocabulary that clashes with a character's locked linguistic register (set on the
+// character as `register`). Heuristic word-lists, not a full style model — catches obvious
+// anachronisms (a medieval voice using "okay", "guys", "stuff") and register slips.
+const _REGISTER_FLAGS = {
+  archaic: { label: "archaic / pre-modern", banned: /\b(okay|ok|guys|stuff|cool|yeah|yep|nope|gonna|wanna|gotta|kid|kids|teenager|email|phone|car|tv|radio|computer|internet|boss|weekend|hello|hi there|awesome|fine by me|no problem)\b/gi },
+  formal: { label: "formal / educated", banned: /\b(gonna|wanna|gotta|ain't|yeah|nope|dunno|kinda|sorta|gimme|lemme|cuz|y'all|lotta)\b/gi },
+  modern_casual: { label: "modern casual", banned: /\b(thou|thee|thy|thine|hath|doth|prithee|forsooth|verily|whence|hither|thither|mayhap|betwixt|ere\b)\b/gi },
+};
+const analyzeRegister = (project) => {
+  const flags = [];
+  const chars = (project?.characters || []).filter(c => c.register && _REGISTER_FLAGS[c.register]);
+  if (!chars.length) return flags;
+  for (let ci = 0; ci < (project?.chapters || []).length; ci++) {
+    const ch = project.chapters[ci];
+    // Whose POV is this chapter? Match the POV character to a registered profile.
+    const povId = ContextEngine._plotEntryForChapter(project, ci)?.povCharacterId;
+    const povChar = chars.find(c => c.id === povId) ||
+      chars.find(c => c.name && (ch.pov || "").toLowerCase().includes(c.name.toLowerCase().split(/\s+/)[0]));
+    if (!povChar) continue;
+    const prof = _REGISTER_FLAGS[povChar.register];
+    const plain = _htmlToPlain(ch.content || "");
+    const hits = [...new Set((plain.match(prof.banned) || []).map(w => w.toLowerCase()))];
+    if (hits.length) {
+      flags.push({ chapter: ci, title: ch.title || `Chapter ${ci + 1}`, character: povChar.name, register: prof.label, words: hits.slice(0, 6) });
+    }
+  }
+  return flags;
+};
+
+// Minimal store-only ZIP writer (no compression, no dependency) — produces a valid .zip Blob from
+// {name, text} entries. Used for the Markdown manuscript bundle so the project is portable as plain
+// files readable in any editor, even if this app disappears.
+const _crc32 = (() => {
+  let table = null;
+  const build = () => { table = []; for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; table[n] = c >>> 0; } };
+  return (bytes) => { if (!table) build(); let crc = 0xFFFFFFFF; for (let i = 0; i < bytes.length; i++) crc = (crc >>> 8) ^ table[(crc ^ bytes[i]) & 0xFF]; return (crc ^ 0xFFFFFFFF) >>> 0; };
+})();
+const makeZip = (files) => {
+  const enc = new TextEncoder();
+  const chunks = [], central = [];
+  let offset = 0;
+  const u16 = n => [n & 0xFF, (n >>> 8) & 0xFF];
+  const u32 = n => [n & 0xFF, (n >>> 8) & 0xFF, (n >>> 16) & 0xFF, (n >>> 24) & 0xFF];
+  for (const f of files) {
+    const nameB = enc.encode(f.name), dataB = enc.encode(f.text);
+    const crc = _crc32(dataB);
+    const local = [...u32(0x04034b50), ...u16(20), ...u16(0), ...u16(0), ...u16(0), ...u16(0),
+      ...u32(crc), ...u32(dataB.length), ...u32(dataB.length), ...u16(nameB.length), ...u16(0)];
+    chunks.push(new Uint8Array(local), nameB, dataB);
+    central.push({ crc, size: dataB.length, nameB, offset });
+    offset += local.length + nameB.length + dataB.length;
+  }
+  const cdStart = offset;
+  for (const c of central) {
+    const cd = [...u32(0x02014b50), ...u16(20), ...u16(20), ...u16(0), ...u16(0), ...u16(0), ...u16(0),
+      ...u32(c.crc), ...u32(c.size), ...u32(c.size), ...u16(c.nameB.length), ...u16(0), ...u16(0), ...u16(0), ...u16(0), ...u32(0), ...u32(c.offset)];
+    chunks.push(new Uint8Array(cd), c.nameB);
+    offset += cd.length + c.nameB.length;
+  }
+  const cdSize = offset - cdStart;
+  const end = [...u32(0x06054b50), ...u16(0), ...u16(0), ...u16(central.length), ...u16(central.length), ...u32(cdSize), ...u32(cdStart), ...u16(0)];
+  chunks.push(new Uint8Array(end));
+  return new Blob(chunks, { type: "application/zip" });
+};
+
+// ─── SEMANTIC CONTINUITY (physical state) ───
+// Honest heuristic, not a true anatomical validator: for each character state that implies a
+// physical limitation (injury/incapacity), scan the active chapters' prose for the character's name
+// near vigorous action verbs and surface a soft flag to review. It cannot understand anatomy — it
+// catches "broken arm" + "<name> … sprinted/threw/climbed" co-occurrence as a prompt to check.
+const _LIMITING_HINTS = /\b(broke|broken|fracture|wound|wounded|injur|sprain|amputat|blind|deaf|paralyz|crippl|sick|ill|fever|poison|stab|shot|burn|concussion|coma|bedridden|limp|lame)\b/i;
+const _VIGOROUS_VERBS = /\b(sprint|sprinted|ran|raced|leapt|leaped|jumped|threw|thrown|climbed|punched|kicked|fought|wrestled|danced|swam|vaulted|hurled|sprang|charged|sprinted)\b/i;
+const analyzeStateContinuity = (project) => {
+  const flags = [];
+  const chapters = project?.chapters || [];
+  for (const c of (project?.characters || [])) {
+    if (!Array.isArray(c.stateFlags) || !c.name) continue;
+    const firstName = c.name.split(/\s+/)[0];
+    for (const sf of c.stateFlags) {
+      if (!_LIMITING_HINTS.test(sf.state || "")) continue; // only physically-limiting states
+      const from = sf.fromChapter ?? 0;
+      const until = sf.untilChapter != null && sf.untilChapter !== "" ? sf.untilChapter : chapters.length - 1;
+      for (let i = from; i <= until && i < chapters.length; i++) {
+        const plain = _htmlToPlain(chapters[i].content || "");
+        // sentences mentioning the character
+        const sentences = plain.match(/[^.!?]+[.!?]+/g) || [];
+        for (const s of sentences) {
+          if (new RegExp(`\\b${firstName}\\b`, "i").test(s) && _VIGOROUS_VERBS.test(s)) {
+            flags.push({ chapter: i, title: chapters[i].title || `Chapter ${i + 1}`, character: c.name, state: sf.state, excerpt: _truncateAtBoundary(s.trim(), 90) });
+            break; // one flag per chapter per state is enough
+          }
+        }
+      }
+    }
+  }
+  return flags;
+};
+
 // Reading time estimate — ~250 wpm for fiction prose
 const readingTime = (words) => {
   if (!words || words <= 0) return "0 min";
@@ -2144,6 +2292,36 @@ const ContextEngine = {
     // ─── SUBTEXT ───
     if (curChapter?.subtextNotes) {
       meta.push(`SUBTEXT: ${curChapter.subtextNotes} — this is what's happening beneath the surface. Characters may not say what they mean.`);
+    }
+    if (Array.isArray(curChapter?.subtextLines) && curChapter.subtextLines.length) {
+      const pairs = curChapter.subtextLines.slice(0, 8).map(sl => `"${sl.line}" → really means: ${sl.subtext}`).join("; ");
+      meta.push(`DIALOGUE SUBTEXT (say one thing, mean another): ${pairs}`);
+    }
+    // ─── WORLD-STATE LEDGER ───
+    // Global conditions triggered at a chapter persist into all later chapters, so the AI keeps
+    // ambient reality consistent (a war from Ch12 means scarcer food / tenser mood afterward).
+    if (Array.isArray(project.worldStateLedger) && project.worldStateLedger.length) {
+      const active = project.worldStateLedger
+        .filter(e => (e.fromChapter ?? 0) <= currentChNum)
+        .map(e => `${e.condition}${e.description ? ` (${e.description})` : ""} [since Ch${(e.fromChapter ?? 0) + 1}]`);
+      if (active.length) meta.push(`ACTIVE WORLD CONDITIONS — reflect these in ambient description: ${active.join("; ")}`);
+    }
+    // ─── CHARACTER PHYSICAL/STATE CONTINUITY ───
+    // Per-character states (injuries, conditions) active in this chapter window. Injected so the AI
+    // honors them (a broken arm in Ch3 shouldn't be throwing punches in Ch5 unless it's healed).
+    if (Array.isArray(project.characters)) {
+      const stateLines = [];
+      for (const c of project.characters) {
+        if (!Array.isArray(c.stateFlags)) continue;
+        for (const sf of c.stateFlags) {
+          const from = sf.fromChapter ?? 0;
+          const until = sf.untilChapter != null && sf.untilChapter !== "" ? sf.untilChapter : Infinity;
+          if (from <= currentChNum && currentChNum <= until) {
+            stateLines.push(`${c.name}: ${sf.state}${sf.untilChapter != null && sf.untilChapter !== "" ? ` (until Ch${sf.untilChapter + 1})` : " (ongoing)"}`);
+          }
+        }
+      }
+      if (stateLines.length) meta.push(`CHARACTER PHYSICAL STATE (must stay consistent): ${stateLines.join("; ")}`);
     }
     // ─── MOTIFS & SYMBOLS ───
     if (project.motifs?.length > 0) {
@@ -4294,7 +4472,7 @@ const createDefaultChapter = (title = "Chapter 1") => ({
   summaryGeneratedAt: "", worldView: "", linkedPlotId: "",
   narrativeDistance: "", sensoryPalette: "", subtextNotes: "", tensionLevel: 5,
   chapterEndHookScore: 0, chapterMomentum: 0, emotionalAftertaste: "",
-  bannerImage: "", toneKey: "", graveyard: [],
+  bannerImage: "", toneKey: "", graveyard: [], subtextLines: [],
 });
 
 const createDefaultProject = () => ({
@@ -4324,7 +4502,7 @@ const createDefaultCharacter = () => ({
   id: uid(), name: "", role: "protagonist", gender: "", age: "", pronouns: "",
   aliases: "",
   appearance: "", personality: "", backstory: "", desires: "",
-  speechPattern: "", relationships: "", kinks: "", arc: "", notes: "",
+  speechPattern: "", relationships: "", kinks: "", arc: "", notes: "", register: "", stateFlags: [],
   // ─── SIMPLIFIED REVEAL STATE (replaces 8 deprecated chapter/date fields) ───
   backstoryRevealed: false, // AI-flipped when backstory is revealed in a chapter
   secretRevealed: false,    // AI-flipped when hidden secrets are revealed
@@ -8494,6 +8672,92 @@ const TypesetPreview = memo(({ content, chapterTitle, onClose }) => {
   );
 });
 
+// ─── EXPORT PREVIEW MATRIX ───
+// Live side-by-side preview of the manuscript at different trims (A4 submission vs 6x9 paperback)
+// with adjustable margins, font size, and line spacing — so formatting choices are visible before
+// committing. Preview is approximate (screen-scaled), not a print engine.
+const ExportPreviewMatrix = memo(({ chapter, onClose }) => {
+  const [fontSize, setFontSize] = useState(12);
+  const [lineHeight, setLineHeight] = useState(1.6);
+  const [margin, setMargin] = useState(28);
+  const text = useMemo(() => {
+    const plain = _htmlToPlain(chapter?.content || "");
+    return plain.split(/\n+/).filter(Boolean).slice(0, 12);
+  }, [chapter]);
+  // Aspect ratios scaled to fit: A4 = 1:1.414, 6x9 = 1:1.5
+  const formats = [
+    { name: "A4 submission", w: 230, h: 325, doubleSpace: true },
+    { name: "6×9 paperback", w: 230, h: 345, doubleSpace: false },
+  ];
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.55)", zIndex: 9000, display: "flex", flexDirection: "column" }} onClick={onClose}>
+      <div onClick={e => e.stopPropagation()} style={{ display: "flex", flexWrap: "wrap", gap: 16, alignItems: "center", padding: "12px 18px", color: "#ddd", borderBottom: "1px solid rgba(255,255,255,0.1)" }}>
+        <span style={{ fontSize: 13, fontWeight: 600 }}>Export Preview</span>
+        <label style={{ fontSize: 11, display: "flex", alignItems: "center", gap: 6 }}>Font {fontSize}pt
+          <input type="range" min="9" max="16" value={fontSize} onChange={e => setFontSize(+e.target.value)} /></label>
+        <label style={{ fontSize: 11, display: "flex", alignItems: "center", gap: 6 }}>Spacing {lineHeight.toFixed(1)}
+          <input type="range" min="10" max="25" value={lineHeight * 10} onChange={e => setLineHeight(+e.target.value / 10)} /></label>
+        <label style={{ fontSize: 11, display: "flex", alignItems: "center", gap: 6 }}>Margin {margin}
+          <input type="range" min="14" max="48" value={margin} onChange={e => setMargin(+e.target.value)} /></label>
+        <button onClick={onClose} className="nf-btn-icon" style={{ color: "#ddd", marginLeft: "auto" }} aria-label="Close"><Icons.X /></button>
+      </div>
+      <div onClick={e => e.stopPropagation()} style={{ flex: 1, overflowY: "auto", display: "flex", gap: 28, justifyContent: "center", padding: "24px 16px", flexWrap: "wrap", alignContent: "flex-start" }}>
+        {formats.map(f => (
+          <div key={f.name} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
+            <span style={{ fontSize: 11, color: "#bbb" }}>{f.name}</span>
+            <div style={{ width: f.w, height: f.h, background: "#fdfcf8", color: "#1a1a1a", boxShadow: "0 4px 18px rgba(0,0,0,0.4)", padding: margin, fontFamily: "Georgia, serif", fontSize, lineHeight: f.doubleSpace ? Math.max(lineHeight, 1.8) : lineHeight, overflow: "hidden", textAlign: f.doubleSpace ? "left" : "justify" }}>
+              {text.map((p, i) => <p key={i} style={{ margin: 0, textIndent: i === 0 ? 0 : "1.3em" }}>{p}</p>)}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+});
+
+// ─── NODE-BASED GENERATION LINEAGE ───
+// Renders a character's generated images as a branching tree by parentId, so you can see which
+// prompt adjustment produced which result and trace/revert a visual branch. Generations without
+// lineage metadata (uploads, older images) appear as roots.
+const GenerationLineage = memo(({ images, onClose }) => {
+  const byParent = useMemo(() => {
+    const map = new Map();
+    (images || []).forEach(img => {
+      const p = img.parentId || "__root__";
+      if (!map.has(p)) map.set(p, []);
+      map.get(p).push(img);
+    });
+    return map;
+  }, [images]);
+  const renderNode = (img, depth) => {
+    const kids = byParent.get(img.id) || [];
+    return (
+      <div key={img.id} style={{ marginLeft: depth * 18, borderLeft: depth ? "1px solid var(--nf-border)" : "none", paddingLeft: depth ? 10 : 0, marginTop: 6 }}>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <img src={img.data} alt={img.caption || ""} style={{ width: 40, height: 40, objectFit: "cover", borderRadius: 4, border: "1px solid var(--nf-border)" }} />
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontSize: 11, color: "var(--nf-text)", fontWeight: 600 }}>{img.caption || img.genKind || "image"}</div>
+            {img.genPrompt && <div style={{ fontSize: 10, color: "var(--nf-text-muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 320 }}>{img.genPrompt}</div>}
+          </div>
+        </div>
+        {kids.map(k => renderNode(k, depth + 1))}
+      </div>
+    );
+  };
+  const roots = byParent.get("__root__") || [];
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 9000, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }} onClick={onClose}>
+      <div onClick={e => e.stopPropagation()} style={{ background: "var(--nf-bg-raised)", border: "1px solid var(--nf-border)", borderRadius: 8, padding: 18, width: "min(560px,94vw)", maxHeight: "84vh", overflow: "auto" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+          <h3 style={{ margin: 0, fontSize: 14, color: "var(--nf-text)" }}>Generation Lineage</h3>
+          <button onClick={onClose} className="nf-btn-icon" aria-label="Close"><Icons.X /></button>
+        </div>
+        {roots.length === 0 ? <div style={{ fontSize: 12, color: "var(--nf-text-muted)" }}>No images yet.</div> : roots.map(r => renderNode(r, 0))}
+      </div>
+    </div>
+  );
+});
+
 // ─── ABSOLUTE SCALE LINEUP ───
 // Compares characters by their height metadata against a measured backdrop, so relative stature is
 // visible (a 5' and a 7' character no longer look the same size). Parses common height formats.
@@ -11361,6 +11625,9 @@ export default function NovelForge() {
   const [hoverPeek, setHoverPeek] = useState(null); // { entity, x, y } entity quick-look on hover
   const [clipStrips, setClipStrips] = useState([]); // up to 10 project-local text clips
   const [showClips, setShowClips] = useState(false);
+  const [showSubtext, setShowSubtext] = useState(false); // subtext/agenda matrix panel
+  const [lineageChar, setLineageChar] = useState(null); // character whose gen lineage is open
+  const [showExportPreview, setShowExportPreview] = useState(false);
   const [showBreathingPauser, setShowBreathingPauser] = useState(false);
   const [showChapterCelebration, setShowChapterCelebration] = useState(false);
   const [sessionStartedAt] = useState(() => Date.now());
@@ -12984,7 +13251,11 @@ Then 2-3 sentences describing the specific scene idea, character actions, and em
       if (refs) prompt += " Match the artistic style, line weight, and color grading of the reference image.";
       const img = await _generateSingleImage(prompt, ratio, refs);
       if (img) {
-        updateCharById(char.id, "moodBoard", [...(char.moodBoard || []), { id: uid(), data: img, caption, addedAt: new Date().toISOString() }]);
+        // Lineage: tag each generation with the variant kind + the image it was derived from
+        // (the most recent moodBoard entry), so the gallery can show a branching tree.
+        const prev = char.moodBoard || [];
+        const parentId = prev.length ? prev[prev.length - 1].id : null;
+        updateCharById(char.id, "moodBoard", [...prev, { id: uid(), data: img, caption, addedAt: new Date().toISOString(), genKind: variant, genPrompt: prompt.slice(0, 240), parentId }]);
         showToast("Image added to mood board", "success");
       }
     } catch (e) { showToast("Generation failed", "error"); }
@@ -14092,6 +14363,41 @@ If no relationship changes, respond "No relationship updates needed."` },
     setIsSummarizing(false);
   }, [project, callOpenRouter, updateChapter, showToast, setChatMessages]);
 
+  // Markdown bundle export — one .md per chapter + manifest.json, zipped. Portable, plain-text,
+  // readable anywhere even without this app. Reference notes are stripped from compiled prose.
+  const handleExportMarkdownBundle = useCallback(() => {
+    if (!project) return;
+    const slug = (s) => (s || "untitled").toLowerCase().replace(/[^\w]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 50);
+    const files = [];
+    const htmlToMd = (html) => {
+      let c = _stripRefBlocks(html || "");
+      c = c.replace(/<(strong|b)>(.*?)<\/\1>/gi, "**$2**").replace(/<(em|i)>(.*?)<\/\1>/gi, "*$2*");
+      c = c.replace(/<h([1-3])[^>]*>(.*?)<\/h\1>/gi, (_, n, t) => "\n" + "#".repeat(+n) + " " + t + "\n");
+      c = c.replace(/<br\s*\/?>/gi, "\n").replace(/<\/p>\s*<p[^>]*>/gi, "\n\n").replace(/<[^>]*>/g, "");
+      c = c.replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'");
+      return c.replace(/\n{3,}/g, "\n\n").trim();
+    };
+    (project.chapters || []).forEach((ch, i) => {
+      const num = String(i + 1).padStart(3, "0");
+      files.push({ name: `chapters/${num}-${slug(ch.title)}.md`, text: `# ${ch.title || `Chapter ${i + 1}`}\n\n${htmlToMd(ch.content)}\n` });
+    });
+    // Manifest with structure + metadata (so the app or a human can reconstruct order).
+    const manifest = {
+      title: project.title, genre: project.genre, pov: project.pov,
+      exportedAt: new Date().toISOString(), format: "novelforge-md-bundle",
+      chapters: (project.chapters || []).map((ch, i) => ({ index: i, title: ch.title, file: `chapters/${String(i + 1).padStart(3, "0")}-${slug(ch.title)}.md`, words: compiledWordCount(ch.content), summary: ch.summary || "", pov: ch.pov || "" })),
+      characters: (project.characters || []).map(c => ({ name: c.name, role: c.role })),
+    };
+    files.push({ name: "manifest.json", text: JSON.stringify(manifest, null, 2) });
+    // A readable outline too.
+    files.push({ name: "outline.md", text: `# ${project.title}\n\n${(project.chapters || []).map((ch, i) => `${i + 1}. **${ch.title || "Untitled"}** (${compiledWordCount(ch.content)} words)${ch.summary ? `\n   ${ch.summary}` : ""}`).join("\n\n")}\n` });
+    const blob = makeZip(files);
+    const url = URL.createObjectURL(blob);
+    Object.assign(document.createElement("a"), { href: url, download: `${slug(project.title)}-manuscript.zip` }).click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    showToast("Exported Markdown bundle (.zip)", "success");
+  }, [project, showToast]);
+
   const handleExportTxt = useCallback(() => {
     if (!project) return;
     // E10: Preserve formatting markers in export
@@ -15129,6 +15435,7 @@ The FIRST attached image is the master photograph of this exact room. ${WALL_REF
           summaryGeneratedAt: ch.summaryGeneratedAt || "",
           worldView: ch.worldView || "",
           graveyard: Array.isArray(ch.graveyard) ? ch.graveyard : [],
+          subtextLines: Array.isArray(ch.subtextLines) ? ch.subtextLines : [],
         }));
         // Ensure characters have IDs and new fields default properly
         if (Array.isArray(imported.characters)) {
@@ -17202,6 +17509,7 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
             <button onClick={jumpToNextBlank} className="nf-btn-icon-sm" title="Jump to next [??] placeholder (Ctrl+Shift+[ to drop one)" aria-label="Jump to next placeholder">⟶ [??]</button>
             <button onClick={() => setShowTypeset(true)} className="nf-btn-icon-sm" title="Typeset preview — see this chapter as 6×9 paperback pages" aria-label="Typeset preview">📖 Pages</button>
             <button onClick={() => setShowClips(s => !s)} className="nf-btn-icon-sm" style={clipStrips.length ? { borderColor: "var(--nf-accent-2)", color: "var(--nf-accent-2)" } : {}} title="Clip strips — stash snippets (Ctrl+Shift+C) and drop them back in" aria-label="Clip strips">📎 {clipStrips.length || ""}</button>
+            <button onClick={() => setShowSubtext(s => !s)} className="nf-btn-icon-sm" title="Subtext & agenda — link lines to hidden meaning" aria-label="Subtext matrix">🎭 Subtext</button>
             <Tooltip text="Color: Character voices">
               <button onClick={() => setColorMode(prev => prev === "voice" ? "off" : "voice")} className="nf-btn-icon-sm" style={colorMode === "voice" ? { borderColor: "var(--nf-accent)", color: "var(--nf-accent)" } : {}} aria-label="Character voice colors">
                 <Icons.Users /> {!isMobile && "Voice"}
@@ -18267,6 +18575,32 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
               <DebouncedField label="Appearance" value={editingChar.appearance} onChange={v => updateCharById(editingCharId, "appearance", v)} multiline placeholder="Physical description — height, build, coloring, distinguishing features..." />
               <DebouncedField label="Personality" value={editingChar.personality} onChange={v => updateCharById(editingCharId, "personality", v)} multiline placeholder="Core traits, temperament, quirks, contradictions..." />
               <DebouncedField label="Speech & Voice" value={editingChar.speechPattern} onChange={v => updateCharById(editingCharId, "speechPattern", v)} multiline placeholder="Vocabulary, accent, verbal tics, how they sound under stress..." small />
+              <div className="nf-field" style={{ marginTop: 6 }}>
+                <label className="nf-label" style={{ fontSize: 11 }}>Locked linguistic register (voice guard)</label>
+                <select value={editingChar.register || ""} onChange={e => updateCharById(editingCharId, "register", e.target.value)} className="nf-select" style={{ fontSize: 12 }}>
+                  <option value="">None — don't check</option>
+                  <option value="archaic">Archaic / pre-modern (flags modern words)</option>
+                  <option value="formal">Formal / educated (flags slang & contractions)</option>
+                  <option value="modern_casual">Modern casual (flags archaic words)</option>
+                </select>
+                <div style={{ fontSize: 10, color: "var(--nf-text-muted)", marginTop: 3 }}>Flags voice violations in chapters this character narrates — see Memory tab.</div>
+              </div>
+              {/* Physical state continuity — injuries/conditions active over a chapter range */}
+              <div className="nf-field" style={{ marginTop: 8 }}>
+                <label className="nf-label" style={{ fontSize: 11 }}>Physical states / continuity (injuries, conditions)</label>
+                {(editingChar.stateFlags || []).map(sf => (
+                  <div key={sf.id} style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 4, flexWrap: "wrap" }}>
+                    <input value={sf.state} placeholder="e.g. broken left arm" onChange={e => updateCharById(editingCharId, "stateFlags", (editingChar.stateFlags || []).map(x => x.id === sf.id ? { ...x, state: e.target.value } : x))} className="nf-input" style={{ flex: 1, minWidth: 130, fontSize: 11 }} />
+                    <span style={{ fontSize: 10, color: "var(--nf-text-muted)" }}>Ch
+                      <input type="number" min="1" value={(sf.fromChapter ?? 0) + 1} onChange={e => updateCharById(editingCharId, "stateFlags", (editingChar.stateFlags || []).map(x => x.id === sf.id ? { ...x, fromChapter: Math.max(0, (parseInt(e.target.value) || 1) - 1) } : x))} style={{ width: 40, margin: "0 4px", fontSize: 11, padding: "2px 4px", background: "var(--nf-bg-surface)", border: "1px solid var(--nf-border)", borderRadius: 3, color: "var(--nf-text)" }} />–
+                      <input type="number" min="1" placeholder="∞" value={sf.untilChapter != null && sf.untilChapter !== "" ? sf.untilChapter + 1 : ""} onChange={e => updateCharById(editingCharId, "stateFlags", (editingChar.stateFlags || []).map(x => x.id === sf.id ? { ...x, untilChapter: e.target.value === "" ? "" : Math.max(0, (parseInt(e.target.value) || 1) - 1) } : x))} style={{ width: 40, marginLeft: 4, fontSize: 11, padding: "2px 4px", background: "var(--nf-bg-surface)", border: "1px solid var(--nf-border)", borderRadius: 3, color: "var(--nf-text)" }} />
+                    </span>
+                    <button onClick={() => updateCharById(editingCharId, "stateFlags", (editingChar.stateFlags || []).filter(x => x.id !== sf.id))} className="nf-btn-micro" style={{ fontSize: 10, padding: "1px 5px" }}>✕</button>
+                  </div>
+                ))}
+                <button onClick={() => updateCharById(editingCharId, "stateFlags", [...(editingChar.stateFlags || []), { id: uid(), state: "", fromChapter: activeChapterIdx, untilChapter: "" }])} className="nf-btn-micro" style={{ fontSize: 10, padding: "2px 6px" }}><Icons.Plus /> Add state</button>
+                <div style={{ fontSize: 10, color: "var(--nf-text-muted)", marginTop: 3 }}>Fed into AI context for those chapters; physically-limiting states are continuity-checked (Memory tab). Leave the second box blank for "ongoing".</div>
+              </div>
               {/* Auto-derived: how others address this character (from relationship terms) */}
               {(() => {
                 const addressTerms = [];
@@ -18468,6 +18802,9 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
                   </select>
                 </div>
                 <div style={{ fontSize: 11, color: "var(--nf-text-muted)", marginTop: 6 }}>Generates clothed character-design reference art into the mood board below, using this character's appearance fields.</div>
+                {(editingChar.moodBoard || []).some(m => m.parentId || m.genKind) && (
+                  <button onClick={() => setLineageChar(editingChar)} className="nf-btn-micro" style={{ fontSize: 10, padding: "2px 6px", marginTop: 6 }}>🌳 View generation lineage</button>
+                )}
                 {/* Chronological aging — full-character regen at a target age, identity kept via pins */}
                 <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid var(--nf-border)" }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -18806,6 +19143,33 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
             </div>
           </div>
           <p className="nf-hint">Locations, rules, norms, tech, magic — everything that defines your world.</p>
+
+          {/* ─── DYNAMIC WORLD-STATE LEDGER ─── */}
+          <div className="nf-card" style={{ marginBottom: 16 }}>
+            <h3 className="nf-card-title">World-State Ledger</h3>
+            <p className="nf-hint" style={{ marginTop: -4, marginBottom: 12 }}>
+              Global conditions that switch on at a chapter and persist afterward (a war, a famine, a new law). Active conditions are injected into the AI's context for that chapter onward, so ambient description stays consistent.
+            </p>
+            {(project?.worldStateLedger || []).map((e, idx) => (
+              <div key={e.id} style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 6, flexWrap: "wrap" }}>
+                <span style={{ fontSize: 11, color: "var(--nf-text-muted)", fontFamily: "var(--nf-font-mono)", minWidth: 70 }}>from Ch
+                  <input type="number" min="1" value={(e.fromChapter ?? 0) + 1}
+                    onChange={ev => { const v = Math.max(1, parseInt(ev.target.value) || 1) - 1; updateProject({ worldStateLedger: project.worldStateLedger.map(x => x.id === e.id ? { ...x, fromChapter: v } : x) }); }}
+                    style={{ width: 44, marginLeft: 4, fontSize: 11, padding: "2px 4px", background: "var(--nf-bg-surface)", border: "1px solid var(--nf-border)", borderRadius: 3, color: "var(--nf-text)" }} />
+                </span>
+                <input value={e.condition} placeholder="Condition (e.g. The kingdom is at war)"
+                  onChange={ev => updateProject({ worldStateLedger: project.worldStateLedger.map(x => x.id === e.id ? { ...x, condition: ev.target.value } : x) })}
+                  className="nf-input" style={{ flex: 1, minWidth: 160, fontSize: 12 }} />
+                <input value={e.description || ""} placeholder="Effects (scarcer food, tension…)"
+                  onChange={ev => updateProject({ worldStateLedger: project.worldStateLedger.map(x => x.id === e.id ? { ...x, description: ev.target.value } : x) })}
+                  className="nf-input" style={{ flex: 1, minWidth: 140, fontSize: 12 }} />
+                <button onClick={() => updateProject({ worldStateLedger: project.worldStateLedger.filter(x => x.id !== e.id) })} className="nf-btn-micro" style={{ fontSize: 10, padding: "2px 6px" }}>✕</button>
+              </div>
+            ))}
+            <button onClick={() => updateProject({ worldStateLedger: [...(project?.worldStateLedger || []), { id: uid(), fromChapter: activeChapterIdx, condition: "", description: "" }] })}
+              className="nf-btn-micro" style={{ fontSize: 11, marginTop: 4 }}><Icons.Plus /> Add condition</button>
+          </div>
+
           {items.map(item => {
             const isExpanded = expandedWorldIds.has(item.id);
             return (
@@ -20216,6 +20580,30 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
                         </div>
                       </div>
                     )}
+                    {/* Relationship Vector Map — timeline of how status/tension shifted per chapter */}
+                    {Object.keys(r.chapterEvolution || {}).length > 0 && (() => {
+                      const evoKeys = Object.keys(r.chapterEvolution).map(Number).filter(n => !isNaN(n)).sort((a, b) => a - b);
+                      const points = evoKeys.map(k => ({ ch: k, ...r.chapterEvolution[k] }));
+                      const tensionVal = { low: 1, medium: 2, high: 3, extreme: 4 };
+                      return (
+                        <div style={{ margin: "4px 0 12px", padding: "10px 14px", background: "var(--nf-bg-deep)", border: "1px solid var(--nf-border)", borderRadius: 2 }}>
+                          <div style={{ fontSize: 11, fontWeight: 500, color: "var(--nf-text-muted)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 }}>Vector Map — tracked evolution</div>
+                          <div style={{ display: "flex", alignItems: "stretch", gap: 0, overflowX: "auto", paddingBottom: 4 }}>
+                            {points.map((p, pi) => (
+                              <div key={p.ch} style={{ display: "flex", alignItems: "center", flexShrink: 0 }}>
+                                <div style={{ minWidth: 92, padding: "6px 8px", background: "var(--nf-bg-surface)", border: "1px solid var(--nf-border)", borderRadius: 4, fontSize: 10 }}>
+                                  <div style={{ color: "var(--nf-accent-2)", fontWeight: 600, fontFamily: "var(--nf-font-mono)" }}>Ch{p.ch + 1}</div>
+                                  {p.status && <div style={{ color: "var(--nf-text)", marginTop: 2 }}>{p.status}</div>}
+                                  {p.tension && <div style={{ color: "var(--nf-text-muted)" }}>tension: {p.tension}</div>}
+                                  {p.trustLevel && <div style={{ color: "var(--nf-text-muted)" }}>trust: {p.trustLevel}</div>}
+                                </div>
+                                {pi < points.length - 1 && <span style={{ color: "var(--nf-text-muted)", padding: "0 4px" }}>→</span>}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      );
+                    })()}
                     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                       <SelectField label="Power Dynamic" value={r.powerDynamic || "equal"} onChange={v => updateProject({ relationships: rels.map(re => re.id === r.id ? { ...re, powerDynamic: v } : re) })} options={POWER_DYNAMIC_OPTIONS} />
                       <SelectField label="Trust Level" value={r.trustLevel || "medium"} onChange={v => updateProject({ relationships: rels.map(re => re.id === r.id ? { ...re, trustLevel: v } : re) })} options={TRUST_LEVEL_OPTIONS} />
@@ -20896,6 +21284,77 @@ Speech pattern: ${char.speechPattern || ""}` },
                   </tbody>
                 </table>
               </div>
+            </div>
+          );
+        })()}
+
+        {/* ─── TEMPORAL LOGIC VALIDATOR ─── */}
+        {(() => {
+          const tflags = analyzeTemporal(project);
+          if (!tflags.length) return null;
+          return (
+            <div className="nf-card" style={{ marginTop: 16 }}>
+              <h3 className="nf-card-title">Timeline Checks</h3>
+              <p className="nf-hint" style={{ marginTop: -4, marginBottom: 12 }}>
+                Possible time contradictions between the prose and your chapters' story dates. Set chapter dates in the Plot tab for this to work.
+              </p>
+              {tflags.map((f, i) => (
+                <div key={i} style={{ fontSize: 12, color: "var(--nf-text)", padding: "6px 0", borderBottom: i < tflags.length - 1 ? "1px solid var(--nf-border)" : "none", display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{ color: "var(--nf-accent)" }}>⚠</span>
+                  <button onClick={() => { setActiveChapterIdx(f.chapter); setActiveTab("write"); }} style={{ background: "none", border: "none", color: "var(--nf-accent-2)", cursor: "pointer", padding: 0, fontWeight: 600 }}>{f.title}</button>
+                  <span style={{ color: "var(--nf-text-muted)" }}>
+                    says {f.cue} but the next dated chapter is {f.gap} day{f.gap === 1 ? "" : "s"} later{f.expected != null ? ` (expected ≤${f.expected})` : f.expectedMin != null ? ` (expected ≥${f.expectedMin})` : ""}.
+                  </span>
+                </div>
+              ))}
+            </div>
+          );
+        })()}
+
+        {/* ─── PROSE REGISTER GUARD ─── */}
+        {(() => {
+          const rflags = analyzeRegister(project);
+          if (!rflags.length) return null;
+          return (
+            <div className="nf-card" style={{ marginTop: 16 }}>
+              <h3 className="nf-card-title">Voice Register Checks</h3>
+              <p className="nf-hint" style={{ marginTop: -4, marginBottom: 12 }}>
+                Words that clash with a POV character's locked register. Set a register on a character (Speech &amp; Voice section) to enable.
+              </p>
+              {rflags.map((f, i) => (
+                <div key={i} style={{ fontSize: 12, padding: "6px 0", borderBottom: i < rflags.length - 1 ? "1px solid var(--nf-border)" : "none" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <span style={{ color: "var(--nf-accent)" }}>⚠</span>
+                    <button onClick={() => { setActiveChapterIdx(f.chapter); setActiveTab("write"); }} style={{ background: "none", border: "none", color: "var(--nf-accent-2)", cursor: "pointer", padding: 0, fontWeight: 600 }}>{f.title}</button>
+                    <span style={{ color: "var(--nf-text-muted)" }}>— {f.character} ({f.register})</span>
+                  </div>
+                  <div style={{ marginLeft: 24, marginTop: 2, color: "var(--nf-text-muted)", fontSize: 11 }}>off-register: {f.words.map(w => `"${w}"`).join(", ")}</div>
+                </div>
+              ))}
+            </div>
+          );
+        })()}
+
+        {/* ─── SEMANTIC CONTINUITY (physical state) ─── */}
+        {(() => {
+          const sflags = analyzeStateContinuity(project);
+          if (!sflags.length) return null;
+          return (
+            <div className="nf-card" style={{ marginTop: 16 }}>
+              <h3 className="nf-card-title">Physical Continuity Checks</h3>
+              <p className="nf-hint" style={{ marginTop: -4, marginBottom: 12 }}>
+                A character with an active physical limitation appears near vigorous action — worth a look. This is a heuristic prompt to review, not a verdict; it can't judge anatomy, only flag co-occurrence.
+              </p>
+              {sflags.map((f, i) => (
+                <div key={i} style={{ fontSize: 12, padding: "6px 0", borderBottom: i < sflags.length - 1 ? "1px solid var(--nf-border)" : "none" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <span style={{ color: "var(--nf-accent)" }}>⚠</span>
+                    <button onClick={() => { setActiveChapterIdx(f.chapter); setActiveTab("write"); }} style={{ background: "none", border: "none", color: "var(--nf-accent-2)", cursor: "pointer", padding: 0, fontWeight: 600 }}>{f.title}</button>
+                    <span style={{ color: "var(--nf-text-muted)" }}>— {f.character} has "{f.state}"</span>
+                  </div>
+                  <div style={{ marginLeft: 24, marginTop: 2, color: "var(--nf-text-muted)", fontSize: 11, fontStyle: "italic" }}>“…{f.excerpt}…”</div>
+                </div>
+              ))}
             </div>
           );
         })()}
@@ -21603,6 +22062,8 @@ Speech pattern: ${char.speechPattern || ""}` },
         <h3 className="nf-card-title">Export & Import</h3>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <button onClick={handleExportTxt} className="nf-btn nf-btn-ghost"><Icons.Export /> .txt</button>
+          <button onClick={handleExportMarkdownBundle} className="nf-btn nf-btn-ghost"><Icons.Export /> .md bundle (.zip)</button>
+          <button onClick={() => setShowExportPreview(true)} className="nf-btn nf-btn-ghost"><Icons.Eye /> Preview layout</button>
           <button onClick={handleExportJson} className="nf-btn nf-btn-ghost"><Icons.Export /> JSON</button>
           <label className="nf-btn nf-btn-ghost" style={{ cursor: "pointer" }}><Icons.Save /> Import<input type="file" accept=".json" style={{ display: "none" }} onChange={handleImportJson} /></label>
         </div>
@@ -22807,6 +23268,35 @@ Speech pattern: ${char.speechPattern || ""}` },
             </div>
           );
         })()}
+        {showSubtext && activeChapter && (
+          <div style={{ position: "fixed", right: 16, bottom: 72, zIndex: 8000, width: 300, maxHeight: "64vh", overflowY: "auto", background: "var(--nf-bg-raised)", border: "1px solid var(--nf-border)", borderRadius: 8, boxShadow: "0 8px 28px rgba(0,0,0,0.35)", padding: 12 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+              <span style={{ fontSize: 11, fontWeight: 600, color: "var(--nf-text)" }}>Subtext & Agenda</span>
+              <button onClick={() => setShowSubtext(false)} className="nf-btn-icon" aria-label="Close subtext"><Icons.X /></button>
+            </div>
+            <p style={{ fontSize: 10, color: "var(--nf-text-muted)", margin: "0 0 10px", lineHeight: 1.5 }}>Link a spoken line to what the character actually means. Feeds the AI's context so dialogue stays layered.</p>
+            {(activeChapter.subtextLines || []).map(sl => (
+              <div key={sl.id} style={{ marginBottom: 8, padding: 8, background: "var(--nf-bg-surface)", border: "1px solid var(--nf-border)", borderRadius: 4 }}>
+                <div style={{ fontSize: 11, color: "var(--nf-text)", fontStyle: "italic" }}>“{sl.line}”</div>
+                <div style={{ fontSize: 11, color: "var(--nf-accent-2)", marginTop: 3 }}>↳ {sl.subtext}</div>
+                <button onClick={() => updateChapter(activeChapterIdx, { subtextLines: (activeChapter.subtextLines || []).filter(x => x.id !== sl.id) })} className="nf-btn-micro" style={{ fontSize: 10, padding: "1px 5px", marginTop: 4 }}>✕</button>
+              </div>
+            ))}
+            <div style={{ borderTop: "1px solid var(--nf-border)", paddingTop: 8, marginTop: 4 }}>
+              <input id="nf-subtext-line" placeholder="Spoken line (or select text first)" className="nf-input" style={{ width: "100%", fontSize: 11, marginBottom: 4 }}
+                defaultValue={(() => { const s = window.getSelection?.(); return s ? s.toString().trim().slice(0, 200) : ""; })()} />
+              <input id="nf-subtext-meaning" placeholder="What they actually mean / their agenda" className="nf-input" style={{ width: "100%", fontSize: 11, marginBottom: 6 }} />
+              <button onClick={() => {
+                const lineEl = document.getElementById("nf-subtext-line");
+                const meanEl = document.getElementById("nf-subtext-meaning");
+                const line = lineEl?.value.trim(), subtext = meanEl?.value.trim();
+                if (!line || !subtext) { showToast("Add both the line and its subtext", "info"); return; }
+                updateChapter(activeChapterIdx, { subtextLines: [...(activeChapter.subtextLines || []), { id: uid(), line, subtext }] });
+                if (lineEl) lineEl.value = ""; if (meanEl) meanEl.value = "";
+              }} className="nf-btn nf-btn-primary" style={{ fontSize: 11, width: "100%" }}>Link subtext</button>
+            </div>
+          </div>
+        )}
         {showClips && (
           <div style={{ position: "fixed", right: 16, bottom: 72, zIndex: 8000, width: 240, maxHeight: "60vh", overflowY: "auto", background: "var(--nf-bg-raised)", border: "1px solid var(--nf-border)", borderRadius: 8, boxShadow: "0 8px 28px rgba(0,0,0,0.35)", padding: 10 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
@@ -22836,6 +23326,8 @@ Speech pattern: ${char.speechPattern || ""}` },
           </div>
         )}
         {showTypeset && <TypesetPreview content={activeChapter?.content} chapterTitle={activeChapter?.title || "Chapter"} onClose={() => setShowTypeset(false)} />}
+        {showExportPreview && <ExportPreviewMatrix chapter={activeChapter} onClose={() => setShowExportPreview(false)} />}
+        {lineageChar && <GenerationLineage images={lineageChar.moodBoard} onClose={() => setLineageChar(null)} />}
         {showLineup && <ScaleLineup characters={project?.characters} onClose={() => setShowLineup(false)} />}
         {renameDialog && (
           <div onClick={() => setRenameDialog(null)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", zIndex: 9100, display: "flex", alignItems: "flex-start", justifyContent: "center", paddingTop: "16vh" }}>
