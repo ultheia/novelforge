@@ -898,85 +898,6 @@ const _stripRefBlocks = (html) => {
 };
 const compiledWordCount = (html) => wordCount(_stripRefBlocks(html));
 
-// ─── TEMPORAL LOGIC VALIDATOR ───
-// Anchors chapters to their story dates (via ContextEngine._parseStoryDate) and flags relative-time
-// phrases in the prose that contradict the actual gap to the next dated chapter. Heuristic: it can
-// only check chapters that HAVE dates set, and only catches common phrasings — but it surfaces the
-// classic "see you tomorrow" → next chapter is 3 days later kind of slip.
-const _dateToDayNumber = (n) => {
-  if (n == null) return null;
-  // _parseStoryDate returns either YYYYMMDD-ish ints or ms timestamps. Normalize to a day count.
-  if (n > 1e11) return Math.floor(n / 86400000); // ms timestamp
-  // YYYYMMDD integer → approximate absolute day (y*365 + m*30 + d)
-  const y = Math.floor(n / 10000), m = Math.floor((n % 10000) / 100), d = n % 100;
-  return y * 365 + m * 30 + d;
-};
-const analyzeTemporal = (project) => {
-  const chapters = project?.chapters || [];
-  const flags = [];
-  // gather day numbers per chapter
-  const days = chapters.map((_, i) => _dateToDayNumber(ContextEngine._currentStoryDate(project, i)));
-  for (let i = 0; i < chapters.length; i++) {
-    if (days[i] == null) continue;
-    // find the next chapter with a date
-    let j = i + 1;
-    while (j < chapters.length && days[j] == null) j++;
-    if (j >= chapters.length || days[j] == null) continue;
-    const gap = days[j] - days[i]; // days until next dated chapter
-    const plain = _htmlToPlain(chapters[i].content || "").toLowerCase();
-    // Relative-time cues near the end of the chapter and what gap they imply.
-    const cues = [
-      { re: /\b(see you |back )?tomorrow\b/, impliesMax: 1, label: '"tomorrow"' },
-      { re: /\btonight\b/, impliesMax: 0, label: '"tonight"' },
-      { re: /\bin an hour\b/, impliesMax: 0, label: '"in an hour"' },
-      { re: /\bnext week\b|\bin a week\b/, impliesMin: 5, impliesMax: 9, label: '"next week / in a week"' },
-      { re: /\bin (?:a|one) month\b|\bnext month\b/, impliesMin: 25, impliesMax: 35, label: '"in a month"' },
-      { re: /\byesterday\b/, impliesMax: 0, label: '"yesterday"' }, // about a past day; gap-agnostic but flag if huge
-    ];
-    for (const c of cues) {
-      if (!c.re.test(plain)) continue;
-      const tooLong = c.impliesMax != null && gap > c.impliesMax;
-      const tooShort = c.impliesMin != null && gap < c.impliesMin;
-      if (tooLong) {
-        flags.push({ chapter: i, title: chapters[i].title || `Chapter ${i + 1}`, cue: c.label, gap, expected: c.impliesMax });
-      } else if (tooShort) {
-        flags.push({ chapter: i, title: chapters[i].title || `Chapter ${i + 1}`, cue: c.label, gap, expectedMin: c.impliesMin });
-      }
-    }
-  }
-  return flags;
-};
-
-// ─── PROSE REGISTER GUARD ───
-// Flags vocabulary that clashes with a character's locked linguistic register (set on the
-// character as `register`). Heuristic word-lists, not a full style model — catches obvious
-// anachronisms (a medieval voice using "okay", "guys", "stuff") and register slips.
-const _REGISTER_FLAGS = {
-  archaic: { label: "archaic / pre-modern", banned: /\b(okay|ok|guys|stuff|cool|yeah|yep|nope|gonna|wanna|gotta|kid|kids|teenager|email|phone|car|tv|radio|computer|internet|boss|weekend|hello|hi there|awesome|fine by me|no problem)\b/gi },
-  formal: { label: "formal / educated", banned: /\b(gonna|wanna|gotta|ain't|yeah|nope|dunno|kinda|sorta|gimme|lemme|cuz|y'all|lotta)\b/gi },
-  modern_casual: { label: "modern casual", banned: /\b(thou|thee|thy|thine|hath|doth|prithee|forsooth|verily|whence|hither|thither|mayhap|betwixt|ere\b)\b/gi },
-};
-const analyzeRegister = (project) => {
-  const flags = [];
-  const chars = (project?.characters || []).filter(c => c.register && _REGISTER_FLAGS[c.register]);
-  if (!chars.length) return flags;
-  for (let ci = 0; ci < (project?.chapters || []).length; ci++) {
-    const ch = project.chapters[ci];
-    // Whose POV is this chapter? Match the POV character to a registered profile.
-    const povId = ContextEngine._plotEntryForChapter(project, ci)?.povCharacterId;
-    const povChar = chars.find(c => c.id === povId) ||
-      chars.find(c => c.name && (ch.pov || "").toLowerCase().includes(c.name.toLowerCase().split(/\s+/)[0]));
-    if (!povChar) continue;
-    const prof = _REGISTER_FLAGS[povChar.register];
-    const plain = _htmlToPlain(ch.content || "");
-    const hits = [...new Set((plain.match(prof.banned) || []).map(w => w.toLowerCase()))];
-    if (hits.length) {
-      flags.push({ chapter: ci, title: ch.title || `Chapter ${ci + 1}`, character: povChar.name, register: prof.label, words: hits.slice(0, 6) });
-    }
-  }
-  return flags;
-};
-
 // Reading time estimate — ~250 wpm for fiction prose
 const readingTime = (words) => {
   if (!words || words <= 0) return "0 min";
@@ -4403,7 +4324,7 @@ const createDefaultCharacter = () => ({
   id: uid(), name: "", role: "protagonist", gender: "", age: "", pronouns: "",
   aliases: "",
   appearance: "", personality: "", backstory: "", desires: "",
-  speechPattern: "", relationships: "", kinks: "", arc: "", notes: "", register: "",
+  speechPattern: "", relationships: "", kinks: "", arc: "", notes: "",
   // ─── SIMPLIFIED REVEAL STATE (replaces 8 deprecated chapter/date fields) ───
   backstoryRevealed: false, // AI-flipped when backstory is revealed in a chapter
   secretRevealed: false,    // AI-flipped when hidden secrets are revealed
@@ -18346,16 +18267,6 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
               <DebouncedField label="Appearance" value={editingChar.appearance} onChange={v => updateCharById(editingCharId, "appearance", v)} multiline placeholder="Physical description — height, build, coloring, distinguishing features..." />
               <DebouncedField label="Personality" value={editingChar.personality} onChange={v => updateCharById(editingCharId, "personality", v)} multiline placeholder="Core traits, temperament, quirks, contradictions..." />
               <DebouncedField label="Speech & Voice" value={editingChar.speechPattern} onChange={v => updateCharById(editingCharId, "speechPattern", v)} multiline placeholder="Vocabulary, accent, verbal tics, how they sound under stress..." small />
-              <div className="nf-field" style={{ marginTop: 6 }}>
-                <label className="nf-label" style={{ fontSize: 11 }}>Locked linguistic register (voice guard)</label>
-                <select value={editingChar.register || ""} onChange={e => updateCharById(editingCharId, "register", e.target.value)} className="nf-select" style={{ fontSize: 12 }}>
-                  <option value="">None — don't check</option>
-                  <option value="archaic">Archaic / pre-modern (flags modern words)</option>
-                  <option value="formal">Formal / educated (flags slang & contractions)</option>
-                  <option value="modern_casual">Modern casual (flags archaic words)</option>
-                </select>
-                <div style={{ fontSize: 10, color: "var(--nf-text-muted)", marginTop: 3 }}>Flags voice violations in chapters this character narrates — see Memory tab.</div>
-              </div>
               {/* Auto-derived: how others address this character (from relationship terms) */}
               {(() => {
                 const addressTerms = [];
@@ -20985,53 +20896,6 @@ Speech pattern: ${char.speechPattern || ""}` },
                   </tbody>
                 </table>
               </div>
-            </div>
-          );
-        })()}
-
-        {/* ─── TEMPORAL LOGIC VALIDATOR ─── */}
-        {(() => {
-          const tflags = analyzeTemporal(project);
-          if (!tflags.length) return null;
-          return (
-            <div className="nf-card" style={{ marginTop: 16 }}>
-              <h3 className="nf-card-title">Timeline Checks</h3>
-              <p className="nf-hint" style={{ marginTop: -4, marginBottom: 12 }}>
-                Possible time contradictions between the prose and your chapters' story dates. Set chapter dates in the Plot tab for this to work.
-              </p>
-              {tflags.map((f, i) => (
-                <div key={i} style={{ fontSize: 12, color: "var(--nf-text)", padding: "6px 0", borderBottom: i < tflags.length - 1 ? "1px solid var(--nf-border)" : "none", display: "flex", alignItems: "center", gap: 8 }}>
-                  <span style={{ color: "var(--nf-accent)" }}>⚠</span>
-                  <button onClick={() => { setActiveChapterIdx(f.chapter); setActiveTab("write"); }} style={{ background: "none", border: "none", color: "var(--nf-accent-2)", cursor: "pointer", padding: 0, fontWeight: 600 }}>{f.title}</button>
-                  <span style={{ color: "var(--nf-text-muted)" }}>
-                    says {f.cue} but the next dated chapter is {f.gap} day{f.gap === 1 ? "" : "s"} later{f.expected != null ? ` (expected ≤${f.expected})` : f.expectedMin != null ? ` (expected ≥${f.expectedMin})` : ""}.
-                  </span>
-                </div>
-              ))}
-            </div>
-          );
-        })()}
-
-        {/* ─── PROSE REGISTER GUARD ─── */}
-        {(() => {
-          const rflags = analyzeRegister(project);
-          if (!rflags.length) return null;
-          return (
-            <div className="nf-card" style={{ marginTop: 16 }}>
-              <h3 className="nf-card-title">Voice Register Checks</h3>
-              <p className="nf-hint" style={{ marginTop: -4, marginBottom: 12 }}>
-                Words that clash with a POV character's locked register. Set a register on a character (Speech &amp; Voice section) to enable.
-              </p>
-              {rflags.map((f, i) => (
-                <div key={i} style={{ fontSize: 12, padding: "6px 0", borderBottom: i < rflags.length - 1 ? "1px solid var(--nf-border)" : "none" }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <span style={{ color: "var(--nf-accent)" }}>⚠</span>
-                    <button onClick={() => { setActiveChapterIdx(f.chapter); setActiveTab("write"); }} style={{ background: "none", border: "none", color: "var(--nf-accent-2)", cursor: "pointer", padding: 0, fontWeight: 600 }}>{f.title}</button>
-                    <span style={{ color: "var(--nf-text-muted)" }}>— {f.character} ({f.register})</span>
-                  </div>
-                  <div style={{ marginLeft: 24, marginTop: 2, color: "var(--nf-text-muted)", fontSize: 11 }}>off-register: {f.words.map(w => `"${w}"`).join(", ")}</div>
-                </div>
-              ))}
             </div>
           );
         })()}
