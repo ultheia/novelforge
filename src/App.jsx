@@ -13221,153 +13221,6 @@ CRITICAL REQUIREMENTS:
     } catch (e) { showToast(`Fill failed: ${e.message}`, "error"); }
   }, [settings, project, activeChapterIdx, showToast]);
 
-  // ─── RELATIONSHIP AUTO-DRAFT ───
-  // Per the user's chosen behavior: overwrite ALL relationship fields (interpretive + structured),
-  // auto-apply without a review modal, but keep an easy one-click undo (project relationships
-  // aren't covered by the editor-content undo stack, so we snapshot them ourselves).
-  // _draftOneRelationship returns the AI-proposed patch for a single relationship, or null on failure.
-  const _draftOneRelationship = useCallback(async (rel) => {
-    const c1 = project?.characters?.find(c => c.id === rel.char1);
-    const c2 = project?.characters?.find(c => c.id === rel.char2);
-    if (!c1?.name || !c2?.name) return null;
-    const contextInfo = ContextEngine.buildTabContext(project, activeChapterIdx, "relationships", rel.id);
-    // Compact profiles so the model grounds the dynamic in who these people actually are.
-    const profile = (c) => [
-      `${c.name} (${c.role || "role unset"}${c.age ? `, ${c.age}` : ""})`,
-      c.personality && `personality: ${c.personality}`,
-      c.desires && `wants: ${c.desires}`,
-      c.fears && `fears: ${c.fears}`,
-      c.flaws && `flaws: ${c.flaws}`,
-      c.backstory && `backstory: ${String(c.backstory).slice(0, 300)}`,
-      c.secrets && `secrets: ${c.secrets}`,
-    ].filter(Boolean).join("; ");
-    const opts = (arr) => arr.map(o => o.value).join(", ");
-    const prompt = `Develop the FULL relationship between "${c1.name}" and "${c2.name}" for a ${project?.genre || "fiction"} novel. Rewrite every field below from scratch into a vivid, specific, internally-consistent dynamic — do not hedge, do not leave anything generic.
-
-CHARACTER 1 — ${profile(c1)}
-CHARACTER 2 — ${profile(c2)}
-
-Current structured state (you may change these if the dynamic warrants it):
-- category: ${rel.category || "unset"} (allowed: ${opts(RELATIONSHIP_CATEGORY_OPTIONS)})
-- status: ${rel.status || "unset"} (allowed: ${opts(RELATIONSHIP_STATUS_OPTIONS)})
-- tension: ${rel.tension || "unset"} (allowed: ${opts(TENSION_OPTIONS)})
-- tensionType: ${rel.tensionType || "unset"} (allowed: ${opts(TENSION_TYPE_OPTIONS)})
-- powerDynamic: ${rel.powerDynamic || "unset"} (allowed: ${opts(POWER_DYNAMIC_OPTIONS)}) — char1 is ${c1.name}, char2 is ${c2.name}
-- trustLevel: ${rel.trustLevel || "unset"} (allowed: ${opts(TRUST_LEVEL_OPTIONS)})
-
-Return ONLY a JSON object with these keys (all strings unless noted):
-- "dynamic": one-sentence essence of how they relate
-- "chemistry": what makes the pairing compelling on the page
-- "conflictSource": the core friction between them
-- "char1Perspective": how ${c1.name} privately sees ${c2.name}
-- "char2Perspective": how ${c2.name} privately sees ${c1.name}
-- "sharedSecrets": what they know that others don't (or "" if none)
-- "keyScenes": 2-4 turning-point beats, e.g. "Ch3: first clash; Ch7: reluctant alliance"
-- "progression": the arc of this relationship across the story
-- "terms": how they address each other (names, titles, pet names)
-- "taboos": lines they won't cross with each other (or "")
-- "notes": any extra texture
-- "category","status","tension","tensionType","powerDynamic","trustLevel": pick the BEST-FITTING allowed value for each
-
-Be consistent with the characters' personalities and any context provided. No markdown, no backticks, no prose outside the JSON.`;
-    const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${settings.apiKey}`, "HTTP-Referer": window.location.origin, "X-Title": "NovelForge" },
-      body: JSON.stringify({
-        model: settings.tabModels?.relationships || settings.model,
-        messages: [
-          { role: "system", content: `You are a fiction relationship architect. You write specific, character-grounded relationship dynamics.\n\n${contextInfo || ""}\n\nReturn ONLY valid JSON.` },
-          { role: "user", content: prompt },
-        ],
-        max_tokens: 12000, temperature: 0.85,
-      }),
-    });
-    if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error?.message || `API error (${res.status})`); }
-    const data = await res.json();
-    let content = stripThinkingTokens(data.choices?.[0]?.message?.content || "").trim();
-    content = content.replace(/^```json?\s*/i, "").replace(/\s*```$/i, "").trim();
-    let proposed; try { proposed = JSON.parse(content); } catch { return null; }
-    if (typeof proposed !== "object" || proposed === null) return null;
-    // Build a clean patch: text fields verbatim, structured fields coerced to allowed values.
-    const normalize = (val, options) => {
-      if (!val || typeof val !== "string") return null;
-      const lower = val.trim().toLowerCase();
-      const match = options.find(o => o.value.toLowerCase() === lower || o.label.toLowerCase() === lower);
-      return match ? match.value : null;
-    };
-    const patch = {};
-    for (const f of RELATIONSHIP_TEXT_FIELDS) {
-      if (typeof proposed[f] === "string") patch[f] = proposed[f].trim();
-      else if (proposed[f] != null && typeof proposed[f] === "object") patch[f] = normalizeAiValue(proposed[f]);
-    }
-    const structured = [
-      ["category", RELATIONSHIP_CATEGORY_OPTIONS], ["status", RELATIONSHIP_STATUS_OPTIONS],
-      ["tension", TENSION_OPTIONS], ["tensionType", TENSION_TYPE_OPTIONS],
-      ["powerDynamic", POWER_DYNAMIC_OPTIONS], ["trustLevel", TRUST_LEVEL_OPTIONS],
-    ];
-    for (const [key, options] of structured) {
-      const v = normalize(proposed[key], options);
-      if (v) patch[key] = v;
-    }
-    return Object.keys(patch).length ? patch : null;
-  }, [project, activeChapterIdx, settings]);
-
-  const handleAutoDraftRelationship = useCallback(async (relId) => {
-    if (!settings.apiKey) { showToast("Add an API key in Settings first", "error"); return; }
-    const rel = project?.relationships?.find(r => r.id === relId);
-    if (!rel) return;
-    const c1 = project?.characters?.find(c => c.id === rel.char1);
-    const c2 = project?.characters?.find(c => c.id === rel.char2);
-    if (!c1?.name || !c2?.name) { showToast("Set both characters first", "error"); return; }
-    setRelDraftBusy(relId);
-    showToast(`AI is drafting ${c1.name} ↔ ${c2.name}…`, "info");
-    try {
-      const patch = await _draftOneRelationship(rel);
-      if (!patch) throw new Error("AI returned nothing usable");
-      // Snapshot BEFORE writing so the banner's Undo can restore exactly.
-      const snapshot = (project?.relationships || []).map(r => ({ ...r }));
-      const changedKeys = Object.keys(patch).filter(k => (rel[k] || "") !== (patch[k] || ""));
-      updateProject({ relationships: (project?.relationships || []).map(r => r.id === relId ? { ...r, ...patch } : r) });
-      setRelDraftUndo({ relationships: snapshot, summary: `${c1.name} ↔ ${c2.name}: ${changedKeys.length} field${changedKeys.length !== 1 ? "s" : ""} rewritten`, count: 1 });
-      showToast("Relationship drafted", "success");
-    } catch (e) { showToast(`Draft failed: ${e.message}`, "error"); }
-    finally { setRelDraftBusy(null); }
-  }, [settings.apiKey, project, _draftOneRelationship, updateProject, showToast]);
-
-  const handleAutoDraftAllRelationships = useCallback(async () => {
-    if (!settings.apiKey) { showToast("Add an API key in Settings first", "error"); return; }
-    const rels = (project?.relationships || []).filter(r => {
-      const c1 = project?.characters?.find(c => c.id === r.char1);
-      const c2 = project?.characters?.find(c => c.id === r.char2);
-      return c1?.name && c2?.name;
-    });
-    if (rels.length === 0) { showToast("No relationships with both characters set", "info"); return; }
-    setRelDraftBusy("all");
-    const snapshot = (project?.relationships || []).map(r => ({ ...r }));
-    const patches = {}; // relId -> patch
-    let done = 0, failed = 0;
-    for (const rel of rels) {
-      showToast(`Drafting ${done + 1}/${rels.length}…`, "info");
-      try {
-        const patch = await _draftOneRelationship(rel);
-        if (patch) { patches[rel.id] = patch; done++; } else failed++;
-      } catch { failed++; }
-    }
-    if (Object.keys(patches).length === 0) { setRelDraftBusy(null); showToast("Drafting failed for all relationships", "error"); return; }
-    updateProject({ relationships: (project?.relationships || []).map(r => patches[r.id] ? { ...r, ...patches[r.id] } : r) });
-    setRelDraftUndo({ relationships: snapshot, summary: `Drafted ${done} relationship${done !== 1 ? "s" : ""}${failed ? ` (${failed} failed)` : ""}`, count: done });
-    setRelDraftBusy(null);
-    showToast(`Drafted ${done} relationship${done !== 1 ? "s" : ""}`, "success");
-  }, [settings.apiKey, project, _draftOneRelationship, updateProject, showToast]);
-
-  const undoRelDraft = useCallback(() => {
-    if (!relDraftUndo) return;
-    updateProject({ relationships: relDraftUndo.relationships });
-    setRelDraftUndo(null);
-    showToast("Reverted", "success");
-  }, [relDraftUndo, updateProject, showToast]);
-
-
   const editingChar = useMemo(() => {
     if (!editingCharId || !project?.characters) return null;
     return project.characters.find(c => c.id === editingCharId) || null;
@@ -13488,6 +13341,148 @@ Be consistent with the characters' personalities and any context provided. No ma
       return _syncCrossRefs(p, next);
     }));
   }, [activeProjectId]);
+
+  // ─── RELATIONSHIP AUTO-DRAFT ───
+  // Defined AFTER updateProject/updateCharById because the callbacks below list updateProject in
+  // their deps (dep arrays are evaluated during render, so updateProject must already be initialized).
+  // Per the user's chosen behavior: overwrite ALL relationship fields, auto-apply, with one-click undo.
+  const _draftOneRelationship = useCallback(async (rel) => {
+    const c1 = project?.characters?.find(c => c.id === rel.char1);
+    const c2 = project?.characters?.find(c => c.id === rel.char2);
+    if (!c1?.name || !c2?.name) return null;
+    const contextInfo = ContextEngine.buildTabContext(project, activeChapterIdx, "relationships", rel.id);
+    const profile = (c) => [
+      `${c.name} (${c.role || "role unset"}${c.age ? `, ${c.age}` : ""})`,
+      c.personality && `personality: ${c.personality}`,
+      c.desires && `wants: ${c.desires}`,
+      c.fears && `fears: ${c.fears}`,
+      c.flaws && `flaws: ${c.flaws}`,
+      c.backstory && `backstory: ${String(c.backstory).slice(0, 300)}`,
+      c.secrets && `secrets: ${c.secrets}`,
+    ].filter(Boolean).join("; ");
+    const opts = (arr) => arr.map(o => o.value).join(", ");
+    const prompt = `Develop the FULL relationship between "${c1.name}" and "${c2.name}" for a ${project?.genre || "fiction"} novel. Rewrite every field below from scratch into a vivid, specific, internally-consistent dynamic — do not hedge, do not leave anything generic.
+
+CHARACTER 1 — ${profile(c1)}
+CHARACTER 2 — ${profile(c2)}
+
+Current structured state (you may change these if the dynamic warrants it):
+- category: ${rel.category || "unset"} (allowed: ${opts(RELATIONSHIP_CATEGORY_OPTIONS)})
+- status: ${rel.status || "unset"} (allowed: ${opts(RELATIONSHIP_STATUS_OPTIONS)})
+- tension: ${rel.tension || "unset"} (allowed: ${opts(TENSION_OPTIONS)})
+- tensionType: ${rel.tensionType || "unset"} (allowed: ${opts(TENSION_TYPE_OPTIONS)})
+- powerDynamic: ${rel.powerDynamic || "unset"} (allowed: ${opts(POWER_DYNAMIC_OPTIONS)}) — char1 is ${c1.name}, char2 is ${c2.name}
+- trustLevel: ${rel.trustLevel || "unset"} (allowed: ${opts(TRUST_LEVEL_OPTIONS)})
+
+Return ONLY a JSON object with these keys (all strings unless noted):
+- "dynamic": one-sentence essence of how they relate
+- "chemistry": what makes the pairing compelling on the page
+- "conflictSource": the core friction between them
+- "char1Perspective": how ${c1.name} privately sees ${c2.name}
+- "char2Perspective": how ${c2.name} privately sees ${c1.name}
+- "sharedSecrets": what they know that others don't (or "" if none)
+- "keyScenes": 2-4 turning-point beats, e.g. "Ch3: first clash; Ch7: reluctant alliance"
+- "progression": the arc of this relationship across the story
+- "terms": how they address each other (names, titles, pet names)
+- "taboos": lines they won't cross with each other (or "")
+- "notes": any extra texture
+- "category","status","tension","tensionType","powerDynamic","trustLevel": pick the BEST-FITTING allowed value for each
+
+Be consistent with the characters' personalities and any context provided. No markdown, no backticks, no prose outside the JSON.`;
+    const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${settings.apiKey}`, "HTTP-Referer": window.location.origin, "X-Title": "NovelForge" },
+      body: JSON.stringify({
+        model: settings.tabModels?.relationships || settings.model,
+        messages: [
+          { role: "system", content: `You are a fiction relationship architect. You write specific, character-grounded relationship dynamics.\n\n${contextInfo || ""}\n\nReturn ONLY valid JSON.` },
+          { role: "user", content: prompt },
+        ],
+        max_tokens: 12000, temperature: 0.85,
+      }),
+    });
+    if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error?.message || `API error (${res.status})`); }
+    const data = await res.json();
+    let content = stripThinkingTokens(data.choices?.[0]?.message?.content || "").trim();
+    content = content.replace(/^```json?\s*/i, "").replace(/\s*```$/i, "").trim();
+    let proposed; try { proposed = JSON.parse(content); } catch { return null; }
+    if (typeof proposed !== "object" || proposed === null) return null;
+    const normalize = (val, options) => {
+      if (!val || typeof val !== "string") return null;
+      const lower = val.trim().toLowerCase();
+      const match = options.find(o => o.value.toLowerCase() === lower || o.label.toLowerCase() === lower);
+      return match ? match.value : null;
+    };
+    const patch = {};
+    for (const f of RELATIONSHIP_TEXT_FIELDS) {
+      if (typeof proposed[f] === "string") patch[f] = proposed[f].trim();
+      else if (proposed[f] != null && typeof proposed[f] === "object") patch[f] = normalizeAiValue(proposed[f]);
+    }
+    const structured = [
+      ["category", RELATIONSHIP_CATEGORY_OPTIONS], ["status", RELATIONSHIP_STATUS_OPTIONS],
+      ["tension", TENSION_OPTIONS], ["tensionType", TENSION_TYPE_OPTIONS],
+      ["powerDynamic", POWER_DYNAMIC_OPTIONS], ["trustLevel", TRUST_LEVEL_OPTIONS],
+    ];
+    for (const [key, options] of structured) {
+      const v = normalize(proposed[key], options);
+      if (v) patch[key] = v;
+    }
+    return Object.keys(patch).length ? patch : null;
+  }, [project, activeChapterIdx, settings]);
+
+  const handleAutoDraftRelationship = useCallback(async (relId) => {
+    if (!settings.apiKey) { showToast("Add an API key in Settings first", "error"); return; }
+    const rel = project?.relationships?.find(r => r.id === relId);
+    if (!rel) return;
+    const c1 = project?.characters?.find(c => c.id === rel.char1);
+    const c2 = project?.characters?.find(c => c.id === rel.char2);
+    if (!c1?.name || !c2?.name) { showToast("Set both characters first", "error"); return; }
+    setRelDraftBusy(relId);
+    showToast(`AI is drafting ${c1.name} ↔ ${c2.name}…`, "info");
+    try {
+      const patch = await _draftOneRelationship(rel);
+      if (!patch) throw new Error("AI returned nothing usable");
+      const snapshot = (project?.relationships || []).map(r => ({ ...r }));
+      const changedKeys = Object.keys(patch).filter(k => (rel[k] || "") !== (patch[k] || ""));
+      updateProject({ relationships: (project?.relationships || []).map(r => r.id === relId ? { ...r, ...patch } : r) });
+      setRelDraftUndo({ relationships: snapshot, summary: `${c1.name} ↔ ${c2.name}: ${changedKeys.length} field${changedKeys.length !== 1 ? "s" : ""} rewritten`, count: 1 });
+      showToast("Relationship drafted", "success");
+    } catch (e) { showToast(`Draft failed: ${e.message}`, "error"); }
+    finally { setRelDraftBusy(null); }
+  }, [settings.apiKey, project, _draftOneRelationship, updateProject, showToast]);
+
+  const handleAutoDraftAllRelationships = useCallback(async () => {
+    if (!settings.apiKey) { showToast("Add an API key in Settings first", "error"); return; }
+    const rels = (project?.relationships || []).filter(r => {
+      const c1 = project?.characters?.find(c => c.id === r.char1);
+      const c2 = project?.characters?.find(c => c.id === r.char2);
+      return c1?.name && c2?.name;
+    });
+    if (rels.length === 0) { showToast("No relationships with both characters set", "info"); return; }
+    setRelDraftBusy("all");
+    const snapshot = (project?.relationships || []).map(r => ({ ...r }));
+    const patches = {};
+    let done = 0, failed = 0;
+    for (const rel of rels) {
+      showToast(`Drafting ${done + 1}/${rels.length}…`, "info");
+      try {
+        const patch = await _draftOneRelationship(rel);
+        if (patch) { patches[rel.id] = patch; done++; } else failed++;
+      } catch { failed++; }
+    }
+    if (Object.keys(patches).length === 0) { setRelDraftBusy(null); showToast("Drafting failed for all relationships", "error"); return; }
+    updateProject({ relationships: (project?.relationships || []).map(r => patches[r.id] ? { ...r, ...patches[r.id] } : r) });
+    setRelDraftUndo({ relationships: snapshot, summary: `Drafted ${done} relationship${done !== 1 ? "s" : ""}${failed ? ` (${failed} failed)` : ""}`, count: done });
+    setRelDraftBusy(null);
+    showToast(`Drafted ${done} relationship${done !== 1 ? "s" : ""}`, "success");
+  }, [settings.apiKey, project, _draftOneRelationship, updateProject, showToast]);
+
+  const undoRelDraft = useCallback(() => {
+    if (!relDraftUndo) return;
+    updateProject({ relationships: relDraftUndo.relationships });
+    setRelDraftUndo(null);
+    showToast("Reverted", "success");
+  }, [relDraftUndo, updateProject, showToast]);
 
   const sceneNotes = activeChapter?.sceneNotes || "";
   const setSceneNotes = useCallback((val) => updateChapter(activeChapterIdx, { sceneNotes: val }), [activeChapterIdx, updateChapter]);
