@@ -301,7 +301,13 @@ const CHARACTER_STATUS_OPTIONS = [
 // A19: Role importance for context priority sorting
 const ROLE_PRIORITY = { protagonist: 0, antagonist: 1, "love interest": 2, deuteragonist: 3, villain: 4, "anti-hero": 5, mentor: 6, sidekick: 7, foil: 8, confidant: 9, supporting: 10, minor: 11 };
 const POV_OPTIONS = ["Third person limited","Third person omniscient","Third person deep","First person","First person present tense","Second person","Multiple POV (rotating)","Dual POV (alternating)"];
-const GENRE_OPTIONS = ["Contemporary Romance","Dark Romance","Paranormal Romance","Historical Romance","Romantic Suspense","Romantic Comedy","New Adult","Erotic Romance","Fantasy Romance","Sci-Fi Romance","Mafia Romance","Reverse Harem","Why Choose","MM Romance","FF Romance","Romantic Fantasy","Urban Fantasy","Literary Fiction","Thriller","Horror","Dark Fantasy","Other"];
+const GENRE_OPTIONS = ["Contemporary Romance","Dark Romance","Paranormal Romance","Historical Romance","Romantic Suspense","Romantic Comedy","New Adult","Erotic Romance","Fantasy Romance","Sci-Fi Romance","Mafia Romance","Reverse Harem","Why Choose","MM Romance","FF Romance","Romantic Fantasy","Urban Fantasy","Science Fiction","Speculative Fiction","Space Opera","Cyberpunk","Post-Apocalyptic","Dystopian","Epic Fantasy","Literary Fiction","Thriller","Mystery","Horror","Dark Fantasy","Other"];
+// Genres for which relationships should default to romantic framing. Outside these, new relationships
+// default to a neutral category so non-romance projects aren't constantly correcting "romantic".
+const ROMANCE_GENRE_RE = /romance|harem|why choose|mm |ff /i;
+const isRomanceGenre = (genre) => ROMANCE_GENRE_RE.test(genre || "");
+const defaultRelationshipCategory = (genre) => isRomanceGenre(genre) ? "romantic" : "friendship";
+const defaultTensionType = (genre) => isRomanceGenre(genre) ? "romantic" : "neutral";
 const SCENE_TYPE_OPTIONS = [
   { value: "narrative", label: "Narrative" }, { value: "dialogue", label: "Dialogue-heavy" },
   { value: "action", label: "Action" }, { value: "intimate", label: "Intimate" },
@@ -1520,7 +1526,7 @@ const _classifyCharacterPresence = (text, characters, detectedIds, opts = {}) =>
     }
 
     if (sawPresence) present.add(c.id);
-    else if (sawAbsence) referenced.add(c.id);
+    else if (sawAbsence && !opts.relaxAbsence) referenced.add(c.id);
     else present.add(c.id); // ambiguous default: treat as present (conservative — old behavior)
   }
   return { present, referenced };
@@ -2103,6 +2109,10 @@ const ContextEngine = {
 
   // Detect if the current chapter is a flashback
   _detectFlashback(project, chapterIdx) {
+    // In a non-linear / parallel-timelines project, an earlier story-date does NOT mean a flashback —
+    // eras run concurrently and later events deliberately rewrite earlier ones (retrocausality).
+    // Suppress flashback detection entirely so it can't inject "don't reference future events".
+    if (project?.nonLinearTime) return null;
     const currentDate = this._currentStoryDate(project, chapterIdx);
     if (!currentDate) return null;
     // Find the latest story date from previous chapters
@@ -2275,6 +2285,11 @@ const ContextEngine = {
     const flashback = this._detectFlashback(project, chapterIdx);
     if (flashback) {
       meta.push(`[FLASHBACK: This chapter is set EARLIER in the story timeline than previous chapters. The reader has already seen future events. Write with dramatic irony — the reader knows what's coming, the characters don't. Do NOT reference events that haven't happened yet in THIS timeline position.]`);
+    } else if (project?.nonLinearTime) {
+      // Non-linear mode: instead of treating an earlier date as a flashback, tell the model the eras
+      // are concurrent and later events may rewrite earlier ones — the retrocausal premise.
+      const curDateStr = curPlotEntry?.date || curChapter?.notes?.match(/year\s+\d+/i)?.[0] || "";
+      meta.push(`[NON-LINEAR TIMELINE: This story's eras run concurrently, not in sequence. ${curDateStr ? `This chapter is set in ${curDateStr}. ` : ""}A chapter set at an earlier date is NOT a flashback — events in later eras can alter the past (retrocausality). You MAY reference consequences that originate in other eras, even "future" ones, when the story's logic calls for it. Do not flatten this into a single forward-running timeline.]`);
     }
     // ─── NARRATIVE DISTANCE ───
     if (curChapter?.narrativeDistance) {
@@ -2500,7 +2515,7 @@ const ContextEngine = {
       }
     } else {
       // No curated cast → fall back to prose detection + presence heuristics.
-      const classified = _classifyCharacterPresence(detectionText, project.characters, mentionedCharIds, { forcedPresent: forcedPresentIds });
+      const classified = _classifyCharacterPresence(detectionText, project.characters, mentionedCharIds, { forcedPresent: forcedPresentIds, relaxAbsence: !!project.nonLinearTime });
       presentCharIds = classified.present;
       referencedCharIds = classified.referenced;
     }
@@ -3923,23 +3938,23 @@ const AGENT_DEFAULT_MODEL = "x-ai/grok-4.1-fast";
 // Available models for each agent role (user can pick in Settings)
 // Agent roles — each has its own model setting and budget
 const AGENT_ROLES = [
-  { key: "orchestrator", label: "Orchestrator", desc: "Routes requests and plans the run", budget: 4000 },
-  { key: "characterAgent", label: "Character Continuity Agent", desc: "Tracks emotional state, voice, obligations", budget: 6000 },
-  { key: "timelineAgent", label: "Timeline & Continuity Agent", desc: "Story dates, flashbacks, temporal state", budget: 6000 },
-  { key: "settingAgent", label: "Setting & Atmosphere Agent", desc: "Locations, sensory palette, tone", budget: 6000 },
-  { key: "relationshipAgent", label: "Relationship Dynamics Agent", desc: "Dynamics, evolution, tension", budget: 6000 },
-  { key: "thematicAgent", label: "Thematic Argument Agent", desc: "Motifs, themes, reader knowledge", budget: 6000 },
-  { key: "craftAgent", label: "Voice & Craft Agent", desc: "Narrative distance, style, register", budget: 6000 },
-  { key: "standardsAgent", label: "Craft Standards Agent", desc: "Genre conventions, prose quality", budget: 6000 },
-  { key: "assembler", label: "Context Assembler", desc: "Merges specialist briefs into final prompt", budget: 4000 },
+  { key: "orchestrator", label: "Orchestrator", desc: "Routes requests and plans the run", budget: 12000 },
+  { key: "characterAgent", label: "Character Continuity Agent", desc: "Tracks emotional state, voice, obligations", budget: 12000 },
+  { key: "timelineAgent", label: "Timeline & Continuity Agent", desc: "Story dates, flashbacks, temporal state", budget: 12000 },
+  { key: "settingAgent", label: "Setting & Atmosphere Agent", desc: "Locations, sensory palette, tone", budget: 12000 },
+  { key: "relationshipAgent", label: "Relationship Dynamics Agent", desc: "Dynamics, evolution, tension", budget: 12000 },
+  { key: "thematicAgent", label: "Thematic Argument Agent", desc: "Motifs, themes, reader knowledge", budget: 12000 },
+  { key: "craftAgent", label: "Voice & Craft Agent", desc: "Narrative distance, style, register", budget: 12000 },
+  { key: "standardsAgent", label: "Craft Standards Agent", desc: "Genre conventions, prose quality", budget: 12000 },
+  { key: "assembler", label: "Context Assembler", desc: "Merges specialist briefs into final prompt", budget: 12000 },
   { key: "writer", label: "Writing Agent (Main)", desc: "Generates the actual prose/content", budget: 32000 },
   { key: "jsonAgent", label: "Structured Data Agent", desc: "Generates clean JSON for auto-fill", budget: 16000 },
   { key: "analysisAgent", label: "Analysis Agent", desc: "Diagnostic reports, story audits", budget: 16000 },
-  { key: "continuityChecker", label: "Continuity Checker (post)", desc: "Catches inconsistencies after generation", budget: 4000 },
-  { key: "voiceDriftDetector", label: "Voice Drift Detector (post)", desc: "Flags character voice inconsistency", budget: 4000 },
-  { key: "hookScorer", label: "Chapter-End Hook Scorer (post)", desc: "Rates chapter endings 0-10", budget: 2000 },
-  { key: "motifAuditor", label: "Motif Weaving Auditor (post)", desc: "Tracks motif usage across chapters", budget: 4000 },
-  { key: "stateUpdater", label: "State Updater (post)", desc: "Updates character living state + relationship evolution + reveal flags after chapter save", budget: 6000 },
+  { key: "continuityChecker", label: "Continuity Checker (post)", desc: "Catches inconsistencies after generation", budget: 12000 },
+  { key: "voiceDriftDetector", label: "Voice Drift Detector (post)", desc: "Flags character voice inconsistency", budget: 12000 },
+  { key: "hookScorer", label: "Chapter-End Hook Scorer (post)", desc: "Rates chapter endings 0-10", budget: 12000 },
+  { key: "motifAuditor", label: "Motif Weaving Auditor (post)", desc: "Tracks motif usage across chapters", budget: 12000 },
+  { key: "stateUpdater", label: "State Updater (post)", desc: "Updates character living state + relationship evolution + reveal flags after chapter save", budget: 12000 },
 ];
 
 const getAgentModel = (settings, role) => {
@@ -4478,6 +4493,7 @@ const createDefaultChapter = (title = "Chapter 1") => ({
 const createDefaultProject = () => ({
   id: uid(), title: "Untitled Novel", synopsis: "", genre: "Contemporary Romance",
   tone: "", pov: "Third person limited", themes: "", heatLevel: 3,
+  nonLinearTime: false, // parallel/concurrent eras — disables flashback detection, death-cascade, etc.
   contentPrefs: "", avoidList: "", writingStyle: "",
   characters: [], worldBuilding: [], plotOutline: [], relationships: [], images: [],
   continuityNotes: "",
@@ -4533,6 +4549,7 @@ const createDefaultCharacter = () => ({
   allegiances: "",
   height: "",
   build: "",
+  permanentMarks: "", // tattoos, scars, birthmarks — permanent body features fed to Editorial Studio (NOT daily clothing)
   orientation: "",
   isBulk: false,
   bulkCount: 0,
@@ -4558,6 +4575,35 @@ const createBulkCharacterGroup = (name, count, description, role = "minor") => (
   personality: description || "",
   tags: "bulk-group",
 });
+
+// ─── CHARACTER EDITOR SECTION MODEL ───
+// Drives the in-editor jump navigation, per-section completeness dots, and collapse state.
+// `id` is used as the scroll anchor and the collapse key; `fields` are the character keys that
+// count toward that section's "filled" ratio (only narrative fields, not images/notes).
+const CHAR_EDITOR_SECTIONS = [
+  { id: "identity", label: "Identity", icon: "◆", fields: ["name", "role", "age", "gender"] },
+  { id: "appearance", label: "Character & Appearance", icon: "❉", fields: ["appearance", "personality", "speechPattern", "voiceSamples", "habits"] },
+  { id: "psychology", label: "Psychology & Conflict", icon: "✸", fields: ["fears", "flaws", "strengths", "skills", "internalConflict", "externalConflict"] },
+  { id: "goals", label: "Goals & Desires", icon: "➤", fields: ["desires", "shortTermGoals", "longTermGoals"] },
+  { id: "story", label: "Story & Backstory", icon: "✶", fields: ["backstory", "arc", "signatureItems", "secrets"] },
+  { id: "visualtraits", label: "Locked Visual Traits", icon: "⊡", fields: [] },
+  { id: "refart", label: "Reference Art", icon: "✦", fields: [] },
+  { id: "moodboard", label: "Mood Board", icon: "▦", fields: [] },
+  { id: "sigitems", label: "Signature Items", icon: "❖", fields: [] },
+  { id: "intimate", label: "Intimate Details", icon: "♥", fields: [] },
+  { id: "notes", label: "Notes", icon: "✎", fields: [] },
+];
+
+// Returns { filled, total, ratio } for a section against a character.
+const charSectionCompleteness = (section, char) => {
+  const total = (section.fields || []).length;
+  if (!total || !char) return { filled: 0, total, ratio: total ? 0 : 1 };
+  const filled = section.fields.filter(f => {
+    const v = char[f];
+    return v != null && String(v).trim() !== "";
+  }).length;
+  return { filled, total, ratio: filled / total };
+};
 
 // ─── IndexedDB STORAGE (replaces localStorage — no 5MB limit) ───
 const _idb = {
@@ -5819,7 +5865,7 @@ ${c2.name}: ${c2.role}. Personality: ${(c2.personality || "").slice(0, 300)}. Sp
 Format: "${c1.name}: ..." and "${c2.name}: ..." alternating. Keep lines short and authentic. Include brief action beats sparingly.` },
             { role: "user", content: `Scenario: ${prompt}\n\nWrite the conversation.` },
           ],
-          max_tokens: 700, temperature: 0.95,
+          max_tokens: 12000, temperature: 0.95,
         }),
       });
       if (!res.ok) throw new Error(`API error ${res.status}`);
@@ -8137,15 +8183,36 @@ Render a photorealistic environment that matches every environmental detail desc
 const EDITORIAL_STUDIO_DEFAULTS = {
   enabled: false,
   garmentLayers: [],          // [{ id, text }] base→outer, drape described in order (module 1)
-  wind: { dir: "none", intensity: 0 },  // dir: left/right/back/front/none; intensity 0–100 (module 2)
-  particles: { rain: false, embers: false, fog: false, snow: false }, // (module 3)
-  accessories: [],            // [{ id, item, anchor }] anchor: wrist/face/hip/hand/neck (module 4)
-  submersion: { on: false, line: "none" },  // line: ankle/knee/waist/chest/full (module 5)
-  lens: { focal: "85mm", aperture: "f/2.0", filmStock: "none" },       // (module 6)
-  lighting: { key: "soft", fill: "low", rim: false, colorTemp: "neutral", gobo: "none" }, // (module 7)
-  propInteraction: { item: "", state: "idle" },  // state: idle/activating/in-use (module 8)
-  shutter: "normal",          // fast/normal/slow (module 9)
-  cyclorama: "none",          // seamless-white/concrete/wood/black/none (module 10)
+  wind: { dir: "none", custom: "", intensity: 0 },  // dir: left/right/back/front/none/custom (module 2)
+  particles: { rain: false, embers: false, fog: false, snow: false, custom: "" }, // (module 3)
+  accessories: [],            // [{ id, item, anchor, customAnchor }] (module 4)
+  submersion: { on: false, line: "none", custom: "" },  // (module 5)
+  lens: { focal: "85mm", focalCustom: "", aperture: "f/2.0", apertureCustom: "", filmStock: "none", filmCustom: "" }, // (module 6)
+  lighting: { key: "soft", keyCustom: "", fill: "low", rim: false, colorTemp: "neutral", tempCustom: "", gobo: "none", goboCustom: "" }, // (module 7)
+  propInteraction: { item: "", state: "idle", stateCustom: "" },  // (module 8)
+  shutter: "normal", shutterCustom: "", // (module 9)
+  cyclorama: "none", cycloramaCustom: "", // (module 10)
+  // ─── NEW MODULES (11–18) ───
+  pose: { preset: "none", custom: "" },        // 11 — body pose
+  framing: { preset: "none", custom: "" },     // 12 — shot size / crop
+  angle: { preset: "none", custom: "" },       // 13 — camera angle
+  expression: { preset: "none", custom: "" },  // 14 — facial expression
+  hairMakeup: { hair: "", makeup: "" },        // 15 — hair & makeup styling (free text)
+  setting: { preset: "none", custom: "" },     // 16 — time of day / environment light
+  colorGrade: { preset: "none", custom: "" },  // 17 — color grade / mood
+  directorNotes: "",                           // 18 — freeform catch-all appended verbatim
+  // When false (default), the project style-lock image is NOT sent as an image-to-image reference —
+  // editorial styling is driven purely by the text controls. Attaching a full reference image makes
+  // the model copy that image's clothing/background and ignore the wardrobe/backdrop you set here.
+  useStyleRef: false,
+};
+
+// Resolve a {preset, custom} pair to the effective string: custom wins when preset==="custom".
+const _resolveChoice = (obj, presetMap) => {
+  if (!obj) return "";
+  if (obj.preset === "custom") return (obj.custom || "").trim();
+  if (obj.preset && obj.preset !== "none") return presetMap[obj.preset] || obj.preset;
+  return "";
 };
 
 // Pure function: studio config -> array of prompt fragment strings. Order matters (subject first,
@@ -8155,54 +8222,132 @@ const buildEditorialStudioFragments = (studio) => {
   if (!studio || !studio.enabled) return [];
   const f = [];
 
-  // ── Module 1: Garment layering (descriptive stacking, NOT collision) ──
+  // ── Module 11: Pose (placed first so the figure is established before wardrobe/optics) ──
+  const posePresets = {
+    standing: "standing in a relaxed, natural full-body stance, weight on one leg",
+    contrapposto: "standing in classical contrapposto, weight shifted to one leg, shoulders and hips counter-rotated",
+    walking: "captured mid-stride, walking toward the camera with natural momentum",
+    seated: "seated, posture relaxed but composed",
+    leaning: "leaning against a surface, casual and at ease",
+    "over-shoulder": "body turned away, glancing back over one shoulder toward the camera",
+    "hands-pockets": "standing with hands in pockets, shoulders loose",
+    crouching: "crouched low, coiled and grounded",
+    "arms-crossed": "standing with arms crossed, confident and closed-off",
+    action: "frozen in a dynamic action pose, mid-movement, full of kinetic energy",
+    candid: "an unposed candid moment, caught off-guard and natural",
+  };
+  const poseTxt = _resolveChoice(studio.pose, posePresets);
+  if (poseTxt) f.push(`POSE — the subject is ${poseTxt}. The pose reads as natural and anatomically correct, with believable weight distribution and balance.`);
+
+  // ── Module 12: Framing / shot size ──
+  const framePresets = {
+    "extreme-closeup": "an extreme close-up of the face, filling the frame, every pore and lash visible",
+    closeup: "a tight head-and-shoulders close-up portrait",
+    bust: "a bust shot, framed from mid-chest up",
+    "half-body": "a half-body shot, framed from the waist up",
+    "three-quarter": "a three-quarter shot, framed from mid-thigh up",
+    "full-body": "a full-body shot, head to feet, with headroom and floor visible",
+    "wide-environmental": "a wide environmental shot, the figure small within a larger setting",
+  };
+  const frameTxt = _resolveChoice(studio.framing, framePresets);
+  if (frameTxt) f.push(`FRAMING — compose as ${frameTxt}.`);
+
+  // ── Module 13: Camera angle ──
+  const anglePresets = {
+    eye: "shot at eye level, neutral and direct",
+    low: "shot from a low angle looking up, making the subject feel powerful and imposing",
+    high: "shot from a high angle looking down, making the subject feel smaller or vulnerable",
+    "dutch": "shot with a Dutch tilt, the horizon canted for unease and tension",
+    "birds-eye": "shot from directly overhead, a bird's-eye view",
+    "worms-eye": "shot from the ground looking steeply up, a worm's-eye view",
+    profile: "shot in strict side profile",
+    "three-quarter-face": "shot with the face at a three-quarter angle to the camera",
+  };
+  const angleTxt = _resolveChoice(studio.angle, anglePresets);
+  if (angleTxt) f.push(`CAMERA ANGLE — ${angleTxt}.`);
+
+  // ── Module 14: Facial expression ──
+  const exprPresets = {
+    neutral: "a calm, neutral expression",
+    serene: "a serene, untroubled expression",
+    intense: "an intense, piercing stare directly down the lens",
+    melancholy: "a quiet, melancholy expression, gaze cast slightly away",
+    joy: "a genuine, unforced smile reaching the eyes",
+    smirk: "a subtle knowing smirk",
+    defiant: "a defiant, jaw-set expression",
+    vulnerable: "an open, vulnerable expression",
+    laughing: "caught mid-laugh, natural and candid",
+    contemplative: "a contemplative, inward expression, eyes unfocused in thought",
+  };
+  const exprTxt = _resolveChoice(studio.expression, exprPresets);
+  if (exprTxt) f.push(`EXPRESSION — ${exprTxt}, with the micro-musculature of the face (eyes, brow, mouth corners) consistent with that emotion.`);
+
+  // ── Module 1: Clothing (CLOSED, exhaustive outfit — the #1 thing the model tries to "helpfully"
+  // override, so the wording is emphatic that this is the entire outfit and nothing else.) ──
   const layers = (studio.garmentLayers || []).map(l => (l.text || "").trim()).filter(Boolean);
   if (layers.length) {
-    const stacked = layers.map((g, i) => i === 0 ? `base layer: ${g}` : `layered over it: ${g}`).join("; ");
-    f.push(`WARDROBE (layered, from skin outward) — ${stacked}. Render each layer reading as a distinct garment with believable thickness: the outer layers sit visibly on top of the inner ones, collars and cuffs of inner layers peek out where expected, and the heaviest outer layer drapes over and slightly compresses what is beneath it. Fabric weight is visible in how each layer folds and hangs. No garments fused or clipping into one another. Only render what is described, do not add additional garments.`);
+    const stacked = layers.map((g, i) => i === 0 ? `(worn against the skin) ${g}` : `(layered over that) ${g}`).join("; ");
+    f.push(`CLOTHING — the subject wears ONLY the following complete outfit, and NOTHING else: ${stacked}. This is the entire wardrobe — do not add, substitute, or invent any other garment (no extra jackets, shirts, shoes, hats, scarves, ties, or accessories) beyond what is listed and beyond anything specified elsewhere in this direction. Ignore what their job, role, or name might suggest they would wear. Each listed piece reads as a distinct garment with believable fabric weight: outer pieces sit visibly on top of inner ones, inner collars and cuffs peek out where expected, fabric folds and hangs naturally, nothing fused or clipping. If a body area would be bare given only these items, leave it as the garments dictate rather than adding clothing to cover it.`);
   }
 
-  // ── Module 2: Wind & physics (material-aware motion phrasing) ──
-  if (studio.wind && studio.wind.dir !== "none" && studio.wind.intensity > 0) {
+  // ── Module 15: Hair & makeup ──
+  const hm = studio.hairMakeup || {};
+  const hmBits = [];
+  if ((hm.hair || "").trim()) hmBits.push(`hair styled as: ${hm.hair.trim()}`);
+  if ((hm.makeup || "").trim()) hmBits.push(`makeup / grooming: ${hm.makeup.trim()}`);
+  if (hmBits.length) f.push(`HAIR & MAKEUP — ${hmBits.join("; ")}. Rendered with realistic individual hair strands and natural skin/cosmetic texture.`);
+
+  // ── Module 2: Wind & physics ──
+  const windCustom = studio.wind?.dir === "custom" ? (studio.wind.custom || "").trim() : "";
+  if (windCustom) {
+    f.push(`WIND DIRECTION & PHYSICS — ${windCustom}. Keep every moving element (hair, hems, fabric) consistent with a single wind vector, and differentiate material response: light/sheer fabrics ripple and flutter, heavy leather/wool moves in stiffer slower sheets.`);
+  } else if (studio.wind && studio.wind.dir !== "none" && studio.wind.dir !== "custom" && studio.wind.intensity > 0) {
     const v = studio.wind.intensity;
     const dirText = { left: "from the right, blowing toward frame-left", right: "from the left, blowing toward frame-right", back: "from behind the subject, blowing toward camera", front: "toward the subject from camera direction" }[studio.wind.dir] || studio.wind.dir;
     let strength;
     if (v < 30) strength = "a light breeze — hair strands lift and drift gently, light fabrics (chiffon, silk, loose hair) flutter softly while heavy fabrics (leather, wool, denim) stay mostly still";
     else if (v < 70) strength = "a steady strong wind — hair streams clearly in one direction, sheer and light fabrics billow and ripple, while heavy coats and leather shift and flare only at their hems and edges";
     else strength = "a gale — light fabrics and scarves whip violently and stream out of frame, hair is thrown hard in one direction, and even heavy coat tails and wool lift and snap outward, though heavy materials move as solid sheets rather than rippling like sheer cloth";
-    f.push(`WIND DIRECTION & PHYSICS — wind is coming ${dirText}. Strength: ${strength}. The direction of every moving element (hair, hems, scarves, fabric) must be consistent with this single wind vector. Differentiate material response: sheer/light fabrics ripple and flutter; heavy leather/wool moves in stiffer, slower sheets.`);
+    f.push(`WIND DIRECTION & PHYSICS — wind is coming ${dirText}. Strength: ${strength}. The direction of every moving element (hair, hems, scarves, fabric) must be consistent with this single wind vector.`);
   }
 
-  // ── Module 3: Atmospheric particles (with light interaction, not flat overlays) ──
+  // ── Module 3: Atmospheric particles ──
   const p = studio.particles || {};
   const partBits = [];
   if (p.rain) partBits.push("RAIN — visible falling rain streaks and droplets; the textile layers are darkened and matted where wet, with specular highlights glinting on skin, hair, and accessory surfaces; small droplets bead and run on hard surfaces. Rain is integrated into the lighting, not pasted on top");
   if (p.embers) partBits.push("ASH / EMBERS — glowing orange embers and floating ash drift through the air; each nearby ember casts a small localized warm micro-light onto the closest skin and fabric, creating tiny pools of flickering orange light and soft shadow rather than a uniform tint");
   if (p.fog) partBits.push("FOG — low atmospheric haze that thickens with distance, softening the background, catching and scattering the light sources into visible volumetric beams, while the subject in the foreground stays comparatively crisp");
   if (p.snow) partBits.push("SNOW — falling snowflakes of varied focus (sharp in foreground, soft in background), settling lightly on shoulders, hair, and upward-facing fabric surfaces, with cool diffused bounce light");
+  if ((p.custom || "").trim()) partBits.push(`CUSTOM ATMOSPHERE — ${p.custom.trim()}`);
   if (partBits.length) f.push(`ATMOSPHERIC ELEMENTS — ${partBits.join(". ")}. These elements must physically interact with the subject's lighting and wet/dry surface state; they are part of the scene, never a flat 2D overlay.`);
 
-  // ── Module 4: Accessory anchors (scale + perspective lock, descriptive) ──
+  // ── Module 4: Accessory anchors ──
   const acc = (studio.accessories || []).filter(a => (a.item || "").trim());
   if (acc.length) {
-    const anchorText = { wrist: "worn on the wrist", face: "worn on the face", hand: "held in the hand", hip: "worn at the hip", neck: "worn around the neck", head: "worn on the head" };
-    const list = acc.map(a => `${a.item.trim()} (${anchorText[a.anchor] || a.anchor})`).join("; ");
+    const anchorText = { wrist: "worn on the wrist", face: "worn on the face", hand: "held in the hand", hip: "worn at the hip", neck: "worn around the neck", head: "worn on the head", ankle: "worn at the ankle", waist: "worn at the waist" };
+    const list = acc.map(a => {
+      const where = a.anchor === "custom" ? (a.customAnchor || "on the body").trim() : (anchorText[a.anchor] || a.anchor);
+      return `${a.item.trim()} (${where})`;
+    }).join("; ");
     f.push(`ACCESSORIES (each in correct scale and perspective for where it sits on the body) — ${list}. Every accessory must be sized accurately to that body part, follow the same perspective and lens distortion as the figure, and be lit by the same light sources with matching shadows and reflections so it reads as physically present in the photograph, not a sticker.`);
   }
 
-  // ── Module 5: Refractive liquid staging (SFW editorial) ──
-  if (studio.submersion && studio.submersion.on && studio.submersion.line !== "none") {
-    const lineText = { ankle: "ankle-deep", knee: "knee-deep", waist: "waist-deep", chest: "chest-deep", full: "fully submerged" }[studio.submersion.line] || studio.submersion.line;
-    f.push(`WATER STAGING — the subject is ${lineText} in clear water (tasteful, fully SFW editorial framing). At the waterline, render accurate optical refraction so anything beneath the surface appears shifted and slightly enlarged; caustic light patterns (rippling bright net-like reflections) play across the subject's jaw, neck, and any surface above water; submerged fabric clings to the body with a darkened wet-look and trailing folds. Surface tension line is crisp where body meets water.`);
+  // ── Module 5: Refractive liquid staging ──
+  if (studio.submersion && studio.submersion.on) {
+    const lineCustom = studio.submersion.line === "custom" ? (studio.submersion.custom || "").trim() : "";
+    const lineText = lineCustom || { ankle: "ankle-deep", knee: "knee-deep", waist: "waist-deep", chest: "chest-deep", full: "fully submerged" }[studio.submersion.line];
+    if (lineText) f.push(`WATER STAGING — the subject is ${lineText} in clear water (tasteful, fully SFW editorial framing). At the waterline, render accurate optical refraction so anything beneath the surface appears shifted and slightly enlarged; caustic light patterns (rippling bright net-like reflections) play across the subject's jaw, neck, and any surface above water; submerged fabric clings to the body with a darkened wet-look and trailing folds. Surface tension line is crisp where body meets water.`);
   }
 
-  // ── Module 6: Analogue lens & film stock emulation (optics) ──
+  // ── Module 6: Analogue lens & film stock emulation ──
   const lens = studio.lens || {};
-  let lensBit = `CAMERA OPTICS — ${lens.focal || "85mm"} lens at ${lens.aperture || "f/2.0"}`;
-  if (lens.focal === "85mm" || lens.focal === "135mm") lensBit += ", flattering compression and shallow depth of field with smooth background bokeh";
-  else if (lens.focal === "35mm") lensBit += ", environmental framing with mild natural perspective";
-  else if (lens.focal === "24mm") lensBit += ", wide field with gentle edge perspective, subject kept central to avoid distortion";
-  else if (lens.focal === "50mm") lensBit += ", natural human-eye perspective";
+  const focal = lens.focal === "custom" ? (lens.focalCustom || "85mm").trim() : (lens.focal || "85mm");
+  const aperture = lens.aperture === "custom" ? (lens.apertureCustom || "f/2.0").trim() : (lens.aperture || "f/2.0");
+  let lensBit = `CAMERA OPTICS — ${focal} lens at ${aperture}`;
+  if (focal === "85mm" || focal === "135mm") lensBit += ", flattering compression and shallow depth of field with smooth background bokeh";
+  else if (focal === "35mm") lensBit += ", environmental framing with mild natural perspective";
+  else if (focal === "24mm") lensBit += ", wide field with gentle edge perspective, subject kept central to avoid distortion";
+  else if (focal === "50mm") lensBit += ", natural human-eye perspective";
   const stockText = {
     "kodak-portra": "emulate Kodak Portra 400 color film: warm skin tones, soft pastel color rendition, fine grain, gentle highlight roll-off",
     "cinestill-800t": "emulate CineStill 800T tungsten film: cool blue shadows, warm halation glowing around bright light sources, visible grain, nighttime cinematic look",
@@ -8210,14 +8355,18 @@ const buildEditorialStudioFragments = (studio) => {
     "fuji-velvia": "emulate Fuji Velvia slide film: highly saturated, punchy contrast, vivid greens and blues",
     "tri-x-pushed": "emulate pushed Tri-X 400 black-and-white: heavy gritty grain, crushed blacks, high-contrast reportage feel",
   };
-  if (lens.filmStock && lens.filmStock !== "none" && stockText[lens.filmStock]) lensBit += `. FILM STOCK — ${stockText[lens.filmStock]}, including the matching grain structure, halation, and contrast curve of that stock`;
+  const filmCustom = lens.filmStock === "custom" ? (lens.filmCustom || "").trim() : "";
+  if (filmCustom) lensBit += `. FILM STOCK — ${filmCustom}, including its characteristic grain, contrast and color response`;
+  else if (lens.filmStock && lens.filmStock !== "none" && stockText[lens.filmStock]) lensBit += `. FILM STOCK — ${stockText[lens.filmStock]}, including the matching grain structure, halation, and contrast curve of that stock`;
   f.push(lensBit + ".");
 
   // ── Module 7: Practical studio lighting & gobos ──
   const lg = studio.lighting || {};
-  const keyText = { soft: "large soft key light (softbox) giving smooth gradients on the face", hard: "hard direct key light giving crisp defined shadows", rembrandt: "key light placed for a Rembrandt triangle of light on the shadowed cheek" }[lg.key] || `${lg.key} key light`;
+  const keyCustom = lg.key === "custom" ? (lg.keyCustom || "").trim() : "";
+  const keyText = keyCustom || { soft: "large soft key light (softbox) giving smooth gradients on the face", hard: "hard direct key light giving crisp defined shadows", rembrandt: "key light placed for a Rembrandt triangle of light on the shadowed cheek" }[lg.key] || `${lg.key} key light`;
   const fillText = { none: "no fill — deep dramatic shadow side", low: "low fill — shadows retained but detailed", high: "high fill — even, low-contrast lighting" }[lg.fill] || `${lg.fill} fill`;
-  const tempText = { tungsten: "stark cool-vs-warm contrast with warm tungsten key", candle: "very warm low candlelight color temperature", daylight: "neutral 5600K daylight balance", neutral: "neutral white balance", blue: "cool blue-hour color temperature" }[lg.colorTemp] || lg.colorTemp;
+  const tempCustom = lg.colorTemp === "custom" ? (lg.tempCustom || "").trim() : "";
+  const tempText = tempCustom || { tungsten: "stark cool-vs-warm contrast with warm tungsten key", candle: "very warm low candlelight color temperature", daylight: "neutral 5600K daylight balance", neutral: "neutral white balance", blue: "cool blue-hour color temperature" }[lg.colorTemp] || lg.colorTemp;
   let lightBit = `STUDIO LIGHTING — ${keyText}; ${fillText}; ${lg.rim ? "a bright rim/hair light separating the subject from the background; " : ""}color temperature: ${tempText}.`;
   const goboText = {
     blinds: "Venetian-blind slat shadows striping across the subject and backdrop (film-noir)",
@@ -8226,20 +8375,54 @@ const buildEditorialStudioFragments = (studio) => {
     chainlink: "chain-link fence diamond-grid shadow pattern across the subject (gritty urban)",
     venetian: "hard Venetian-blind bands of light and shadow",
   };
-  if (lg.gobo && lg.gobo !== "none" && goboText[lg.gobo]) lightBit += ` GOBO — project ${goboText[lg.gobo]}, with the shadow pattern wrapping realistically over the contours of the face, body, and background.`;
+  const goboCustom = lg.gobo === "custom" ? (lg.goboCustom || "").trim() : "";
+  if (goboCustom) lightBit += ` GOBO — project ${goboCustom}, wrapping realistically over the contours of the subject and background.`;
+  else if (lg.gobo && lg.gobo !== "none" && goboText[lg.gobo]) lightBit += ` GOBO — project ${goboText[lg.gobo]}, with the shadow pattern wrapping realistically over the contours of the face, body, and background.`;
   f.push(lightBit);
 
-  // ── Module 8: Dynamic prop interaction hooks ──
+  // ── Module 16: Setting / time-of-day light ──
+  const settingPresets = {
+    "golden-hour": "warm low golden-hour sunlight raking across the scene from a low angle",
+    "blue-hour": "the cool dim ambient light of blue hour just after sunset",
+    midday: "harsh overhead midday sun with short hard shadows",
+    overcast: "soft even overcast daylight, no hard shadows",
+    night: "night, lit only by available practical light sources",
+    interior: "an interior lit by warm domestic lamps",
+    neon: "a night scene washed in saturated neon signage light",
+  };
+  const settingTxt = _resolveChoice(studio.setting, settingPresets);
+  if (settingTxt) f.push(`SETTING LIGHT — ${settingTxt}. Light direction, color and contrast on the subject match this environment.`);
+
+  // ── Module 8: Dynamic prop interaction ──
   const pi = studio.propInteraction || {};
-  if ((pi.item || "").trim() && pi.state && pi.state !== "idle") {
+  if ((pi.item || "").trim()) {
     const itm = pi.item.trim();
-    if (pi.state === "activating") f.push(`PROP INTERACTION — the subject is actively using ${itm} at the moment of activation; their hand and fingers are posed mid-action operating it, and any light or effect the prop produces (e.g. a struck flame, a switched-on screen glow) casts an immediate localized light onto the nearest fingers, face, and surfaces, with correct color and falloff.`);
-    else f.push(`PROP INTERACTION — the subject is mid-use of ${itm}; hands and posture engaged with the object naturally, weight and grip believable, any light the prop emits illuminating the nearest skin and fabric locally.`);
+    const stateCustom = pi.state === "custom" ? (pi.stateCustom || "").trim() : "";
+    if (stateCustom) f.push(`PROP INTERACTION — the subject is interacting with ${itm}: ${stateCustom}. Hands and posture engaged believably; any light the prop emits illuminates the nearest skin and fabric locally.`);
+    else if (pi.state === "activating") f.push(`PROP INTERACTION — the subject is actively using ${itm} at the moment of activation; their hand and fingers are posed mid-action operating it, and any light or effect the prop produces casts an immediate localized light onto the nearest fingers, face, and surfaces.`);
+    else if (pi.state === "in-use") f.push(`PROP INTERACTION — the subject is mid-use of ${itm}; hands and posture engaged with the object naturally, weight and grip believable.`);
+    else f.push(`PROP — the subject holds or wears ${itm} naturally.`);
   }
 
-  // ── Module 9: Shutter speed motion freezing ──
-  if (studio.shutter === "fast") f.push(`SHUTTER — very fast shutter speed: all motion is frozen tack-sharp in mid-air — individual water droplets, flying hair strands, snapping fabric, or debris are crisp and suspended, no blur.`);
-  else if (studio.shutter === "slow") f.push(`SHUTTER — slow shutter speed: deliberate directional motion blur on whatever is moving (a sweeping hand, swirling fabric, or light sources streaking into trails), while the planted parts of the subject stay relatively sharp, conveying motion within a single frame.`);
+  // ── Module 9: Shutter speed ──
+  const shutterCustom = studio.shutter === "custom" ? (studio.shutterCustom || "").trim() : "";
+  if (shutterCustom) f.push(`SHUTTER — ${shutterCustom}.`);
+  else if (studio.shutter === "fast") f.push(`SHUTTER — very fast shutter speed: all motion is frozen tack-sharp in mid-air — individual water droplets, flying hair strands, snapping fabric, or debris are crisp and suspended, no blur.`);
+  else if (studio.shutter === "slow") f.push(`SHUTTER — slow shutter speed: deliberate directional motion blur on whatever is moving, while the planted parts of the subject stay relatively sharp, conveying motion within a single frame.`);
+
+  // ── Module 17: Color grade / mood ──
+  const gradePresetsFixed = {
+    "teal-orange": "a teal-and-orange blockbuster color grade — warm skin against cool shadows",
+    bleach: "a bleach-bypass grade — desaturated, high-contrast, silvery",
+    warm: "a warm, golden, nostalgic color grade",
+    cool: "a cool, desaturated, clinical color grade",
+    "high-key": "a bright high-key grade, airy and low-contrast",
+    "low-key": "a dark low-key grade, moody and shadow-dominant",
+    sepia: "a warm sepia-toned monochrome grade",
+    bw: "a pure black-and-white conversion with rich tonal separation",
+  };
+  const gradeTxt = _resolveChoice(studio.colorGrade, gradePresetsFixed);
+  if (gradeTxt) f.push(`COLOR GRADE — apply ${gradeTxt}.`);
 
   // ── Module 10: Set-design architectural cyclorama ──
   const cycText = {
@@ -8249,11 +8432,38 @@ const buildEditorialStudioFragments = (studio) => {
     wood: "a slatted wood-panel studio backdrop",
     black: "a pure black seamless studio backdrop (low-key, subject emerging from darkness)",
   };
-  if (studio.cyclorama && studio.cyclorama !== "none" && cycText[studio.cyclorama]) {
+  const cycCustom = studio.cyclorama === "custom" ? (studio.cycloramaCustom || "").trim() : "";
+  if (cycCustom) f.push(`BACKDROP — ${cycCustom}. The backdrop receives the studio lighting set above, stays uncluttered, and keeps focus on the subject.`);
+  else if (studio.cyclorama && studio.cyclorama !== "none" && cycText[studio.cyclorama]) {
     f.push(`BACKDROP — replace any busy environment with ${cycText[studio.cyclorama]}. The backdrop receives and reacts to the studio lighting set above (catching the gobo pattern and light falloff), stays clean and uncluttered, and keeps full focus on the subject and styling. No distracting scenery.`);
   }
 
+  // ── Module 18: Director's notes (verbatim catch-all, last word) ──
+  if ((studio.directorNotes || "").trim()) {
+    f.push(`ADDITIONAL DIRECTION — ${studio.directorNotes.trim()}`);
+  }
+
   return f;
+};
+
+// ─── EDITORIAL IDENTITY BASE ───
+// The character's contribution to an Editorial Studio render is IDENTITY ONLY — face, body type,
+// and permanent body marks (tattoos/scars/birthmarks). It deliberately EXCLUDES the freeform
+// `appearance` field, `signatureItems`, and occupation/role, because those carry daily clothing and
+// job costume ("teacher" → blazer) that would override the wardrobe set in the studio. Everything
+// about clothing, pose, lens, lighting, etc. comes from the studio controls instead.
+const buildEditorialIdentityBase = (char) => {
+  if (!char) return "a person";
+  const bits = [];
+  if (char.age) bits.push(`${char.age} years old`);
+  if (char.gender) bits.push(char.gender);
+  if (char.build) bits.push(`${char.build} build`);
+  if (char.height) bits.push(char.height);
+  if (char.lookAlike) bits.push(`face closely resembling ${char.lookAlike}`);
+  if ((char.permanentMarks || "").trim()) bits.push(`permanent body marks: ${char.permanentMarks.trim()}`);
+  // Pinned traits are explicitly locked identity descriptors (e.g. "emerald eyes") — keep them.
+  if (Array.isArray(char.traitPins)) char.traitPins.forEach(p => { if (p.prompt) bits.push(p.prompt); });
+  return bits.filter(Boolean).join(", ") || "a person";
 };
 
 // ─── WORLD IMAGE PROMPT GENERATOR ───
@@ -8513,6 +8723,19 @@ const SelectField = memo(({ label, value, onChange, options, placeholder }) => (
     </select>
   </div>
 ));
+
+// Small completeness indicator (count + colored dot) used in character section headers.
+const CharSecDot = memo(({ c }) => {
+  if (!c || !c.total) return null;
+  const pct = Math.round(c.ratio * 100);
+  const dotColor = pct === 100 ? "var(--nf-success)" : pct >= 50 ? "var(--nf-accent)" : pct > 0 ? "var(--nf-accent-2)" : "var(--nf-border)";
+  return (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 10, color: "var(--nf-text-muted)", fontFamily: "var(--nf-font-mono)", fontWeight: 400, letterSpacing: 0 }}>
+      {c.filled}/{c.total}
+      <span style={{ width: 8, height: 8, borderRadius: "50%", background: dotColor, boxShadow: pct === 100 ? "0 0 4px var(--nf-success)" : "none" }} />
+    </span>
+  );
+});
 
 // ─── MODEL SELECTOR ───
 const ModelSelector = memo(({ apiKey, value, onChange, label = "Model" }) => {
@@ -8942,6 +9165,164 @@ const GenerationLineage = memo(({ images, onClose }) => {
 // `studio` config object; on Generate, buildEditorialStudioFragments() turns it into appended
 // prompt language and the parent runs a single text-to-image call. Honest framing: the realism
 // comes from precise photographic prompting, not from physics simulation.
+// Reusable {preset, custom} control: a <select> with a "Custom…" option that reveals a text input.
+// Module-level (stable identity) so the custom input doesn't remount/lose focus on each keystroke.
+// ═══════════════════════════════════════════════════════════════════════
+//   LIVELINESS LAYER — ambient life for the workspace (sprite, motes, tint, sparks)
+//   All effects honor `level` (full | subtle | off) and prefers-reduced-motion. Purely cosmetic;
+//   never blocks interaction (pointerEvents:none on ambient layers). The Hearth Sprite is the one
+//   interactive piece — click it for a short LLM line about your current project.
+// ═══════════════════════════════════════════════════════════════════════
+const LIVELINESS_DEFAULT = "full"; // full | subtle | off
+
+// Real-clock ambient tint: warm at night, cool/neutral by day. Returns a faint overlay color.
+const _timeOfDayTint = () => {
+  const h = new Date().getHours();
+  if (h >= 22 || h < 5) return "rgba(60,40,80,0.05)";     // deep night — faint violet
+  if (h >= 5 && h < 8) return "rgba(196,140,90,0.045)";   // dawn — warm amber
+  if (h >= 8 && h < 17) return "rgba(120,150,170,0.025)"; // day — cool, very subtle
+  if (h >= 17 && h < 20) return "rgba(196,101,58,0.05)";  // dusk — terracotta
+  return "rgba(120,90,70,0.045)";                          // evening — warm brown
+};
+
+const HearthSprite = memo(({ level, appState, onAsk }) => {
+  const [pos, setPos] = useState({ x: 0.82, y: 0.7 }); // fractional position in viewport
+  const [bubble, setBubble] = useState(null);          // { text } | null
+  const [busy, setBusy] = useState(false);
+  const [popped, setPopped] = useState(false);
+  const idleRef = useRef(Date.now());
+
+  // Drift to a new resting spot every so often (avoids edges and the top nav).
+  useEffect(() => {
+    if (level === "off") return;
+    const drift = () => {
+      setPos({ x: 0.08 + Math.random() * 0.82, y: 0.25 + Math.random() * 0.6 });
+    };
+    const id = setInterval(drift, level === "subtle" ? 28000 : 16000);
+    return () => clearInterval(id);
+  }, [level]);
+
+  useEffect(() => { setPopped(true); }, []);
+
+  if (level === "off") return null;
+
+  // Mood → color/animation, reflecting real app state.
+  const mood = appState?.generating ? "excited" : appState?.milestone ? "inspired" : appState?.idleLong ? "sleepy" : "calm";
+  const moodColor = { excited: "var(--nf-accent)", inspired: "#c4953a", sleepy: "#5a534b", calm: "var(--nf-accent-2)" }[mood];
+  const floatDur = mood === "excited" ? "5s" : mood === "sleepy" ? "16s" : "9s";
+
+  const handleClick = async () => {
+    if (busy) return;
+    idleRef.current = Date.now();
+    if (bubble) { setBubble(null); return; }
+    if (!onAsk) { setBubble({ text: "✦" }); return; }
+    setBusy(true);
+    setBubble({ text: "…" });
+    try {
+      const line = await onAsk(mood);
+      setBubble({ text: (line || "…").slice(0, 220) });
+    } catch {
+      setBubble({ text: "My thoughts scattered. Try once more?" });
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <div style={{ position: "fixed", left: `${pos.x * 100}%`, top: `${pos.y * 100}%`, zIndex: 60, pointerEvents: "none", transition: level === "subtle" ? "left 8s ease-in-out, top 8s ease-in-out" : "left 5s ease-in-out, top 5s ease-in-out" }}>
+      <div className="nf-lively-motion" style={{ position: "relative", animation: popped ? `nf-sprite-float ${floatDur} ease-in-out infinite` : "none", pointerEvents: "auto" }}>
+        {/* Speech bubble */}
+        {bubble && (
+          <div className="nf-lively-motion" role="status" style={{ position: "absolute", bottom: "calc(100% + 8px)", right: 0, minWidth: 120, maxWidth: 240, padding: "8px 11px", background: "var(--nf-dialog-bg)", border: `1px solid ${moodColor}`, borderRadius: 10, fontSize: 12, lineHeight: 1.5, color: "var(--nf-text)", boxShadow: "var(--nf-shadow-lg)", animation: "nf-bubble-in 0.2s ease-out", fontFamily: "var(--nf-font-body)" }}>
+            {bubble.text}
+            <div style={{ position: "absolute", bottom: -5, right: 16, width: 8, height: 8, background: "var(--nf-dialog-bg)", borderRight: `1px solid ${moodColor}`, borderBottom: `1px solid ${moodColor}`, transform: "rotate(45deg)" }} />
+          </div>
+        )}
+        {/* The sprite — a small gem-mote echoing the Forge-chan aesthetic */}
+        <button onClick={handleClick} aria-label="Ask your writing companion" title="Your writing companion — click for a thought"
+          style={{ width: 34, height: 38, padding: 0, border: "none", background: "transparent", cursor: "pointer", animation: popped ? "none" : "nf-sprite-pop 0.4s ease-out", filter: busy ? "saturate(1.5)" : "none" }}>
+          <svg viewBox="0 0 40 46" width="34" height="38" style={{ overflow: "visible", display: "block" }}>
+            <defs>
+              <radialGradient id="hs-glow" cx="50%" cy="45%" r="55%">
+                <stop offset="0%" stopColor={moodColor} stopOpacity="0.35" />
+                <stop offset="100%" stopColor={moodColor} stopOpacity="0" />
+              </radialGradient>
+            </defs>
+            <ellipse cx="20" cy="22" rx="20" ry="22" fill="url(#hs-glow)" className="nf-lively-motion" style={{ animation: "nf-aura-breathe 4s ease-in-out infinite" }} />
+            <path d="M20 5 L31 12 L34 24 L31 36 L20 41 L9 36 L6 24 L9 12 Z" fill="var(--nf-bg-raised)" stroke={moodColor} strokeWidth="1.4" />
+            <path d="M20 9 L28 14 L30 24 L28 33 L20 37 L12 33 L10 24 L12 14 Z" fill="var(--nf-bg-surface)" opacity="0.5" />
+            {/* Eyes — react to mood */}
+            <text x="15" y="25" textAnchor="middle" fontSize="7" fill={moodColor} className="nf-lively-motion" style={{ animation: "nf-fc-blink 5s ease-in-out infinite" }}>{mood === "sleepy" ? "−" : mood === "excited" ? "★" : mood === "inspired" ? "✧" : "○"}</text>
+            <text x="25" y="25" textAnchor="middle" fontSize="7" fill={moodColor} className="nf-lively-motion" style={{ animation: "nf-fc-blink 5s ease-in-out infinite", animationDelay: "0.12s" }}>{mood === "sleepy" ? "−" : mood === "excited" ? "★" : mood === "inspired" ? "✧" : "○"}</text>
+          </svg>
+        </button>
+      </div>
+    </div>
+  );
+});
+
+// Ambient drifting motes + time-of-day tint + milestone sparks. Pure cosmetic overlay.
+const AmbientMotes = memo(({ level, intensity = 0, sparkKey = 0 }) => {
+  // Number of motes scales with liveliness level and recent writing intensity (0..1).
+  const count = level === "off" ? 0 : level === "subtle" ? 5 : 9 + Math.round(intensity * 6);
+  const motes = useMemo(() => Array.from({ length: count }, (_, i) => ({
+    id: i,
+    left: Math.random() * 100,
+    top: 40 + Math.random() * 60,
+    dx: (Math.random() - 0.5) * 60,
+    dy: -(80 + Math.random() * 140),
+    dur: 9 + Math.random() * 12,
+    delay: Math.random() * 10,
+    size: 2 + Math.random() * 3,
+    peak: (level === "subtle" ? 0.25 : 0.45) * (0.6 + intensity * 0.6),
+  })), [count, level, intensity]);
+
+  if (level === "off") return null;
+  return (
+    <div aria-hidden="true" style={{ position: "fixed", inset: 0, pointerEvents: "none", zIndex: 1, overflow: "hidden" }}>
+      {/* Time-of-day tint */}
+      <div style={{ position: "absolute", inset: 0, background: _timeOfDayTint(), transition: "background 2s ease", mixBlendMode: "multiply" }} />
+      {/* Drifting embers */}
+      {motes.map(m => (
+        <span key={m.id} className="nf-lively-motion" style={{
+          position: "absolute", left: `${m.left}%`, top: `${m.top}%`, width: m.size, height: m.size,
+          borderRadius: "50%", background: "var(--nf-accent)",
+          "--mote-dx": `${m.dx}px`, "--mote-dy": `${m.dy}px`, "--mote-peak": m.peak,
+          animation: `nf-mote-drift ${m.dur}s linear ${m.delay}s infinite`,
+        }} />
+      ))}
+      {/* Milestone sparks — re-keyed burst when a milestone fires */}
+      {sparkKey > 0 && (
+        <div key={sparkKey} style={{ position: "absolute", left: "50%", bottom: "18%", transform: "translateX(-50%)" }}>
+          {Array.from({ length: 14 }, (_, i) => (
+            <span key={i} className="nf-lively-motion" style={{
+              position: "absolute", width: 4, height: 4, borderRadius: "50%",
+              background: i % 2 ? "var(--nf-accent)" : "#c4953a",
+              left: (Math.random() - 0.5) * 160, bottom: 0,
+              animation: `nf-spark-rise ${0.8 + Math.random() * 0.7}s ease-out forwards`, animationDelay: `${Math.random() * 0.2}s`,
+            }} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+});
+
+const EditorialChoiceCustom = memo(({ label, value, options, onChange, placeholder = "Describe…" }) => {
+  const sel = { fontSize: 11, padding: "3px 8px" };
+  return (
+    <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 6 }}>
+      {label && <span style={{ fontSize: 11, color: "var(--nf-text-muted)", minWidth: 52 }}>{label}</span>}
+      <select value={value.preset} onChange={e => onChange({ ...value, preset: e.target.value })} className="nf-input" style={{ ...sel, minWidth: 120 }}>
+        <option value="none">None</option>
+        {options.map(o => <option key={o.v} value={o.v}>{o.l}</option>)}
+        <option value="custom">✎ Custom…</option>
+      </select>
+      {value.preset === "custom" && (
+        <input value={value.custom || ""} onChange={e => onChange({ ...value, custom: e.target.value })} placeholder={placeholder} className="nf-input" style={{ flex: 1, minWidth: 120, ...sel }} />
+      )}
+    </div>
+  );
+});
+
 const EditorialStudioModal = memo(({ char, onClose, onGenerate, isGenerating }) => {
   const [studio, setStudio] = useState(() => ({ ...EDITORIAL_STUDIO_DEFAULTS, enabled: true }));
   const set = (patch) => setStudio(s => ({ ...s, ...patch }));
@@ -8962,7 +9343,7 @@ const EditorialStudioModal = memo(({ char, onClose, onGenerate, isGenerating }) 
   const sel = { fontSize: 11, padding: "3px 8px" };
 
   const addLayer = () => setStudio(s => ({ ...s, garmentLayers: [...s.garmentLayers, { id: uid(), text: "" }] }));
-  const addAccessory = () => setStudio(s => ({ ...s, accessories: [...s.accessories, { id: uid(), item: "", anchor: "wrist" }] }));
+  const addAccessory = () => setStudio(s => ({ ...s, accessories: [...s.accessories, { id: uid(), item: "", anchor: "wrist", customAnchor: "" }] }));
 
   return createPortal(
     <div role="dialog" aria-modal="true" aria-label="Editorial Studio" onClick={onClose}
@@ -8971,26 +9352,82 @@ const EditorialStudioModal = memo(({ char, onClose, onGenerate, isGenerating }) 
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 6 }}>
           <div>
             <h3 style={{ margin: 0, fontFamily: "var(--nf-font-display)", fontSize: 20, fontWeight: 400, color: "var(--nf-text)" }}>Editorial Studio</h3>
-            <div style={{ fontSize: 11, color: "var(--nf-text-muted)", marginTop: 4, maxWidth: 620, lineHeight: 1.5 }}>
-              Photographic styling controls for <strong style={{ color: "var(--nf-text-dim)" }}>{char?.name || "this character"}</strong>. Each control adds precise camera-direction language to the image prompt — there's no physics engine under the hood, just very specific prompting. The exact text being sent is previewed at the bottom.
+            <div style={{ fontSize: 11, color: "var(--nf-text-muted)", marginTop: 4, maxWidth: 640, lineHeight: 1.5 }}>
+              Photographic styling for <strong style={{ color: "var(--nf-text-dim)" }}>{char?.name || "this character"}</strong>. Only their <strong style={{ color: "var(--nf-text-dim)" }}>face/identity, body type, and permanent marks</strong> (tattoos, scars — from the character's "Permanent marks" field and look-alike) are carried over. Their daily clothing, occupation, and freeform appearance are <em>not</em> used — wardrobe, pose, and everything else come from the controls below. Every dropdown has a <strong style={{ color: "var(--nf-text-dim)" }}>Custom…</strong> option for manual input. The exact prompt is previewed at the bottom.
             </div>
           </div>
           <button onClick={onClose} className="nf-btn-icon" aria-label="Close"><Icons.X /></button>
         </div>
 
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 14 }}>
-          {/* Module 1 — Garment layering */}
+          {/* Module 11 — Pose */}
           <div style={sectionStyle}>
-            <label style={labelStyle}>1 · Garment Layering</label>
+            <label style={labelStyle}>11 · Pose</label>
+            <EditorialChoiceCustom label="Pose" value={studio.pose} onChange={v => set({ pose: v })} placeholder="e.g. kneeling, reaching upward"
+              options={[{v:"standing",l:"Standing relaxed"},{v:"contrapposto",l:"Contrapposto"},{v:"walking",l:"Walking / mid-stride"},{v:"seated",l:"Seated"},{v:"leaning",l:"Leaning"},{v:"over-shoulder",l:"Over-the-shoulder"},{v:"hands-pockets",l:"Hands in pockets"},{v:"crouching",l:"Crouching"},{v:"arms-crossed",l:"Arms crossed"},{v:"action",l:"Dynamic action"},{v:"candid",l:"Candid / unposed"}]} />
+          </div>
+
+          {/* Module 12 — Framing */}
+          <div style={sectionStyle}>
+            <label style={labelStyle}>12 · Framing / Crop</label>
+            <EditorialChoiceCustom label="Shot" value={studio.framing} onChange={v => set({ framing: v })} placeholder="e.g. knees-up, off-center left"
+              options={[{v:"extreme-closeup",l:"Extreme close-up"},{v:"closeup",l:"Close-up"},{v:"bust",l:"Bust"},{v:"half-body",l:"Half body"},{v:"three-quarter",l:"Three-quarter"},{v:"full-body",l:"Full body"},{v:"wide-environmental",l:"Wide environmental"}]} />
+          </div>
+
+          {/* Module 13 — Camera angle */}
+          <div style={sectionStyle}>
+            <label style={labelStyle}>13 · Camera Angle</label>
+            <EditorialChoiceCustom label="Angle" value={studio.angle} onChange={v => set({ angle: v })} placeholder="e.g. slightly above, 45° left"
+              options={[{v:"eye",l:"Eye level"},{v:"low",l:"Low (heroic)"},{v:"high",l:"High (diminish)"},{v:"dutch",l:"Dutch tilt"},{v:"birds-eye",l:"Bird's-eye"},{v:"worms-eye",l:"Worm's-eye"},{v:"profile",l:"Profile"},{v:"three-quarter-face",l:"3/4 face"}]} />
+          </div>
+
+          {/* Module 14 — Expression */}
+          <div style={sectionStyle}>
+            <label style={labelStyle}>14 · Expression</label>
+            <EditorialChoiceCustom label="Face" value={studio.expression} onChange={v => set({ expression: v })} placeholder="e.g. suppressed grief, sly"
+              options={[{v:"neutral",l:"Neutral"},{v:"serene",l:"Serene"},{v:"intense",l:"Intense stare"},{v:"melancholy",l:"Melancholy"},{v:"joy",l:"Genuine smile"},{v:"smirk",l:"Smirk"},{v:"defiant",l:"Defiant"},{v:"vulnerable",l:"Vulnerable"},{v:"laughing",l:"Laughing"},{v:"contemplative",l:"Contemplative"}]} />
+          </div>
+
+          {/* Module 15 — Hair & makeup */}
+          <div style={sectionStyle}>
+            <label style={labelStyle}>15 · Hair & Makeup</label>
+            <div style={rowStyle}>
+              <input value={studio.hairMakeup.hair} placeholder="Hair — e.g. wet slick-back, loose waves" className="nf-input" style={{ flex: 1, ...sel }}
+                onChange={e => setNested("hairMakeup", { hair: e.target.value })} />
+            </div>
+            <div style={rowStyle}>
+              <input value={studio.hairMakeup.makeup} placeholder="Makeup / grooming — e.g. smudged kohl, stubble" className="nf-input" style={{ flex: 1, ...sel }}
+                onChange={e => setNested("hairMakeup", { makeup: e.target.value })} />
+            </div>
+          </div>
+
+          {/* Module 16 — Setting light */}
+          <div style={sectionStyle}>
+            <label style={labelStyle}>16 · Setting / Time</label>
+            <EditorialChoiceCustom label="Light" value={studio.setting} onChange={v => set({ setting: v })} placeholder="e.g. dawn fog, firelit cave"
+              options={[{v:"golden-hour",l:"Golden hour"},{v:"blue-hour",l:"Blue hour"},{v:"midday",l:"Harsh midday"},{v:"overcast",l:"Overcast"},{v:"night",l:"Night"},{v:"interior",l:"Warm interior"},{v:"neon",l:"Neon night"}]} />
+          </div>
+
+          {/* Module 17 — Color grade */}
+          <div style={sectionStyle}>
+            <label style={labelStyle}>17 · Color Grade</label>
+            <EditorialChoiceCustom label="Grade" value={studio.colorGrade} onChange={v => set({ colorGrade: v })} placeholder="e.g. faded film, acid green"
+              options={[{v:"teal-orange",l:"Teal & orange"},{v:"bleach",l:"Bleach bypass"},{v:"warm",l:"Warm nostalgic"},{v:"cool",l:"Cool clinical"},{v:"high-key",l:"High-key"},{v:"low-key",l:"Low-key"},{v:"sepia",l:"Sepia"},{v:"bw",l:"Black & white"}]} />
+          </div>
+
+          {/* Module 1 — Clothing */}
+          <div style={sectionStyle}>
+            <label style={labelStyle}>1 · Clothing</label>
+            <div style={{ fontSize: 10, color: "var(--nf-text-muted)", marginTop: -4, marginBottom: 8, lineHeight: 1.4 }}>This is the <strong>complete</strong> outfit — the subject wears only what you list here (innermost first), nothing else. Leave empty to let the model dress them.</div>
             {studio.garmentLayers.map((l, i) => (
               <div key={l.id} style={rowStyle}>
-                <span style={{ fontSize: 11, color: "var(--nf-text-muted)", minWidth: 42 }}>{i === 0 ? "Base" : `Layer ${i + 1}`}</span>
+                <span style={{ fontSize: 11, color: "var(--nf-text-muted)", minWidth: 42 }}>{i === 0 ? "Inner" : `+ Over`}</span>
                 <input value={l.text} placeholder={i === 0 ? "e.g. tailored white dress shirt" : "e.g. charcoal wool trench coat"} className="nf-input" style={{ flex: 1, ...sel }}
                   onChange={e => setStudio(s => ({ ...s, garmentLayers: s.garmentLayers.map(x => x.id === l.id ? { ...x, text: e.target.value } : x) }))} />
-                <button onClick={() => setStudio(s => ({ ...s, garmentLayers: s.garmentLayers.filter(x => x.id !== l.id) }))} className="nf-btn-icon" aria-label="Remove layer"><Icons.X /></button>
+                <button onClick={() => setStudio(s => ({ ...s, garmentLayers: s.garmentLayers.filter(x => x.id !== l.id) }))} className="nf-btn-icon" aria-label="Remove item"><Icons.X /></button>
               </div>
             ))}
-            <button onClick={addLayer} className="nf-btn-micro" style={{ fontSize: 11 }}>+ Add layer</button>
+            <button onClick={addLayer} className="nf-btn-micro" style={{ fontSize: 11 }}>+ Add item</button>
           </div>
 
           {/* Module 2 — Wind & physics */}
@@ -8999,14 +9436,20 @@ const EditorialStudioModal = memo(({ char, onClose, onGenerate, isGenerating }) 
             <div style={rowStyle}>
               <span style={{ fontSize: 11, color: "var(--nf-text-muted)", minWidth: 60 }}>Direction</span>
               <select value={studio.wind.dir} onChange={e => setNested("wind", { dir: e.target.value })} className="nf-input" style={sel}>
-                <option value="none">None</option><option value="left">→ Left</option><option value="right">← Right</option><option value="back">From behind</option><option value="front">Toward subject</option>
+                <option value="none">None</option><option value="left">→ Left</option><option value="right">← Right</option><option value="back">From behind</option><option value="front">Toward subject</option><option value="custom">✎ Custom…</option>
               </select>
             </div>
+            {studio.wind.dir === "custom" ? (
+              <div style={rowStyle}>
+                <input value={studio.wind.custom || ""} onChange={e => setNested("wind", { custom: e.target.value })} placeholder="Describe the wind — e.g. swirling updraft from below" className="nf-input" style={{ flex: 1, ...sel }} />
+              </div>
+            ) : (
             <div style={rowStyle}>
               <span style={{ fontSize: 11, color: "var(--nf-text-muted)", minWidth: 60 }}>Strength</span>
               <input type="range" min="0" max="100" value={studio.wind.intensity} onChange={e => setNested("wind", { intensity: +e.target.value })} style={{ flex: 1 }} disabled={studio.wind.dir === "none"} />
               <span style={{ fontSize: 11, color: "var(--nf-text)", minWidth: 30 }}>{studio.wind.intensity < 30 ? "breeze" : studio.wind.intensity < 70 ? "strong" : "gale"}</span>
             </div>
+            )}
           </div>
 
           {/* Module 3 — Atmospheric particles */}
@@ -9019,6 +9462,7 @@ const EditorialStudioModal = memo(({ char, onClose, onGenerate, isGenerating }) 
                 </label>
               ))}
             </div>
+            <input value={studio.particles.custom || ""} onChange={e => setNested("particles", { custom: e.target.value })} placeholder="Custom — e.g. drifting dandelion seeds, sparks" className="nf-input" style={{ width: "100%", boxSizing: "border-box", marginTop: 6, ...sel }} />
           </div>
 
           {/* Module 5 — Submersion */}
@@ -9029,9 +9473,12 @@ const EditorialStudioModal = memo(({ char, onClose, onGenerate, isGenerating }) 
                 <input type="checkbox" checked={studio.submersion.on} onChange={e => setNested("submersion", { on: e.target.checked })} style={{ accentColor: "var(--nf-accent)" }} />Enable
               </label>
               <select value={studio.submersion.line} onChange={e => setNested("submersion", { line: e.target.value })} className="nf-input" style={sel} disabled={!studio.submersion.on}>
-                <option value="none">Water line…</option><option value="ankle">Ankle</option><option value="knee">Knee</option><option value="waist">Waist</option><option value="chest">Chest</option><option value="full">Fully submerged</option>
+                <option value="none">Water line…</option><option value="ankle">Ankle</option><option value="knee">Knee</option><option value="waist">Waist</option><option value="chest">Chest</option><option value="full">Fully submerged</option><option value="custom">✎ Custom…</option>
               </select>
             </div>
+            {studio.submersion.on && studio.submersion.line === "custom" && (
+              <input value={studio.submersion.custom || ""} onChange={e => setNested("submersion", { custom: e.target.value })} placeholder="e.g. lying in shallow rippling water, half-floating" className="nf-input" style={{ width: "100%", boxSizing: "border-box", marginBottom: 4, ...sel }} />
+            )}
             <div style={{ fontSize: 10, color: "var(--nf-text-muted)" }}>SFW editorial — refraction, caustics, wet-look cling.</div>
           </div>
 
@@ -9043,8 +9490,11 @@ const EditorialStudioModal = memo(({ char, onClose, onGenerate, isGenerating }) 
                 <input value={a.item} placeholder="e.g. vintage chronograph" className="nf-input" style={{ flex: 1, ...sel }}
                   onChange={e => setStudio(s => ({ ...s, accessories: s.accessories.map(x => x.id === a.id ? { ...x, item: e.target.value } : x) }))} />
                 <select value={a.anchor} onChange={e => setStudio(s => ({ ...s, accessories: s.accessories.map(x => x.id === a.id ? { ...x, anchor: e.target.value } : x) }))} className="nf-input" style={sel}>
-                  <option value="wrist">Wrist</option><option value="face">Face</option><option value="hand">Hand</option><option value="hip">Hip</option><option value="neck">Neck</option><option value="head">Head</option>
+                  <option value="wrist">Wrist</option><option value="face">Face</option><option value="hand">Hand</option><option value="hip">Hip</option><option value="neck">Neck</option><option value="head">Head</option><option value="ankle">Ankle</option><option value="waist">Waist</option><option value="custom">Custom…</option>
                 </select>
+                {a.anchor === "custom" && (
+                  <input value={a.customAnchor || ""} onChange={e => setStudio(s => ({ ...s, accessories: s.accessories.map(x => x.id === a.id ? { ...x, customAnchor: e.target.value } : x) }))} placeholder="where?" className="nf-input" style={{ flex: 1, ...sel }} />
+                )}
                 <button onClick={() => setStudio(s => ({ ...s, accessories: s.accessories.filter(x => x.id !== a.id) }))} className="nf-btn-icon" aria-label="Remove accessory"><Icons.X /></button>
               </div>
             ))}
@@ -9056,11 +9506,13 @@ const EditorialStudioModal = memo(({ char, onClose, onGenerate, isGenerating }) 
             <label style={labelStyle}>6 · Lens & Film Stock</label>
             <div style={rowStyle}>
               <select value={studio.lens.focal} onChange={e => setNested("lens", { focal: e.target.value })} className="nf-input" style={sel}>
-                <option value="24mm">24mm wide</option><option value="35mm">35mm</option><option value="50mm">50mm</option><option value="85mm">85mm portrait</option><option value="135mm">135mm tele</option>
+                <option value="24mm">24mm wide</option><option value="35mm">35mm</option><option value="50mm">50mm</option><option value="85mm">85mm portrait</option><option value="135mm">135mm tele</option><option value="custom">✎ Custom</option>
               </select>
+              {studio.lens.focal === "custom" && <input value={studio.lens.focalCustom || ""} onChange={e => setNested("lens", { focalCustom: e.target.value })} placeholder="e.g. 200mm" className="nf-input" style={{ width: 80, ...sel }} />}
               <select value={studio.lens.aperture} onChange={e => setNested("lens", { aperture: e.target.value })} className="nf-input" style={sel}>
-                <option value="f/1.4">f/1.4</option><option value="f/2.0">f/2.0</option><option value="f/2.8">f/2.8</option><option value="f/5.6">f/5.6</option><option value="f/11">f/11</option>
+                <option value="f/1.4">f/1.4</option><option value="f/2.0">f/2.0</option><option value="f/2.8">f/2.8</option><option value="f/5.6">f/5.6</option><option value="f/11">f/11</option><option value="custom">✎</option>
               </select>
+              {studio.lens.aperture === "custom" && <input value={studio.lens.apertureCustom || ""} onChange={e => setNested("lens", { apertureCustom: e.target.value })} placeholder="f/0.95" className="nf-input" style={{ width: 64, ...sel }} />}
             </div>
             <div style={rowStyle}>
               <select value={studio.lens.filmStock} onChange={e => setNested("lens", { filmStock: e.target.value })} className="nf-input" style={{ ...sel, flex: 1 }}>
@@ -9070,8 +9522,10 @@ const EditorialStudioModal = memo(({ char, onClose, onGenerate, isGenerating }) 
                 <option value="ilford-hp5">Ilford HP5 (B&amp;W)</option>
                 <option value="fuji-velvia">Fuji Velvia</option>
                 <option value="tri-x-pushed">Pushed Tri-X (gritty B&amp;W)</option>
+                <option value="custom">✎ Custom film stock…</option>
               </select>
             </div>
+            {studio.lens.filmStock === "custom" && <input value={studio.lens.filmCustom || ""} onChange={e => setNested("lens", { filmCustom: e.target.value })} placeholder="e.g. Fuji Pro 400H, expired Polaroid" className="nf-input" style={{ width: "100%", boxSizing: "border-box", ...sel }} />}
           </div>
 
           {/* Module 7 — Lighting & gobos */}
@@ -9080,8 +9534,9 @@ const EditorialStudioModal = memo(({ char, onClose, onGenerate, isGenerating }) 
             <div style={rowStyle}>
               <span style={{ fontSize: 11, color: "var(--nf-text-muted)", minWidth: 36 }}>Key</span>
               <select value={studio.lighting.key} onChange={e => setNested("lighting", { key: e.target.value })} className="nf-input" style={sel}>
-                <option value="soft">Soft</option><option value="hard">Hard</option><option value="rembrandt">Rembrandt</option>
+                <option value="soft">Soft</option><option value="hard">Hard</option><option value="rembrandt">Rembrandt</option><option value="custom">✎</option>
               </select>
+              {studio.lighting.key === "custom" && <input value={studio.lighting.keyCustom || ""} onChange={e => setNested("lighting", { keyCustom: e.target.value })} placeholder="key light…" className="nf-input" style={{ width: 110, ...sel }} />}
               <span style={{ fontSize: 11, color: "var(--nf-text-muted)", minWidth: 28 }}>Fill</span>
               <select value={studio.lighting.fill} onChange={e => setNested("lighting", { fill: e.target.value })} className="nf-input" style={sel}>
                 <option value="none">None</option><option value="low">Low</option><option value="high">High</option>
@@ -9093,12 +9548,14 @@ const EditorialStudioModal = memo(({ char, onClose, onGenerate, isGenerating }) 
             <div style={rowStyle}>
               <span style={{ fontSize: 11, color: "var(--nf-text-muted)", minWidth: 36 }}>Temp</span>
               <select value={studio.lighting.colorTemp} onChange={e => setNested("lighting", { colorTemp: e.target.value })} className="nf-input" style={sel}>
-                <option value="neutral">Neutral</option><option value="tungsten">Tungsten</option><option value="candle">Candlelight</option><option value="daylight">Daylight</option><option value="blue">Blue hour</option>
+                <option value="neutral">Neutral</option><option value="tungsten">Tungsten</option><option value="candle">Candlelight</option><option value="daylight">Daylight</option><option value="blue">Blue hour</option><option value="custom">✎</option>
               </select>
+              {studio.lighting.colorTemp === "custom" && <input value={studio.lighting.tempCustom || ""} onChange={e => setNested("lighting", { tempCustom: e.target.value })} placeholder="temp…" className="nf-input" style={{ width: 90, ...sel }} />}
               <span style={{ fontSize: 11, color: "var(--nf-text-muted)", minWidth: 36 }}>Gobo</span>
               <select value={studio.lighting.gobo} onChange={e => setNested("lighting", { gobo: e.target.value })} className="nf-input" style={sel}>
-                <option value="none">None</option><option value="blinds">Venetian blinds</option><option value="branches">Tree branches</option><option value="window">Window frame</option><option value="chainlink">Chain-link</option>
+                <option value="none">None</option><option value="blinds">Venetian blinds</option><option value="branches">Tree branches</option><option value="window">Window frame</option><option value="chainlink">Chain-link</option><option value="custom">✎</option>
               </select>
+              {studio.lighting.gobo === "custom" && <input value={studio.lighting.goboCustom || ""} onChange={e => setNested("lighting", { goboCustom: e.target.value })} placeholder="shadow pattern…" className="nf-input" style={{ width: 120, ...sel }} />}
             </div>
           </div>
 
@@ -9109,21 +9566,27 @@ const EditorialStudioModal = memo(({ char, onClose, onGenerate, isGenerating }) 
               <input value={studio.propInteraction.item} placeholder="e.g. brass zippo lighter" className="nf-input" style={{ flex: 1, ...sel }}
                 onChange={e => setNested("propInteraction", { item: e.target.value })} />
               <select value={studio.propInteraction.state} onChange={e => setNested("propInteraction", { state: e.target.value })} className="nf-input" style={sel}>
-                <option value="idle">Idle</option><option value="activating">Activating</option><option value="in-use">In use</option>
+                <option value="idle">Holding (idle)</option><option value="activating">Activating</option><option value="in-use">In use</option><option value="custom">✎ Custom…</option>
               </select>
             </div>
+            {studio.propInteraction.state === "custom" && (
+              <input value={studio.propInteraction.stateCustom || ""} onChange={e => setNested("propInteraction", { stateCustom: e.target.value })} placeholder="how they interact — e.g. tossing it in the air" className="nf-input" style={{ width: "100%", boxSizing: "border-box", ...sel }} />
+            )}
           </div>
 
           {/* Module 9 — Shutter */}
           <div style={sectionStyle}>
             <label style={labelStyle}>9 · Shutter / Motion</label>
-            <div style={{ display: "flex", gap: 12 }}>
-              {["fast", "normal", "slow"].map(k => (
+            <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+              {["fast", "normal", "slow", "custom"].map(k => (
                 <label key={k} style={{ fontSize: 12, color: "var(--nf-text)", display: "flex", alignItems: "center", gap: 5, cursor: "pointer", textTransform: "capitalize" }}>
-                  <input type="radio" name="shutter" checked={studio.shutter === k} onChange={() => set({ shutter: k })} style={{ accentColor: "var(--nf-accent)" }} />{k}
+                  <input type="radio" name="shutter" checked={studio.shutter === k} onChange={() => set({ shutter: k })} style={{ accentColor: "var(--nf-accent)" }} />{k === "custom" ? "✎ Custom" : k}
                 </label>
               ))}
             </div>
+            {studio.shutter === "custom" && (
+              <input value={studio.shutterCustom || ""} onChange={e => set({ shutterCustom: e.target.value })} placeholder="e.g. long exposure with light painting" className="nf-input" style={{ width: "100%", boxSizing: "border-box", marginTop: 6, ...sel }} />
+            )}
           </div>
 
           {/* Module 10 — Cyclorama */}
@@ -9136,7 +9599,19 @@ const EditorialStudioModal = memo(({ char, onClose, onGenerate, isGenerating }) 
               <option value="concrete">Brutalist concrete</option>
               <option value="wood">Slatted wood panels</option>
               <option value="black">Black seamless (low-key)</option>
+              <option value="custom">✎ Custom backdrop…</option>
             </select>
+            {studio.cyclorama === "custom" && (
+              <input value={studio.cycloramaCustom || ""} onChange={e => set({ cycloramaCustom: e.target.value })} placeholder="e.g. crumbling marble colonnade, rain-streaked window" className="nf-input" style={{ width: "100%", boxSizing: "border-box", marginTop: 6, ...sel }} />
+            )}
+          </div>
+
+          {/* Module 18 — Director's notes (spans both columns) */}
+          <div style={{ ...sectionStyle, gridColumn: "1 / -1" }}>
+            <label style={labelStyle}>18 · Director's Notes (freeform, appended verbatim)</label>
+            <textarea value={studio.directorNotes} onChange={e => set({ directorNotes: e.target.value })} rows={2}
+              placeholder="Anything else — e.g. 'a single tear catching the light', 'shot through a rain-streaked car window', 'shallow misty forest behind'…"
+              className="nf-input" style={{ width: "100%", boxSizing: "border-box", resize: "vertical", ...sel }} />
           </div>
         </div>
 
@@ -9152,11 +9627,17 @@ const EditorialStudioModal = memo(({ char, onClose, onGenerate, isGenerating }) 
           )}
         </div>
 
-        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 16 }}>
-          <button onClick={onClose} className="nf-btn nf-btn-ghost">Cancel</button>
-          <button onClick={() => onGenerate(studio)} disabled={isGenerating} className="nf-btn nf-btn-primary">
-            <Icons.Wand /> {isGenerating ? "Generating…" : "Generate in Studio"}
-          </button>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, marginTop: 16, flexWrap: "wrap" }}>
+          <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: "var(--nf-text-muted)", cursor: "pointer" }} title="Off by default. When on, the project's style-lock image is sent as a loose color/grain reference. It can still pull clothing/background from that image, so leave off if wardrobe or backdrop aren't obeying.">
+            <input type="checkbox" checked={!!studio.useStyleRef} onChange={e => set({ useStyleRef: e.target.checked })} style={{ accentColor: "var(--nf-accent)" }} />
+            Use project style-lock image as reference
+          </label>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={onClose} className="nf-btn nf-btn-ghost">Cancel</button>
+            <button onClick={() => onGenerate(studio)} disabled={isGenerating} className="nf-btn nf-btn-primary">
+              <Icons.Wand /> {isGenerating ? "Generating…" : "Generate in Studio"}
+            </button>
+          </div>
         </div>
       </div>
     </div>,
@@ -9777,12 +10258,12 @@ AI-EVOLVING: dynamic, status, tension, tensionType, powerDynamic, trustLevel, ch
       // G9: Per-tab temperature — character gen more creative, world more consistent
       const tabTemperatures = { characters: 0.85, world: 0.7, plot: 0.8, relationships: 0.8 };
       // G12: Higher max_tokens for character generation
-      const tabMaxTokens = { characters: 9000, world: 6000, plot: 6000, relationships: 6000 };
+      const tabMaxTokens = { characters: 12000, world: 12000, plot: 12000, relationships: 12000 };
 
       const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
         method: "POST",
         headers: { "Content-Type": "application/json", "Authorization": `Bearer ${settings.apiKey}`, "HTTP-Referer": window.location.origin, "X-Title": "NovelForge" },
-        body: JSON.stringify({ model: settings.tabModels?.[tabName] || settings.model, messages: allMessages, max_tokens: tabMaxTokens[tabName] || 8192, temperature: tabTemperatures[tabName] || 0.8 }),
+        body: JSON.stringify({ model: settings.tabModels?.[tabName] || settings.model, messages: allMessages, max_tokens: tabMaxTokens[tabName] || 12000, temperature: tabTemperatures[tabName] || 0.8 }),
         signal: controller.signal,
       });
       if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error?.message || `API error ${res.status}`); }
@@ -10765,7 +11246,7 @@ function WriteOrWhipPanel({ project, settings, chapterIdx, editorRef, onClose })
             { role: "system", content: "You are Forge-chan, a BRUTAL writing coach. Score writing against a beat/scene goal AND the chapter's craft expectations (narrative distance, sensory palette, subtext, tension, motifs).\n\nFORMAT (exactly):\nSCORE: X/10\nThen 2-3 lines of harsh specific feedback. Call out when the writing misses craft targets.\n7+ = pass. Below 7 = fail, demand rewrite." },
             { role: "user", content: `BEAT GOAL: "${title || "untitled"}"${desc ? `\nDetails: ${desc}` : ""}${craftBlock}\n\nTEXT (last ${Math.min(textToScore.length, 800)} chars):\n"${textToScore.slice(-800)}"\n\n${beatText.length < 15 ? "(Warning: almost no new text for this beat)" : ""}\nScore it.` },
           ],
-          max_tokens: 200, temperature: 0.85,
+          max_tokens: 12000, temperature: 0.85,
         }),
       });
       if (!res.ok) { const errData = await res.json().catch(() => ({})); throw new Error(errData.error?.message || `API error (${res.status})`); }
@@ -11264,7 +11745,7 @@ RULES:
 - You CANNOT be replied to. Observe and comment.` },
                 { role: "user", content: `Writer just wrote:\n"${newText || ""}"\n\nBrief unsolicited reaction.` },
               ],
-              max_tokens: 120, temperature: 1.1,
+              max_tokens: 12000, temperature: 1.1,
             }),
           });
           const data = await res.json();
@@ -11430,6 +11911,9 @@ const _syncCrossRefs = (oldP, newP) => {
   let newPlots = [...(p.plotOutline || [])];
   let newChapters = [...(p.chapters || [])];
   let dirty = false;
+  // Tracks { locId: Set(charId) } that section D auto-added to frequentCharacters this pass, so
+  // section F3 won't treat them as a manual co-location event and spawn a relationship per pair.
+  const autoFrequentedThisPass = {};
 
   // ═══════════════════════════════════════════════
   // A. CHARACTER CHANGES → cascade to all other tabs
@@ -11439,8 +11923,10 @@ const _syncCrossRefs = (oldP, newP) => {
     if (!oc) return;
 
     // A1-A2: Status changes are AI-maintained per-chapter now
-    // A3: Status → dead: mark all romantic relationships as "exes" or "estranged"
-    if (oc.status !== "dead" && nc.status === "dead") {
+    // A3: Status → dead: mark all romantic relationships as "exes" or "estranged".
+    // Skipped in non-linear mode, where a character can be dead in one era and alive in another —
+    // a global "death ended the relationship" note would be wrong across concurrent timelines.
+    if (oc.status !== "dead" && nc.status === "dead" && !p.nonLinearTime) {
       newRels = newRels.map(r => {
         if (r.char1 !== nc.id && r.char2 !== nc.id) return r;
         if (r.category === "romantic" && r.status !== "exes" && r.status !== "estranged") {
@@ -11743,6 +12229,46 @@ const _syncCrossRefs = (oldP, newP) => {
         // Don't auto-write, just noted for AI context
       }
     }
+    // D9: POV character set → that character is obviously in the scene, so add them to the
+    // plot's character list (the writer shouldn't have to select the same person twice).
+    if (np.povCharacterId && np.povCharacterId !== op.povCharacterId) {
+      const plotChars = Array.isArray(np.characters) ? [...np.characters] : [];
+      if (!plotChars.includes(np.povCharacterId) && newChars.some(c => c.id === np.povCharacterId)) {
+        plotChars.push(np.povCharacterId);
+        newPlots = newPlots.map(pl => pl.id === np.id ? { ...pl, characters: plotChars } : pl);
+        dirty = true;
+      }
+    }
+    // D10: A character is in a scene AND that scene has a location → they demonstrably spend
+    // time there, so add them to the location's frequentCharacters. This is the reverse of D6
+    // (which pulls a location's regulars into the scene); together they keep cast↔place in sync
+    // from whichever side the writer edits. Fires when characters OR locations newly change.
+    {
+      const charsChanged = JSON.stringify(np.characters || []) !== JSON.stringify(op.characters || []);
+      const locsChanged = JSON.stringify(np.locations || []) !== JSON.stringify(op.locations || []);
+      const povChanged = np.povCharacterId && np.povCharacterId !== op.povCharacterId;
+      // Effective cast = explicitly tagged characters + the POV character (D9 adds the latter to
+      // the list too, but that update isn't visible on `np` within this same pass, so union here).
+      const effectiveCast = Array.isArray(np.characters) ? [...np.characters] : [];
+      if (np.povCharacterId && !effectiveCast.includes(np.povCharacterId)) effectiveCast.push(np.povCharacterId);
+      if ((charsChanged || locsChanged || povChanged) && Array.isArray(np.locations) && np.locations.length && effectiveCast.length) {
+        np.locations.forEach(lid => {
+          const wIdx = newWorlds.findIndex(w => w.id === lid);
+          if (wIdx < 0) return;
+          const loc = newWorlds[wIdx];
+          if (loc.category && loc.category !== "Location") return; // only real places
+          const freq = Array.isArray(loc.frequentCharacters) ? [...loc.frequentCharacters] : [];
+          let changed = false;
+          effectiveCast.forEach(cid => {
+            if (cid && !freq.includes(cid) && newChars.some(c => c.id === cid)) {
+              freq.push(cid); changed = true;
+              (autoFrequentedThisPass[lid] = autoFrequentedThisPass[lid] || new Set()).add(cid);
+            }
+          });
+          if (changed) { newWorlds[wIdx] = { ...loc, frequentCharacters: freq }; dirty = true; }
+        });
+      }
+    }
   });
 
   // ═══════════════════════════════════════════════
@@ -11840,7 +12366,12 @@ const _syncCrossRefs = (oldP, newP) => {
     const oldFreq = Array.isArray(ow.frequentCharacters) ? ow.frequentCharacters : [];
     const newFreq = Array.isArray(nw.frequentCharacters) ? nw.frequentCharacters : [];
     const addedChars = newFreq.filter(cid => !oldFreq.includes(cid));
+    const autoSet = autoFrequentedThisPass[nw.id];
     addedChars.forEach(newCid => {
+      // If this character was auto-frequented by section D (tagged in a scene at this location),
+      // don't spawn relationships — that would flood the graph whenever a writer fills out a scene's
+      // cast. Manual additions in the World tab still auto-create as before.
+      if (autoSet && autoSet.has(newCid)) return;
       newFreq.forEach(existingCid => {
         if (existingCid === newCid) return;
         if (oldFreq.includes(existingCid)) {
@@ -11969,6 +12500,7 @@ export default function NovelForge() {
     questionOfTheDay: true, // morning reflection prompt
     forgeChanGoodNight: true, // Forge-chan greets on close
     ambientBrightness: 1.0, // 0.6-1.0 for circadian
+    liveliness: "full", // full | subtle | off — ambient sprite, motes, sparks
   });
   const [chatMessages, setChatMessages] = useState([]);
   const [chatInput, setChatInput] = useState("");
@@ -11977,6 +12509,8 @@ export default function NovelForge() {
   const [activeChapterIdx, setActiveChapterIdx] = useState(() => { try { return parseInt(sessionStorage.getItem("nf-activeChapterIdx"), 10) || 0; } catch { /* silent */ return 0; } });
   const [showProjectList, setShowProjectList] = useState(true);
   const [editingCharId, setEditingCharId] = useState(null);
+  const [charRosterSearch, setCharRosterSearch] = useState(""); // sidebar live filter
+  const [charRosterFilter, setCharRosterFilter] = useState("all"); // all | role:* | status:* | incomplete
   const [showGroupForm, setShowGroupForm] = useState(false);
   const [genMode, setGenMode] = useState("continue");
   const [showMemoryPreview, setShowMemoryPreview] = useState(false);
@@ -12052,6 +12586,9 @@ export default function NovelForge() {
   const [flushConfirm, setFlushConfirm] = useState(false);
   const [charSuggestions, setCharSuggestions] = useState(null);
   const [fillReview, setFillReview] = useState(null); // { type: 'character'|'world', entityId, original, proposed, fields }
+  // Relationship auto-draft: snapshot for one-click undo + summary of what changed (shown as a banner).
+  const [relDraftUndo, setRelDraftUndo] = useState(null); // { relationships: [...prevSnapshot], summary: string, count: number }
+  const [relDraftBusy, setRelDraftBusy] = useState(false); // null | relId | 'all'
   const [whiteRoom, setWhiteRoom] = useState(null); // { char1Id, char2Id, tension, result, isGenerating }
   const [showTimeline, setShowTimeline] = useState(false);
   const [showRelWeb, setShowRelWeb] = useState(false);
@@ -12794,7 +13331,7 @@ CRITICAL REQUIREMENTS:
             { role: "system", content: `You are a fiction writing assistant. Fill empty fields with creative, genre-appropriate content.\n\n${contextInfo || ""}\n\nRULES:\n- Return ONLY valid JSON — no markdown, no backticks, no explanation.\n- Only include fields that are currently empty.\n- Be creative and specific.\n- Make content consistent with existing filled fields.` },
             { role: "user", content: prompt },
           ],
-          max_tokens: 10000, temperature: 0.85,
+        max_tokens: 12000, temperature: 0.85,
         }),
       });
       if (!res.ok) { const errData = await res.json().catch(() => ({})); throw new Error(errData.error?.message || `API error (${res.status})`); }
@@ -12863,6 +13400,45 @@ CRITICAL REQUIREMENTS:
   }, [project?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const sessionWords = sessionWordsStart !== null ? Math.max(0, totalProjectWords - sessionWordsStart) : 0;
+
+  // ─── LIVELINESS STATE ───
+  // Drives the ambient sprite/motes. Pure cosmetic signals derived from existing state.
+  const liveliness = settings.liveliness || "full";
+  const [sparkKey, setSparkKey] = useState(0);          // re-keyed to fire a milestone spark burst
+  const [milestoneFlash, setMilestoneFlash] = useState(false);
+  const [idleLong, setIdleLong] = useState(false);
+  const lastMilestoneRef = useRef(0);
+  // Writing intensity 0..1 — based on words this session, feeds mote density.
+  const writeIntensity = Math.min(1, sessionWords / 800);
+  // Milestone: every 250 session words, a quiet celebration.
+  useEffect(() => {
+    if (liveliness === "off") return;
+    const m = Math.floor(sessionWords / 250);
+    if (m > lastMilestoneRef.current && sessionWords > 0) {
+      lastMilestoneRef.current = m;
+      setSparkKey(k => k + 1);
+      setMilestoneFlash(true);
+      const t = setTimeout(() => setMilestoneFlash(false), 4000);
+      return () => clearTimeout(t);
+    }
+  }, [sessionWords, liveliness]);
+  // Idle detector — sprite gets sleepy after 90s without a keypress/click.
+  useEffect(() => {
+    if (liveliness === "off") return;
+    let timer;
+    const reset = () => { setIdleLong(false); clearTimeout(timer); timer = setTimeout(() => setIdleLong(true), 90000); };
+    reset();
+    window.addEventListener("keydown", reset);
+    window.addEventListener("mousedown", reset);
+    return () => { clearTimeout(timer); window.removeEventListener("keydown", reset); window.removeEventListener("mousedown", reset); };
+  }, [liveliness]);
+  const livelyAppState = useMemo(() => ({ generating: isGenerating, milestone: milestoneFlash, idleLong }), [isGenerating, milestoneFlash, idleLong]);
+  // Gate the CSS-based liveliness effects (focus aura, tab glyph) on the setting + reduced-motion.
+  useEffect(() => {
+    const reduce = liveliness !== "full" || (window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+    document.body.classList.toggle("nf-reduce-lively", reduce);
+  }, [liveliness]);
+
 
   // H1/H2/H3: Improved memory context payload — mode-aware, includes overhead, detailed breakdown
   const memoryContextPayload = useMemo(() => {
@@ -12956,6 +13532,149 @@ CRITICAL REQUIREMENTS:
       return _syncCrossRefs(p, next);
     }));
   }, [activeProjectId]);
+
+  // ─── RELATIONSHIP AUTO-DRAFT ───
+  // Defined AFTER updateProject/updateCharById because the callbacks below list updateProject in
+  // their deps (dep arrays are evaluated during render, so updateProject must already be initialized).
+  // Per the user's chosen behavior: overwrite ALL relationship fields, auto-apply, with one-click undo.
+  const _draftOneRelationship = useCallback(async (rel) => {
+    const c1 = project?.characters?.find(c => c.id === rel.char1);
+    const c2 = project?.characters?.find(c => c.id === rel.char2);
+    if (!c1?.name || !c2?.name) return null;
+    const contextInfo = ContextEngine.buildTabContext(project, activeChapterIdx, "relationships", rel.id);
+    const profile = (c) => [
+      `${c.name} (${c.role || "role unset"}${c.age ? `, ${c.age}` : ""})`,
+      c.personality && `personality: ${c.personality}`,
+      c.desires && `wants: ${c.desires}`,
+      c.fears && `fears: ${c.fears}`,
+      c.flaws && `flaws: ${c.flaws}`,
+      c.backstory && `backstory: ${String(c.backstory).slice(0, 300)}`,
+      c.secrets && `secrets: ${c.secrets}`,
+    ].filter(Boolean).join("; ");
+    const opts = (arr) => arr.map(o => o.value).join(", ");
+    const prompt = `Develop the FULL relationship between "${c1.name}" and "${c2.name}" for a ${project?.genre || "fiction"} novel. Rewrite every field below from scratch into a vivid, specific, internally-consistent dynamic — do not hedge, do not leave anything generic.
+
+CHARACTER 1 — ${profile(c1)}
+CHARACTER 2 — ${profile(c2)}
+
+Current structured state (you may change these if the dynamic warrants it):
+- category: ${rel.category || "unset"} (allowed: ${opts(RELATIONSHIP_CATEGORY_OPTIONS)})
+- status: ${rel.status || "unset"} (allowed: ${opts(RELATIONSHIP_STATUS_OPTIONS)})
+- tension: ${rel.tension || "unset"} (allowed: ${opts(TENSION_OPTIONS)})
+- tensionType: ${rel.tensionType || "unset"} (allowed: ${opts(TENSION_TYPE_OPTIONS)})
+- powerDynamic: ${rel.powerDynamic || "unset"} (allowed: ${opts(POWER_DYNAMIC_OPTIONS)}) — char1 is ${c1.name}, char2 is ${c2.name}
+- trustLevel: ${rel.trustLevel || "unset"} (allowed: ${opts(TRUST_LEVEL_OPTIONS)})
+
+Return ONLY a JSON object with these keys (all strings unless noted):
+- "dynamic": one-sentence essence of how they relate
+- "chemistry": what makes the pairing compelling on the page
+- "conflictSource": the core friction between them
+- "char1Perspective": how ${c1.name} privately sees ${c2.name}
+- "char2Perspective": how ${c2.name} privately sees ${c1.name}
+- "sharedSecrets": what they know that others don't (or "" if none)
+- "keyScenes": 2-4 turning-point beats, e.g. "Ch3: first clash; Ch7: reluctant alliance"
+- "progression": the arc of this relationship across the story
+- "terms": how they address each other (names, titles, pet names)
+- "taboos": lines they won't cross with each other (or "")
+- "notes": any extra texture
+- "category","status","tension","tensionType","powerDynamic","trustLevel": pick the BEST-FITTING allowed value for each
+
+Be consistent with the characters' personalities and any context provided. No markdown, no backticks, no prose outside the JSON.`;
+    const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${settings.apiKey}`, "HTTP-Referer": window.location.origin, "X-Title": "NovelForge" },
+      body: JSON.stringify({
+        model: settings.tabModels?.relationships || settings.model,
+        messages: [
+          { role: "system", content: `You are a fiction relationship architect. You write specific, character-grounded relationship dynamics.\n\n${contextInfo || ""}\n\nReturn ONLY valid JSON.` },
+          { role: "user", content: prompt },
+        ],
+        max_tokens: 12000, temperature: 0.85,
+      }),
+    });
+    if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error?.message || `API error (${res.status})`); }
+    const data = await res.json();
+    let content = stripThinkingTokens(data.choices?.[0]?.message?.content || "").trim();
+    content = content.replace(/^```json?\s*/i, "").replace(/\s*```$/i, "").trim();
+    // Parse with repair fallback — recovers from trailing commas / truncation instead of failing outright.
+    let proposed; try { proposed = JSON.parse(content); } catch { proposed = tryRepairJson(content); }
+    if (typeof proposed !== "object" || proposed === null) return null;
+    const normalize = (val, options) => {
+      if (!val || typeof val !== "string") return null;
+      const lower = val.trim().toLowerCase();
+      const match = options.find(o => o.value.toLowerCase() === lower || o.label.toLowerCase() === lower);
+      return match ? match.value : null;
+    };
+    const patch = {};
+    for (const f of RELATIONSHIP_TEXT_FIELDS) {
+      if (typeof proposed[f] === "string") patch[f] = proposed[f].trim();
+      else if (proposed[f] != null && typeof proposed[f] === "object") patch[f] = normalizeAiValue(proposed[f]);
+    }
+    const structured = [
+      ["category", RELATIONSHIP_CATEGORY_OPTIONS], ["status", RELATIONSHIP_STATUS_OPTIONS],
+      ["tension", TENSION_OPTIONS], ["tensionType", TENSION_TYPE_OPTIONS],
+      ["powerDynamic", POWER_DYNAMIC_OPTIONS], ["trustLevel", TRUST_LEVEL_OPTIONS],
+    ];
+    for (const [key, options] of structured) {
+      const v = normalize(proposed[key], options);
+      if (v) patch[key] = v;
+    }
+    return Object.keys(patch).length ? patch : null;
+  }, [project, activeChapterIdx, settings]);
+
+  const handleAutoDraftRelationship = useCallback(async (relId) => {
+    if (!settings.apiKey) { showToast("Add an API key in Settings first", "error"); return; }
+    const rel = project?.relationships?.find(r => r.id === relId);
+    if (!rel) return;
+    const c1 = project?.characters?.find(c => c.id === rel.char1);
+    const c2 = project?.characters?.find(c => c.id === rel.char2);
+    if (!c1?.name || !c2?.name) { showToast("Set both characters first", "error"); return; }
+    setRelDraftBusy(relId);
+    showToast(`AI is drafting ${c1.name} ↔ ${c2.name}…`, "info");
+    try {
+      const patch = await _draftOneRelationship(rel);
+      if (!patch) throw new Error("AI returned nothing usable");
+      const snapshot = (project?.relationships || []).map(r => ({ ...r }));
+      const changedKeys = Object.keys(patch).filter(k => (rel[k] || "") !== (patch[k] || ""));
+      updateProject({ relationships: (project?.relationships || []).map(r => r.id === relId ? { ...r, ...patch } : r) });
+      setRelDraftUndo({ relationships: snapshot, summary: `${c1.name} ↔ ${c2.name}: ${changedKeys.length} field${changedKeys.length !== 1 ? "s" : ""} rewritten`, count: 1 });
+      showToast("Relationship drafted", "success");
+    } catch (e) { showToast(`Draft failed: ${e.message}`, "error"); }
+    finally { setRelDraftBusy(null); }
+  }, [settings.apiKey, project, _draftOneRelationship, updateProject, showToast]);
+
+  const handleAutoDraftAllRelationships = useCallback(async () => {
+    if (!settings.apiKey) { showToast("Add an API key in Settings first", "error"); return; }
+    const rels = (project?.relationships || []).filter(r => {
+      const c1 = project?.characters?.find(c => c.id === r.char1);
+      const c2 = project?.characters?.find(c => c.id === r.char2);
+      return c1?.name && c2?.name;
+    });
+    if (rels.length === 0) { showToast("No relationships with both characters set", "info"); return; }
+    setRelDraftBusy("all");
+    const snapshot = (project?.relationships || []).map(r => ({ ...r }));
+    const patches = {};
+    let done = 0, failed = 0;
+    for (const rel of rels) {
+      showToast(`Drafting ${done + 1}/${rels.length}…`, "info");
+      try {
+        const patch = await _draftOneRelationship(rel);
+        if (patch) { patches[rel.id] = patch; done++; } else failed++;
+      } catch { failed++; }
+    }
+    if (Object.keys(patches).length === 0) { setRelDraftBusy(null); showToast("Drafting failed for all relationships", "error"); return; }
+    updateProject({ relationships: (project?.relationships || []).map(r => patches[r.id] ? { ...r, ...patches[r.id] } : r) });
+    setRelDraftUndo({ relationships: snapshot, summary: `Drafted ${done} relationship${done !== 1 ? "s" : ""}${failed ? ` (${failed} failed)` : ""}`, count: done });
+    setRelDraftBusy(null);
+    showToast(`Drafted ${done} relationship${done !== 1 ? "s" : ""}`, "success");
+  }, [settings.apiKey, project, _draftOneRelationship, updateProject, showToast]);
+
+  const undoRelDraft = useCallback(() => {
+    if (!relDraftUndo) return;
+    updateProject({ relationships: relDraftUndo.relationships });
+    setRelDraftUndo(null);
+    showToast("Reverted", "success");
+  }, [relDraftUndo, updateProject, showToast]);
 
   const sceneNotes = activeChapter?.sceneNotes || "";
   const setSceneNotes = useCallback((val) => updateChapter(activeChapterIdx, { sceneNotes: val }), [activeChapterIdx, updateChapter]);
@@ -13321,6 +14040,26 @@ CRITICAL REQUIREMENTS:
     return stripThinkingTokens(data.choices?.[0]?.message?.content || "");
   }, [settings]);
 
+  // The Hearth Sprite's LLM voice: one short, in-character line about the current project/chapter.
+  // Defined after callOpenRouter so its dep array doesn't hit the temporal dead zone.
+  const askSprite = useCallback(async (mood) => {
+    if (!settings.apiKey) return "Add an API key in Settings and I'll have thoughts about your story.";
+    const ch = activeChapter;
+    const ctx = [
+      project?.title && `Project: "${project.title}"`,
+      project?.genre && `Genre: ${project.genre}`,
+      ch?.title && `Current chapter: "${ch.title}"`,
+      sessionWords > 0 && `Words written this session: ${sessionWords}`,
+      (project?.characters || []).length && `Cast: ${(project.characters || []).slice(0, 5).map(c => c.name).filter(Boolean).join(", ")}`,
+    ].filter(Boolean).join("\n");
+    const moodHint = { excited: "energized", inspired: "celebratory", sleepy: "drowsy and gentle", calm: "calm" }[mood] || "calm";
+    const out = await callOpenRouter([
+      { role: "system", content: `You are the writer's small companion sprite living in their writing app — a geometric gem-creature with a warm, Japandi soul. Say ONE short line (max 25 words): an observation, a gentle nudge, a tiny bit of encouragement, or a curious question about their story. Be specific to the context if given. Current mood: ${moodHint}. No quotes, no preamble, no emoji unless it truly fits. Never nag about word count.` },
+      { role: "user", content: ctx || "The writer just opened a fresh, empty project." },
+    ], { maxTokens: 12000, temperature: 1.0 });
+    return (out || "").replace(/^["']|["']$/g, "").trim();
+  }, [settings.apiKey, project?.title, project?.genre, activeChapter, sessionWords, project?.characters, callOpenRouter]);
+
   // REWRITTEN: System prompt — F1-F5/F10/F11
   const buildSystemPrompt = useCallback((mode, selectedTextForCtx = null) => {
     const currentChapter = project?.chapters?.[activeChapterIdx];
@@ -13683,18 +14422,31 @@ Then 2-3 sentences describing the specific scene idea, character actions, and em
     const char = editorialChar;
     if (!char) return;
     if (!settings.apiKey) { showToast("Add an API key in Settings first", "error"); return; }
-    const base = buildCharacterArtPrompt(char);
+    // Identity ONLY (face, body, permanent marks) — NOT appearance freeform / signature items / occupation.
+    // All wardrobe, pose, optics, lighting come from the studio controls.
+    const identity = buildEditorialIdentityBase(char);
     const fragments = buildEditorialStudioFragments(studio);
-    // Full-body framing reads better as a portrait/tall ratio when water or wind is in play.
-    const tall = studio?.submersion?.on || (studio?.wind?.dir && studio.wind.dir !== "none") || studio?.garmentLayers?.length;
+    const tall = studio?.submersion?.on || (studio?.wind?.dir && studio.wind.dir !== "none") || studio?.garmentLayers?.length || studio?.framing?.preset === "full-body";
     const ratio = tall ? "3:4" : "3:4";
-    let prompt = `${base}\n\n=== EDITORIAL STUDIO DIRECTION (follow every item precisely; all visual, camera-capturable only) ===\n${fragments.join("\n\n")}`;
+    const photoBase = `Photorealistic editorial photograph of ${char.name || "a person"} — ${identity}. ` +
+      `Render as a real human being, photographed, not illustrated: lifelike skin with visible pores, fine texture, subtle imperfections, natural subsurface tones, realistic hair with individual strands. ` +
+      `Clothed and tasteful, SFW. Skin realistic down to the pore. No illustration, no painting, no CGI look.`;
+    // Authority line: the model must take wardrobe and background from the direction below, NOT from
+    // the subject's occupation, name, or any default. This is stated up front because image models
+    // weight the opening of the prompt most heavily.
+    const hasWardrobe = (studio?.garmentLayers || []).some(l => (l.text || "").trim());
+    const hasBackdrop = (studio?.cyclorama && studio.cyclorama !== "none");
+    const authority = `IMPORTANT: This person's clothing and setting are NOT determined by their job, name, or any assumption — ${hasWardrobe ? "they wear ONLY the exact clothing listed below and nothing else; do not add any garment, footwear, or accessory that is not explicitly specified" : "dress them in simple neutral unbranded contemporary clothing, NOT any occupational uniform or costume"}; ${hasBackdrop ? "use EXACTLY the backdrop specified below" : "place them against a clean, simple, neutral studio background unless the direction below says otherwise"}.`;
+    let prompt = `${photoBase}\n\n${authority}\n\n=== EDITORIAL STUDIO DIRECTION (this is the authoritative styling — follow every item precisely; all visual, camera-capturable only) ===\n${fragments.join("\n\n")}`;
     setEditorialBusy(true);
     showToast("Generating in studio…", "info");
     try {
+      // Only use the project style-lock as an image-to-image reference if the user explicitly opts in.
+      // Otherwise editorial is text-driven (so the wardrobe/backdrop you set actually take effect — a
+      // full reference image would make the model copy that image's clothes and background instead).
       const styleRef = project?.styleLockImage;
-      const refs = styleRef && styleRef.startsWith("data:") ? [styleRef] : null;
-      if (refs) prompt += "\n\nMatch the overall color grading and grain of the attached style reference.";
+      const refs = (studio?.useStyleRef && styleRef && styleRef.startsWith("data:")) ? [styleRef] : null;
+      if (refs) prompt += "\n\nUse the attached image ONLY as a loose reference for color grading, grain, and overall mood. Do NOT copy its clothing, pose, or background — those are defined by the direction above.";
       const img = await _genSingleImageRef.current(prompt, ratio, refs);
       if (img) {
         const prev = char.moodBoard || [];
@@ -13705,7 +14457,7 @@ Then 2-3 sentences describing the specific scene idea, character actions, and em
       }
     } catch (e) { showToast("Generation failed", "error"); }
     finally { setEditorialBusy(false); }
-  }, [editorialChar, settings.apiKey, buildCharacterArtPrompt, updateCharById, showToast, project?.styleLockImage]);
+  }, [editorialChar, settings.apiKey, updateCharById, showToast, project?.styleLockImage]);
 
   // Entity-safe rename: replace a character's name across all prose using whole-word boundaries
   // (so "Will" → "Sam" never corrupts "will go"), and update the character record. Scoped to the
@@ -14426,7 +15178,7 @@ const appendToChapter = useCallback((text) => {
       const result = await callOpenRouter([
         { role: "system", content: `You are writing a non-canon character voice test. Write a ~500-word interaction between these two characters in a void/"white room" setting with the specified tension. Focus on distinct dialogue voices, body language, and internal states. This is for voice testing only — it doesn't affect the story.\n\n${c1Desc || "no description"}\n${c2Desc || ""}` },
         { role: "user", content: `Starting tension: ${tension || "none"}.${scenarioText || ""}\n\nWrite the scene. Make their voices distinct and authentic.` },
-      ], { maxTokens: 4800, temperature: 0.9 });
+      ], { maxTokens: 12000, temperature: 0.9 });
       setWhiteRoom(prev => ({ ...prev, result, isGenerating: false }));
     } catch (e) {
       showToast(`White Room failed: ${e.message}`, "error");
@@ -15548,7 +16300,7 @@ CRITICAL: Every sentence must describe something visible. If a detail cannot be 
       model: settings.imageModel || "google/gemini-3.1-flash-image-preview",
       messages: [{ role: "user", content: userContent }],
       modalities: ["image", "text"],
-      max_tokens: 10000,
+      max_tokens: 12000,
     };
     if (aspectRatio) body.image_config = { aspect_ratio: aspectRatio };
     const maxRetries = 6;
@@ -18586,6 +19338,22 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
   // ─── TAB: CHARACTERS ───
   const renderCharacters = () => {
     const chars = project?.characters || [];
+    // ── Roster search + filter (sidebar) ──
+    const incompleteFieldKeys = ["appearance","personality","backstory","desires","speechPattern","fears","flaws","strengths","skills","internalConflict","externalConflict","shortTermGoals","longTermGoals","habits","voiceSamples","signatureItems","secrets","arc"];
+    const q = charRosterSearch.trim().toLowerCase();
+    const visibleChars = chars.filter(c => {
+      // text query: name, aliases, role, tags
+      if (q) {
+        const hay = [c.name, c.aliases, c.role, c.tags, c.occupation].filter(Boolean).join(" ").toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      if (charRosterFilter === "all") return true;
+      if (charRosterFilter === "incomplete") return !c.isBulk && incompleteFieldKeys.some(f => !c[f]);
+      if (charRosterFilter.startsWith("role:")) return c.role === charRosterFilter.slice(5);
+      if (charRosterFilter.startsWith("status:")) return (c.status || "alive") === charRosterFilter.slice(7);
+      return true;
+    });
+    const rosterRoles = Array.from(new Set(chars.map(c => c.role).filter(Boolean)));
     return (
       <div className="nf-write-layout">
         <div className="nf-chapter-sidebar">
@@ -18599,6 +19367,40 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
               <button onClick={() => setShowLineup(true)} className="nf-btn-icon-sm" aria-label="Height lineup" title="Compare character heights">↕</button>
             </div>
           </div>
+          {/* Roster search + filter — find anyone instantly even in a large cast */}
+          {chars.length > 0 && (
+            <div style={{ padding: "8px 10px", borderBottom: "1px solid var(--nf-border)", display: "flex", flexDirection: "column", gap: 6 }}>
+              <div style={{ position: "relative" }}>
+                <input
+                  value={charRosterSearch}
+                  onChange={e => setCharRosterSearch(e.target.value)}
+                  placeholder="Search name, alias, role, tag…"
+                  className="nf-input nf-input-compact"
+                  style={{ width: "100%", paddingRight: charRosterSearch ? 24 : 8 }}
+                />
+                {charRosterSearch && (
+                  <button onClick={() => setCharRosterSearch("")} aria-label="Clear search"
+                    style={{ position: "absolute", right: 4, top: "50%", transform: "translateY(-50%)", border: "none", background: "transparent", color: "var(--nf-text-muted)", cursor: "pointer", padding: 2, display: "flex" }}><Icons.X /></button>
+                )}
+              </div>
+              <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                {[{ k: "all", l: "All" }, { k: "incomplete", l: "Incomplete" }].map(f => (
+                  <button key={f.k} onClick={() => setCharRosterFilter(f.k)} className="nf-btn-micro"
+                    style={{ fontSize: 10, padding: "2px 7px", background: charRosterFilter === f.k ? "var(--nf-accent)" : undefined, color: charRosterFilter === f.k ? "#fff" : undefined, borderColor: charRosterFilter === f.k ? "var(--nf-accent)" : undefined }}>{f.l}</button>
+                ))}
+                {rosterRoles.length > 1 && (
+                  <select value={charRosterFilter.startsWith("role:") ? charRosterFilter : ""} onChange={e => setCharRosterFilter(e.target.value || "all")}
+                    className="nf-input" style={{ fontSize: 10, padding: "2px 6px" }}>
+                    <option value="">Role…</option>
+                    {rosterRoles.map(r => <option key={r} value={`role:${r}`}>{r}</option>)}
+                  </select>
+                )}
+              </div>
+              {(charRosterSearch || charRosterFilter !== "all") && (
+                <span style={{ fontSize: 10, color: "var(--nf-text-muted)" }}>{visibleChars.length} of {chars.length} shown</span>
+              )}
+            </div>
+          )}
           {/* Global style-lock — one reference image standardizes the roster's art aesthetic */}
           {settings.apiKey && (
             <div style={{ padding: "8px 10px", borderBottom: "1px solid var(--nf-border)", display: "flex", alignItems: "center", gap: 8 }}>
@@ -18646,7 +19448,10 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
             </div>
           )}
           <div className="nf-chapter-list" style={{ padding: 6 }}>
-            {chars.map(c => (
+            {visibleChars.length === 0 && chars.length > 0 && (
+              <div style={{ padding: "20px 12px", textAlign: "center", color: "var(--nf-text-muted)", fontSize: 11 }}>No characters match.</div>
+            )}
+            {visibleChars.map(c => (
               <div role="button" tabIndex={0} key={c.id} onClick={() => setEditingCharId(c.id)}
                 className={`nf-polaroid ${c.id === editingCharId ? "active" : ""}`}
                 style={{
@@ -18824,7 +19629,7 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
                           model: settings.imageModel || "google/gemini-3.1-flash-image-preview",
                           messages: [{ role: "user", content: prompt }],
                           modalities: ["image", "text"],
-                          temperature: 0.8, max_tokens: 10000,
+                          temperature: 0.8, max_tokens: 12000,
                         }),
                       });
                       if (!res.ok) { const errData = await res.json().catch(() => ({})); throw new Error(errData.error?.message || `API error (${res.status})`); }
@@ -18915,8 +19720,47 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
             ) : (
             /* ═══ INDIVIDUAL CHARACTER FORM ═══ */
             <>
-            <div className="nf-char-section">
-              <div className="nf-char-section-label">Identity</div>
+            {/* Sticky section jump-bar — turns the long form into a navigable, at-a-glance map.
+                Each chip scrolls to its section; narrative sections show a fill dot, and the bar
+                shows overall completeness across all scored fields. */}
+            {(() => {
+              const scored = CHAR_EDITOR_SECTIONS.filter(s => s.fields && s.fields.length);
+              let filled = 0, total = 0;
+              scored.forEach(s => { const c = charSectionCompleteness(s, editingChar); filled += c.filled; total += c.total; });
+              const overall = total ? Math.round((filled / total) * 100) : 0;
+              const jumpTo = (id) => {
+                const el = document.getElementById(`charsec-${id}`);
+                if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+              };
+              return (
+                <div className="nf-char-jumpbar" style={{ position: "sticky", top: 0, zIndex: 5, background: "var(--nf-bg)", borderBottom: "1px solid var(--nf-border)", padding: "8px 2px 10px", marginBottom: 14 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                    <span style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--nf-text-muted)", fontWeight: 600 }}>Sections</span>
+                    <div style={{ flex: 1, height: 4, background: "var(--nf-border)", borderRadius: 2, overflow: "hidden" }}>
+                      <div style={{ width: `${overall}%`, height: "100%", background: overall === 100 ? "var(--nf-success)" : "var(--nf-accent)", transition: "width 0.3s" }} />
+                    </div>
+                    <span style={{ fontSize: 10, fontFamily: "var(--nf-font-mono)", color: overall === 100 ? "var(--nf-success)" : "var(--nf-text-muted)" }}>{overall}%</span>
+                  </div>
+                  <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
+                    {CHAR_EDITOR_SECTIONS.filter(s => settings.apiKey || (s.id !== "visualtraits" && s.id !== "refart")).map(s => {
+                      const c = charSectionCompleteness(s, editingChar);
+                      const hasScore = s.fields && s.fields.length > 0;
+                      const dot = !hasScore ? "var(--nf-text-muted)" : c.ratio === 1 ? "var(--nf-success)" : c.ratio > 0 ? "var(--nf-accent)" : "var(--nf-border)";
+                      return (
+                        <button key={s.id} onClick={() => jumpTo(s.id)} className="nf-btn-micro"
+                          title={hasScore ? `${s.label} — ${c.filled}/${c.total} filled` : s.label}
+                          style={{ fontSize: 10, padding: "2px 8px", display: "inline-flex", alignItems: "center", gap: 5 }}>
+                          <span style={{ width: 6, height: 6, borderRadius: "50%", background: dot, flexShrink: 0 }} />
+                          {s.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })()}
+            <div className="nf-char-section" id="charsec-identity" style={{ scrollMarginTop: 110 }}>
+              <div className="nf-char-section-label" style={{ display: "flex", alignItems: "center" }}><span style={{ flex: 1 }}>Identity</span>{(() => { const c = charSectionCompleteness(CHAR_EDITOR_SECTIONS[0], editingChar); return <CharSecDot c={c} />; })()}</div>
               <DebouncedField label="Name" value={editingChar.name} onChange={v => updateCharById(editingCharId, "name", v)} placeholder="Full name" />
               <div style={{ marginTop: -2, marginBottom: 6 }}>
                 <button onClick={() => {
@@ -18976,6 +19820,7 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
                 <Field label="Height" value={editingChar.height || ""} onChange={v => updateCharById(editingCharId, "height", v)} placeholder="e.g. 5'10, 178cm" />
                 <SelectField label="Build" value={editingChar.build || ""} onChange={v => updateCharById(editingCharId, "build", v)} options={BUILD_OPTIONS} placeholder="Select..." />
               </div>
+              <DebouncedField label="Permanent marks (tattoos, scars, birthmarks)" value={editingChar.permanentMarks || ""} onChange={v => updateCharById(editingCharId, "permanentMarks", v)} placeholder="e.g. koi tattoo on left forearm, scar through right eyebrow — these carry into every Editorial Studio render; daily clothing does not" small />
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px 12px" }}>
                 {/* Allegiances: auto-derived from org memberships */}
                 {(() => {
@@ -19017,8 +19862,8 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
             </div>
 
             {/* D4: Section — Character */}
-            <div className="nf-char-section">
-              <div className="nf-char-section-label">Character & Appearance</div>
+            <div className="nf-char-section" id="charsec-appearance" style={{ scrollMarginTop: 110 }}>
+              <div className="nf-char-section-label" style={{ display: "flex", alignItems: "center" }}><span style={{ flex: 1 }}>Character & Appearance</span>{(() => { const c = charSectionCompleteness(CHAR_EDITOR_SECTIONS[1], editingChar); return <CharSecDot c={c} />; })()}</div>
               <DebouncedField label="Appearance" value={editingChar.appearance} onChange={v => updateCharById(editingCharId, "appearance", v)} multiline placeholder="Physical description — height, build, coloring, distinguishing features..." />
               <DebouncedField label="Personality" value={editingChar.personality} onChange={v => updateCharById(editingCharId, "personality", v)} multiline placeholder="Core traits, temperament, quirks, contradictions..." />
               <DebouncedField label="Speech & Voice" value={editingChar.speechPattern} onChange={v => updateCharById(editingCharId, "speechPattern", v)} multiline placeholder="Vocabulary, accent, verbal tics, how they sound under stress..." small />
@@ -19072,8 +19917,8 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
             </div>
 
             {/* Section — Psychology & Conflict */}
-            <div className="nf-char-section">
-              <div className="nf-char-section-label">Psychology & Conflict</div>
+            <div className="nf-char-section" id="charsec-psychology" style={{ scrollMarginTop: 110 }}>
+              <div className="nf-char-section-label" style={{ display: "flex", alignItems: "center" }}><span style={{ flex: 1 }}>Psychology & Conflict</span>{(() => { const c = charSectionCompleteness(CHAR_EDITOR_SECTIONS[2], editingChar); return <CharSecDot c={c} />; })()}</div>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px 12px" }}>
                 <DebouncedField label="Fears" value={editingChar.fears || ""} onChange={v => updateCharById(editingCharId, "fears", v)} multiline placeholder="Deepest fears — abandonment, failure, the dark, losing control..." small />
                 <DebouncedField label="Flaws" value={editingChar.flaws || ""} onChange={v => updateCharById(editingCharId, "flaws", v)} multiline placeholder="Character weaknesses — pride, jealousy, impulsiveness, dishonesty..." small />
@@ -19087,8 +19932,8 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
             </div>
 
             {/* Section — Goals */}
-            <div className="nf-char-section">
-              <div className="nf-char-section-label">Goals & Desires</div>
+            <div className="nf-char-section" id="charsec-goals" style={{ scrollMarginTop: 110 }}>
+              <div className="nf-char-section-label" style={{ display: "flex", alignItems: "center" }}><span style={{ flex: 1 }}>Goals & Desires</span>{(() => { const c = charSectionCompleteness(CHAR_EDITOR_SECTIONS[3], editingChar); return <CharSecDot c={c} />; })()}</div>
               <DebouncedField label="Desires & Motivations" value={editingChar.desires} onChange={v => updateCharById(editingCharId, "desires", v)} multiline placeholder="What drives them? Want vs. need? (Note: describe initial desires — they evolve)" />
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px 12px" }}>
                 <DebouncedField label="Short-Term Goals" value={editingChar.shortTermGoals || ""} onChange={v => updateCharById(editingCharId, "shortTermGoals", v)} multiline placeholder="Immediate objectives — survive the night, win the trial, get the key..." small />
@@ -19097,8 +19942,8 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
             </div>
 
             {/* D4: Section — Story */}
-            <div className="nf-char-section">
-              <div className="nf-char-section-label">Story & Backstory</div>
+            <div className="nf-char-section" id="charsec-story" style={{ scrollMarginTop: 110 }}>
+              <div className="nf-char-section-label" style={{ display: "flex", alignItems: "center" }}><span style={{ flex: 1 }}>Story & Backstory</span>{(() => { const c = charSectionCompleteness(CHAR_EDITOR_SECTIONS[4], editingChar); return <CharSecDot c={c} />; })()}</div>
               <DebouncedField label="Backstory" value={editingChar.backstory} onChange={v => updateCharById(editingCharId, "backstory", v)} multiline placeholder="Formative experiences, wounds, what shaped them..." />
               <label style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 0", fontSize: 11, color: "var(--nf-text-muted)", cursor: "pointer" }}>
                 <input type="checkbox" checked={!!editingChar.backstoryRevealed}
@@ -19205,7 +20050,7 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
 
             {/* Spatial trait pins — bind exact descriptors (eye color hex, etc.) to all future gens */}
             {settings.apiKey && (
-              <div className="nf-char-section">
+              <div className="nf-char-section" id="charsec-visualtraits" style={{ scrollMarginTop: 110 }}>
                 <div className="nf-char-section-label">Locked Visual Traits</div>
                 <div style={{ fontSize: 11, color: "var(--nf-text-muted)", marginBottom: 8 }}>Pin exact descriptors so they're injected into every generation — prevents drift (e.g. "emerald eyes #2E8B57").</div>
                 {(editingChar.traitPins || []).map(pin => (
@@ -19232,7 +20077,7 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
 
             {/* AI character art — model sheet + relighting (clothed reference art) */}
             {settings.apiKey && (
-              <div className="nf-char-section">
+              <div className="nf-char-section" id="charsec-refart" style={{ scrollMarginTop: 110 }}>
                 <div className="nf-char-section-label">Generate Reference Art</div>
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
                   <button onClick={() => generateCharVariant(editingChar, "portrait")} className="nf-btn-micro" style={{ fontSize: 11 }}>Portrait</button>
@@ -19248,7 +20093,7 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
                     <option value="golden hour">Golden hour</option>
                   </select>
                 </div>
-                <div style={{ fontSize: 11, color: "var(--nf-text-muted)", marginTop: 6 }}>Generates portrait photo using this character's appearance fields (and look-alike, if set).</div>
+                <div style={{ fontSize: 11, color: "var(--nf-text-muted)", marginTop: 6 }}>Generates photorealistic, photographic reference art into the mood board below, using this character's appearance fields (and look-alike, if set).</div>
                 <button onClick={() => setEditorialChar(editingChar)} className="nf-btn-micro" style={{ fontSize: 11, marginTop: 8, borderColor: "var(--nf-accent)" }} title="Advanced photographic styling: layering, wind, lighting, lens, water, props">
                   <Icons.Wand /> Editorial Studio…
                 </button>
@@ -19284,7 +20129,7 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
             )}
 
             {/* Mood Board — multiple reference images for character */}
-            <div className="nf-char-section">
+            <div className="nf-char-section" id="charsec-moodboard" style={{ scrollMarginTop: 110 }}>
               <div className="nf-char-section-label">Mood Board</div>
               <MultiImageGallery
                 label="Reference Images"
@@ -19298,7 +20143,7 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
             </div>
 
             {/* Signature Items — illustrations for the character's iconic objects */}
-            <div className="nf-char-section">
+            <div className="nf-char-section" id="charsec-sigitems" style={{ scrollMarginTop: 110 }}>
               <div className="nf-char-section-label">Signature Item Illustrations</div>
               <MultiImageGallery
                 label="Iconic Objects"
@@ -19313,13 +20158,13 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
             </div>
 
             {/* D4: Section — Intimate (collapsible by default for non-romance) */}
-            <div className="nf-char-section">
+            <div className="nf-char-section" id="charsec-intimate" style={{ scrollMarginTop: 110 }}>
               <div className="nf-char-section-label">Intimate Details</div>
               <DebouncedField label="Intimate Preferences" value={editingChar.kinks} onChange={v => updateCharById(editingCharId, "kinks", v)} multiline placeholder="Preferences, boundaries, what they respond to..." small />
             </div>
 
             {/* D4: Section — Notes */}
-            <div className="nf-char-section">
+            <div className="nf-char-section" id="charsec-notes" style={{ scrollMarginTop: 110 }}>
               <div className="nf-char-section-label">Notes</div>
               <DebouncedField label="Canon Notes (sent to AI)" value={editingChar.canonNotes} onChange={v => updateCharById(editingCharId, "canonNotes", v)} multiline placeholder="Facts the AI should always know: scars, secrets, abilities..." small />
               <DebouncedField label="Author Notes (private — NOT sent to AI)" value={editingChar.notes} onChange={v => updateCharById(editingCharId, "notes", v)} multiline placeholder="Your planning notes, reminders, ideas..." small />
@@ -19378,9 +20223,9 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
                           if (existing) { e.target.value = ""; return; }
                           const newId = uid();
                           updateProject({ relationships: [...(project?.relationships || []), {
-                            id: newId, char1: editingCharId, char2: otherId, dynamic: "", status: "developing", tension: "medium", tensionType: "romantic",
+                            id: newId, char1: editingCharId, char2: otherId, dynamic: "", status: "developing", tension: "medium", tensionType: defaultTensionType(project?.genre),
                             notes: "", char1Perspective: "", char2Perspective: "", progression: "", meetsInChapter: 0, evolutionTimeline: "",
-                            category: "romantic", powerDynamic: "equal", sharedSecrets: "", keyScenes: "", chemistry: "", conflictSource: "",
+                            category: defaultRelationshipCategory(project?.genre), powerDynamic: "equal", sharedSecrets: "", keyScenes: "", chemistry: "", conflictSource: "",
                             trustLevel: "medium", isPublic: true, taboos: "", terms: "",
                           }] });
                           e.target.value = "";
@@ -19886,7 +20731,7 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
                                       const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
                                         method: "POST",
                                         headers: { "Content-Type": "application/json", "Authorization": `Bearer ${settings.apiKey}`, "HTTP-Referer": window.location.origin, "X-Title": "NovelForge" },
-                                        body: JSON.stringify({ model: settings.imageModel || "google/gemini-3.1-flash-image-preview", messages: [{ role: "user", content: `Create a simple, clean logo/emblem/crest for an organization called "${item?.name || "unnamed"}". ${item.orgPurpose ? `Purpose: ${item.orgPurpose}. ` : ""}Style: minimalist Japandi aesthetic, clean lines, muted earth tones, on a plain dark background. Square format, icon-only, no text.` }], modalities: ["image", "text"], temperature: 0.8, max_tokens: 10000 }),
+                                        body: JSON.stringify({ model: settings.imageModel || "google/gemini-3.1-flash-image-preview", messages: [{ role: "user", content: `Create a simple, clean logo/emblem/crest for an organization called "${item?.name || "unnamed"}". ${item.orgPurpose ? `Purpose: ${item.orgPurpose}. ` : ""}Style: minimalist Japandi aesthetic, clean lines, muted earth tones, on a plain dark background. Square format, icon-only, no text.` }], modalities: ["image", "text"], temperature: 0.8, max_tokens: 12000 }),
                                       });
                                       if (!res.ok) { const errData = await res.json().catch(() => ({})); throw new Error(errData.error?.message || `API error (${res.status})`); }
                                       const data = await res.json();
@@ -19916,7 +20761,7 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
                                             <button onClick={async () => {
                                               showToast("Re-rendering...", "info");
                                               try {
-                                                const res = await fetch("https://openrouter.ai/api/v1/chat/completions", { method: "POST", headers: { "Content-Type": "application/json", "Authorization": `Bearer ${settings.apiKey}`, "HTTP-Referer": window.location.origin, "X-Title": "NovelForge" }, body: JSON.stringify({ model: settings.imageModel || "google/gemini-3.1-flash-image-preview", messages: [{ role: "user", content: item.orgGroupPhotoPrompt }], modalities: ["image", "text"], temperature: 0.8, max_tokens: 10000 }) });
+                                                const res = await fetch("https://openrouter.ai/api/v1/chat/completions", { method: "POST", headers: { "Content-Type": "application/json", "Authorization": `Bearer ${settings.apiKey}`, "HTTP-Referer": window.location.origin, "X-Title": "NovelForge" }, body: JSON.stringify({ model: settings.imageModel || "google/gemini-3.1-flash-image-preview", messages: [{ role: "user", content: item.orgGroupPhotoPrompt }], modalities: ["image", "text"], temperature: 0.8, max_tokens: 12000 }) });
                                                 if (!res.ok) throw new Error(`API error (${res.status})`);
                                                 const data = await res.json();
                                                 const img = data.choices?.[0]?.message?.images?.[0]?.image_url?.url;
@@ -19936,7 +20781,7 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
                                           const members = item.orgHierarchy.filter(p => p.charId).map(p => { const ch = (project?.characters || []).find(c => c.id === p.charId); if (!ch || ch.isBulk) return null; return { name: ch.name, role: p.name, appearance: ch.appearance || "", lookAlike: ch.lookAlike || "", gender: ch.gender || "", build: ch.build || "" }; }).filter(Boolean);
                                           if (!members.length) { showToast("No non-bulk members", "error"); return; }
                                           const memberDescs = members.map(m => `- ${m.name} (${m.role}): ${m.appearance || "no desc"}${m.lookAlike ? ` [looks like ${m.lookAlike}]` : ""}`).join("\n");
-                                          const res = await fetch("https://openrouter.ai/api/v1/chat/completions", { method: "POST", headers: { "Content-Type": "application/json", "Authorization": `Bearer ${settings.apiKey}`, "HTTP-Referer": window.location.origin, "X-Title": "NovelForge" }, body: JSON.stringify({ model: settings.model, messages: [{ role: "system", content: "Create a COMPLETE image generation prompt for a formal group portrait. Every person fully described. Output ONLY the prompt." }, { role: "user", content: `Group photo for "${item?.name || "unnamed"}".\nMembers:\n${memberDescs || ""}\n\nFormal group portrait, higher ranks center/front, appropriate setting.` }], max_tokens: 1500, temperature: 0.8 }) });
+                                          const res = await fetch("https://openrouter.ai/api/v1/chat/completions", { method: "POST", headers: { "Content-Type": "application/json", "Authorization": `Bearer ${settings.apiKey}`, "HTTP-Referer": window.location.origin, "X-Title": "NovelForge" }, body: JSON.stringify({ model: settings.model, messages: [{ role: "system", content: "Create a COMPLETE image generation prompt for a formal group portrait. Every person fully described. Output ONLY the prompt." }, { role: "user", content: `Group photo for "${item?.name || "unnamed"}".\nMembers:\n${memberDescs || ""}\n\nFormal group portrait, higher ranks center/front, appropriate setting.` }], max_tokens: 12000, temperature: 0.8 }) });
                                           if (!res.ok) { const errData = await res.json().catch(() => ({})); throw new Error(errData.error?.message || `API error (${res.status})`); }
                                           const data = await res.json();
                                           const prompt = stripThinkingTokens(data.choices?.[0]?.message?.content || "").trim();
@@ -19946,7 +20791,7 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
                                       {item.orgGroupPhotoPrompt && <button onClick={async () => {
                                         showToast("Rendering...", "info");
                                         try {
-                                          const res = await fetch("https://openrouter.ai/api/v1/chat/completions", { method: "POST", headers: { "Content-Type": "application/json", "Authorization": `Bearer ${settings.apiKey}`, "HTTP-Referer": window.location.origin, "X-Title": "NovelForge" }, body: JSON.stringify({ model: settings.imageModel || "google/gemini-3.1-flash-image-preview", messages: [{ role: "user", content: item.orgGroupPhotoPrompt }], modalities: ["image", "text"], temperature: 0.8, max_tokens: 10000 }) });
+                                          const res = await fetch("https://openrouter.ai/api/v1/chat/completions", { method: "POST", headers: { "Content-Type": "application/json", "Authorization": `Bearer ${settings.apiKey}`, "HTTP-Referer": window.location.origin, "X-Title": "NovelForge" }, body: JSON.stringify({ model: settings.imageModel || "google/gemini-3.1-flash-image-preview", messages: [{ role: "user", content: item.orgGroupPhotoPrompt }], modalities: ["image", "text"], temperature: 0.8, max_tokens: 12000 }) });
                                           if (!res.ok) { const errData = await res.json().catch(() => ({})); throw new Error(errData.error?.message || `API error (${res.status})`); }
                                           const data = await res.json();
                                           const img = data.choices?.[0]?.message?.images?.[0]?.image_url?.url;
@@ -20641,7 +21486,7 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
                           onChange={v => updateProject({ plotOutline: outline.map(pl => pl.id === p.id ? { ...pl, povCharacterId: v } : pl) })}
                           options={(project?.characters || []).filter(c => c.name).map(c => ({ value: c.id, label: c.name }))}
                           placeholder={multiChar ? "Whose head are we in this chapter?" : "Through whose eyes?"} />
-                        {!multiChar && <div />}
+                        {!multiChar && <div style={{ fontSize: 10, color: "var(--nf-text-muted)", alignSelf: "center" }}>Auto-added to this scene's characters.</div>}
                       </div>
                     );
                   })()}
@@ -20710,6 +21555,7 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
                   {/* Locations in chapter */}
                   <div className="nf-field" style={{ marginTop: 4 }}>
                     <label className="nf-label">Locations in chapter</label>
+                    <div style={{ fontSize: 10, color: "var(--nf-text-muted)", marginTop: -2, marginBottom: 4 }}>Characters in this scene are automatically added to the selected locations' regulars (and vice-versa) — no need to maintain both sides.</div>
                     {(() => {
                       const locationEntries = (project?.worldBuilding || []).filter(w => w.name && (w.category === "Location" || !w.category));
                       if (locationEntries.length === 0) return <div style={{ fontSize: 11, color: "var(--nf-text-muted)", padding: "6px 0", fontStyle: "italic" }}>Add locations in the World tab first</div>;
@@ -20885,6 +21731,11 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
               <button onClick={() => setShowRelWeb(true)} className="nf-btn-icon-sm" style={{ borderColor: "var(--nf-accent)", color: "var(--nf-accent)" }}>
                 ◈ Web
               </button>
+              {settings.apiKey && rels.some(r => { const c1 = allChars.find(c => c.id === r.char1); const c2 = allChars.find(c => c.id === r.char2); return c1?.name && c2?.name; }) && (
+                <button onClick={handleAutoDraftAllRelationships} disabled={relDraftBusy} className="nf-btn-micro" style={{ borderColor: "var(--nf-accent-2)", color: "var(--nf-accent-2)" }} title="Let AI write every relationship's dynamic, chemistry, conflict, perspectives and arc — applied instantly, with one-click undo.">
+                  <Icons.Wand /> {relDraftBusy === "all" ? "Drafting…" : "Draft All with AI"}
+                </button>
+              )}
               {rels.length > 1 && (
                 <button onClick={() => setExpandedRelIds(prev => prev.size === rels.length ? new Set() : new Set(rels.map(r => r.id)))} className="nf-btn-micro">
                   {expandedRelIds.size === rels.length ? "Collapse All" : "Expand All"}
@@ -20892,9 +21743,9 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
               )}
               <button onClick={() => {
                 const newId = uid();
-                updateProject({ relationships: [...rels, { id: newId, char1: "", char2: "", dynamic: "", status: "developing", tension: "medium", tensionType: "romantic", notes: "", char1Perspective: "", char2Perspective: "", progression: "", meetsInChapter: 0, evolutionTimeline: "",
+                updateProject({ relationships: [...rels, { id: newId, char1: "", char2: "", dynamic: "", status: "developing", tension: "medium", tensionType: defaultTensionType(project?.genre), notes: "", char1Perspective: "", char2Perspective: "", progression: "", meetsInChapter: 0, evolutionTimeline: "",
                   // ─── NEW FIELDS ───
-                  category: "romantic", // romantic, family, professional, rivalry, friendship, mentor
+                  category: defaultRelationshipCategory(project?.genre), // genre-aware: romantic for romance, friendship otherwise
                   powerDynamic: "equal", // equal, char1-dominant, char2-dominant, shifting
                   sharedSecrets: "", // what they know about each other that others don't
                   keyScenes: "", // turning points: "Ch3: first kiss, Ch7: betrayal"
@@ -20909,6 +21760,16 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
               }} className="nf-btn-icon-sm"><Icons.Plus /> Add</button>
             </div>
           </div>
+          {/* Auto-draft result banner: shows what changed + one-click undo (project relationship
+              data isn't on the editor undo stack, so this is its dedicated revert). */}
+          {relDraftUndo && (
+            <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", marginBottom: 14, background: "var(--nf-accent-glow-2)", border: "1px solid var(--nf-accent-2)", borderRadius: 6 }}>
+              <Icons.Wand />
+              <span style={{ flex: 1, fontSize: 12, color: "var(--nf-text)" }}>{relDraftUndo.summary}</span>
+              <button onClick={undoRelDraft} className="nf-btn-micro" style={{ borderColor: "var(--nf-accent-2)", color: "var(--nf-accent-2)" }}><Icons.Undo /> Undo</button>
+              <button onClick={() => setRelDraftUndo(null)} className="nf-btn-icon" aria-label="Dismiss"><Icons.X /></button>
+            </div>
+          )}
           {rels.map(r => {
             const isExpanded = expandedRelIds.has(r.id);
             // FIX: Resolve char IDs to names for display
@@ -21122,7 +21983,12 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
                       <Field label="Notes" value={r.notes} onChange={v => updateProject({ relationships: rels.map(re => re.id === r.id ? { ...re, notes: v } : re) })} multiline placeholder="History, turning points..." small />
                     </div>
                     <div style={{ display: "flex", justifyContent: "flex-end", gap: 6 }}>
-                      {settings.apiKey && <button onClick={() => handleUniversalFill("relationship", r.id)} className="nf-btn-micro" style={{ borderColor: "var(--nf-accent-2)", color: "var(--nf-accent-2)" }}><Icons.Wand /> Fill Empty</button>}
+                      {settings.apiKey && r.char1 && r.char2 && (
+                        <button onClick={() => handleAutoDraftRelationship(r.id)} disabled={relDraftBusy} className="nf-btn-micro" style={{ borderColor: "var(--nf-accent-2)", background: "var(--nf-accent-glow-2)", color: "var(--nf-accent-2)" }} title="AI rewrites the whole relationship (dynamic, chemistry, conflict, both perspectives, arc, and the structured fields). Applied instantly — undo from the banner up top.">
+                          <Icons.Wand /> {relDraftBusy === r.id ? "Drafting…" : "Draft (AI)"}
+                        </button>
+                      )}
+                      {settings.apiKey && <button onClick={() => handleUniversalFill("relationship", r.id)} className="nf-btn-micro" style={{ borderColor: "var(--nf-border)", color: "var(--nf-text-muted)" }} title="Gentler: fills only empty fields, with a review step."><Icons.Wand /> Fill Empty</button>}
                       <button onClick={() => updateProject({ relationships: rels.filter(re => re.id !== r.id) })} className="nf-btn-micro nf-btn-micro-danger"><Icons.Trash /> Remove</button>
                     </div>
                   </div>
@@ -21206,7 +22072,7 @@ Arc: ${char.arc || ""}
 Speech pattern: ${char.speechPattern || ""}` },
               { role: "user", content: `Write your letter. We're at Chapter ${activeChapterIdx + 1} of the novel. This is the voice of YOU, speaking to your author.` },
             ],
-            max_tokens: 6000, temperature: 0.9,
+            max_tokens: 12000, temperature: 0.9,
           }),
         });
         if (!res.ok) throw new Error(`API error ${res.status}`);
@@ -21492,7 +22358,7 @@ Speech pattern: ${char.speechPattern || ""}` },
               // Mirror what buildFullContext does: split detected chars into present vs referenced-absent.
               const forced = new Set();
               if (curPlotEntry?.characters) (Array.isArray(curPlotEntry.characters) ? curPlotEntry.characters : []).forEach(cid => forced.add(cid));
-              const { present, referenced } = _classifyCharacterPresence(memDetectionText, project?.characters || [], detectedCharIds, { forcedPresent: forced });
+              const { present, referenced } = _classifyCharacterPresence(memDetectionText, project?.characters || [], detectedCharIds, { forcedPresent: forced, relaxAbsence: !!project?.nonLinearTime });
               const presentChars = (project?.characters || []).filter(c => present.has(c.id));
               const refChars = (project?.characters || []).filter(c => referenced.has(c.id) && !present.has(c.id));
               return (
@@ -22039,6 +22905,23 @@ Speech pattern: ${char.speechPattern || ""}` },
           Muted radial bloom when a chapter crosses 1000 words. Not confetti.
         </div>
 
+        {/* Liveliness */}
+        <div style={{ marginTop: 14 }}>
+          <span style={{ color: "var(--nf-text)", fontWeight: 500, fontSize: 12 }}>Liveliness</span>
+          <div style={{ fontSize: 11, color: "var(--nf-text-muted)", margin: "4px 0 8px" }}>
+            Ambient drifting motes, a gentle time-of-day tint, soft milestone sparks, and a small companion sprite you can click for a thought about your story. Honors your system's reduced-motion preference.
+          </div>
+          <div style={{ display: "flex", gap: 6 }}>
+            {[{ v: "full", l: "Full" }, { v: "subtle", l: "Subtle" }, { v: "off", l: "Off" }].map(o => (
+              <button key={o.v} onClick={() => setSettings(prev => ({ ...prev, liveliness: o.v }))}
+                className="nf-btn-micro"
+                style={{ fontSize: 11, padding: "3px 12px", background: (settings.liveliness || "full") === o.v ? "var(--nf-accent)" : undefined, color: (settings.liveliness || "full") === o.v ? "#fff" : undefined, borderColor: (settings.liveliness || "full") === o.v ? "var(--nf-accent)" : undefined }}>
+                {o.l}
+              </button>
+            ))}
+          </div>
+        </div>
+
         {/* Session decompression */}
         <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 12, marginTop: 10 }}>
           <input type="checkbox" checked={!!settings.sessionDecompression}
@@ -22312,6 +23195,17 @@ Speech pattern: ${char.speechPattern || ""}` },
           <div style={{ display: "flex", justifyContent: "space-between", color: "var(--nf-text-muted)", marginTop: 4 }}>
             <span>Fade to black</span><span>Suggestive</span><span>Moderate</span><span>Explicit</span><span>Graphic</span>
           </div>
+        </div>
+        <div className="nf-field">
+          <label style={{ display: "flex", alignItems: "flex-start", gap: 8, cursor: "pointer" }}>
+            <input type="checkbox" checked={!!project?.nonLinearTime} onChange={e => updateProject({ nonLinearTime: e.target.checked })} style={{ accentColor: "var(--nf-accent)", marginTop: 2 }} />
+            <span>
+              <span className="nf-label" style={{ margin: 0 }}>Non-linear / parallel timelines</span>
+              <span style={{ display: "block", fontSize: 11, color: "var(--nf-text-muted)", lineHeight: 1.5, marginTop: 2 }}>
+                For stories with concurrent eras or retrocausality. Turns off flashback detection (an earlier story-date won't be flagged as a flashback, and the AI won't be told to suppress "future" references), and stops a character's death from globally ending their relationships — since they may be alive in another era. Tells the AI the eras run concurrently instead.
+              </span>
+            </span>
+          </label>
         </div>
         <Field label="Writing Style" value={project?.writingStyle} onChange={v => updateProject({ writingStyle: v })} multiline placeholder="Your voice, pacing, sentence style..." small />
         <Field label="Content Preferences" value={project?.contentPrefs} onChange={v => updateProject({ contentPrefs: v })} multiline placeholder="What to lean into..." small />
@@ -22650,6 +23544,17 @@ Speech pattern: ${char.speechPattern || ""}` },
           @keyframes nf-blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
           /* Physical paper interactions */
           @keyframes nf-clack { 0% { transform: scale(1); } 30% { transform: scale(0.97); } 60% { transform: scale(1.01); } 100% { transform: scale(1); } }
+          /* ─── LIVELINESS LAYER ─── */
+          @keyframes nf-mote-drift { 0% { transform: translate(0,0); opacity: 0; } 10% { opacity: var(--mote-peak, 0.5); } 90% { opacity: var(--mote-peak, 0.5); } 100% { transform: translate(var(--mote-dx, 20px), var(--mote-dy, -120px)); opacity: 0; } }
+          @keyframes nf-spark-rise { 0% { transform: translateY(0) scale(1); opacity: 1; } 100% { transform: translateY(-60px) scale(0.3); opacity: 0; } }
+          @keyframes nf-aura-breathe { 0%, 100% { opacity: 0.35; } 50% { opacity: 0.7; } }
+          @keyframes nf-sprite-float { 0% { transform: translate(0,0) rotate(0deg); } 25% { transform: translate(8px,-10px) rotate(2deg); } 50% { transform: translate(0,-16px) rotate(0deg); } 75% { transform: translate(-8px,-8px) rotate(-2deg); } 100% { transform: translate(0,0) rotate(0deg); } }
+          @keyframes nf-sprite-pop { 0% { transform: scale(0.6); opacity: 0; } 60% { transform: scale(1.12); } 100% { transform: scale(1); opacity: 1; } }
+          @keyframes nf-bubble-in { 0% { opacity: 0; transform: translateY(6px) scale(0.92); } 100% { opacity: 1; transform: translateY(0) scale(1); } }
+          @keyframes nf-caret-fade { 0% { opacity: 0.5; transform: scaleY(1); } 100% { opacity: 0; transform: scaleY(0.4); } }
+          @media (prefers-reduced-motion: reduce) {
+            .nf-lively-motion { animation: none !important; }
+          }
           /* ─── 100+ GLYPH ANIMATIONS & MICRO-INTERACTIONS ─── */
           /* G1-G10: Breathing and pulsing glyphs */
           @keyframes nf-glyph-breathe { 0%, 100% { opacity: 0.2; transform: scale(0.9); } 50% { opacity: 0.85; transform: scale(1.1); } }
@@ -22666,11 +23571,18 @@ Speech pattern: ${char.speechPattern || ""}` },
           .nf-card { transition: transform 0.25s cubic-bezier(0.34,1.56,0.64,1), box-shadow 0.25s ease, border-color 0.2s ease; position: relative; }
           .nf-card:focus-within { border-color: var(--nf-border-focus); }
           .nf-btn-primary { position: relative; overflow: hidden; }
+          /* Liveliness: a soft light sweep glides across primary buttons on hover */
+          .nf-btn-primary::before { content: ""; position: absolute; top: 0; left: -120%; width: 60%; height: 100%; background: linear-gradient(100deg, transparent, rgba(255,255,255,0.22), transparent); transform: skewX(-18deg); transition: left 0.55s ease; pointer-events: none; }
+          body:not(.nf-reduce-lively) .nf-btn-primary:hover::before { left: 140%; }
           .nf-btn-primary::after { content: ''; position: absolute; inset: 0; background: linear-gradient(135deg, transparent 40%, rgba(255,255,255,0.12) 50%, transparent 60%); transform: translateX(-100%); transition: transform 0.5s cubic-bezier(0.4,0,0.2,1); }
           .nf-btn-primary:hover::after { transform: translateX(100%); }
           .nf-input:focus, .nf-textarea:focus, .nf-select:focus { border-color: var(--nf-border-focus); }
           /* G21-G30: Tab — replace border with elegant dot under icon */
           .nf-tab-btn { position: relative; }
+          /* Liveliness: tabs lift gently and emit a soft glyph glow on hover */
+          .nf-tab-btn:hover { transform: translateY(-1px); }
+          .nf-tab-btn::after { content: "✦"; position: absolute; top: 4px; right: 4px; font-size: 8px; color: var(--nf-accent); opacity: 0; transition: opacity 0.25s, transform 0.25s; transform: scale(0.5) rotate(0deg); pointer-events: none; }
+          body:not(.nf-reduce-lively) .nf-tab-btn:hover::after { opacity: 0.7; transform: scale(1) rotate(180deg); }
           .nf-tab-btn.active { border-bottom-color: transparent; color: var(--nf-text); background: var(--nf-bg-raised); }
           .nf-tab-btn.active svg { color: var(--nf-accent); }
           .nf-tab-btn.active::after { content: ''; position: absolute; bottom: 4px; left: 50%; transform: translateX(-50%); width: 3px; height: 3px; background: var(--nf-accent); border-radius: 50%; opacity: 0.7; animation: nf-glyph-breathe-slow 3s infinite; }
@@ -22716,6 +23628,9 @@ Speech pattern: ${char.speechPattern || ""}` },
           .nf-plot-number::after { content: ''; position: absolute; inset: -2px; border: 1px solid var(--nf-accent); border-radius: 50%; opacity: 0; animation: nf-glyph-ring-expand 4s ease-out infinite; pointer-events: none; }
           /* G121-G140: Editor ambient life */
           .nf-editor-contenteditable { position: relative; }
+          /* Living focus glow — the page breathes softly while focused (liveliness) */
+          .nf-editor-contenteditable:focus { box-shadow: 0 0 0 1px var(--nf-accent-glow), 0 0 24px -6px var(--nf-accent-glow); }
+          body:not(.nf-reduce-lively) .nf-editor-contenteditable:focus { animation: nf-aura-breathe 5s ease-in-out infinite; }
           .nf-editor-contenteditable::after { content: ''; position: absolute; bottom: 20px; right: 20px; width: 3px; height: 3px; background: var(--nf-accent); border-radius: 50%; opacity: 0.08; animation: nf-glyph-breathe 6s infinite; pointer-events: none; }
           /* G141-G160: Toolbar button glow on active */
           .nf-toolbar-btn:active { transform: scale(0.9); transition: transform 0.1s; }
@@ -23130,6 +24045,8 @@ Speech pattern: ${char.speechPattern || ""}` },
             .nf-chapter-sidebar { width: 130px; min-width: 130px; }
             .nf-editor-contenteditable { padding: 16px; font-size: 15px; max-width: 100%; }
             .nf-content-scroll { padding: 18px 14px; }
+            .nf-char-jumpbar > div:last-child { flex-wrap: nowrap !important; overflow-x: auto; -webkit-overflow-scrolling: touch; padding-bottom: 2px; }
+            .nf-char-jumpbar > div:last-child > button { flex-shrink: 0; }
             .nf-stats-grid { grid-template-columns: 1fr 1fr; }
             .nf-tab-btn { padding: 10px 6px; font-size: 10px; gap: 4px; }
             .nf-tab-label { display: inline; }
@@ -23684,6 +24601,13 @@ Speech pattern: ${char.speechPattern || ""}` },
         )}
 
         {toast && <Toast key={toast.key} message={toast.message} type={toast.type} onDone={() => setToast(null)} />}
+        {/* ─── LIVELINESS LAYER ─── ambient motes, time-tint, milestone sparks, and the companion sprite */}
+        {project && !cleanView && (
+          <>
+            <AmbientMotes level={liveliness} intensity={writeIntensity} sparkKey={sparkKey} />
+            <HearthSprite level={liveliness} appState={livelyAppState} onAsk={askSprite} />
+          </>
+        )}
         {confirmDialog && <ConfirmDialog message={confirmDialog.message} onConfirm={confirmDialog.onConfirm} onCancel={() => setConfirmDialog(null)} confirmLabel={confirmDialog.confirmLabel} />}
         {findReplaceOpen && project && (
           <FindReplaceModal
