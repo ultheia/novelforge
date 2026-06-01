@@ -779,6 +779,240 @@ const wordCount = (text) => {
   if (!clean) return 0;
   return clean.split(/\s+/).filter(w => w.length > 0).length;
 };
+// ─── PROSE DENSITY / RHYTHM ANALYSIS (feature: heatmap) ───
+// Classifies prose into dialogue / action / exposition by sentence, so pacing can be visualized.
+// Heuristic, deliberately conservative: dialogue = contains quoted speech; action = short,
+// motion-driven, low subordination; exposition = everything else (description, interiority, summary).
+const _ACTION_VERBS = /\b(ran|run|grabbed|grab|threw|throw|leapt|leapt|jumped|jump|struck|strike|hit|punched|kicked|slammed|spun|whirled|lunged|dashed|sprinted|dodged|ducked|swung|seized|shoved|pushed|pulled|dropped|fell|crashed|burst|charged|fled|chased|snatched|hurled|smashed|clutched|yanked|darted|raced|stumbled|staggered|rushed|swept|drew|fired|shot|stabbed|slashed|gripped|wrenched|flung|tore|broke|kicked|whipped)\b/i;
+const _DIALOGUE_RE = /["“”'']([^"“”]{2,})["“”'']|["“”]/;
+
+const analyzeProseRhythm = (html) => {
+  const plain = _htmlToPlain(html || "");
+  if (!plain) return { dialogue: 0, action: 0, exposition: 0, total: 0, sentences: 0 };
+  // Split into sentences (keep terminators).
+  const sentences = plain.match(/[^.!?]+[.!?]+["'”’)]?|\S[^.!?]*$/g) || [];
+  let dWords = 0, aWords = 0, eWords = 0;
+  for (const s of sentences) {
+    const w = s.trim().split(/\s+/).filter(Boolean).length;
+    if (!w) continue;
+    const hasQuote = /["“”]/.test(s);
+    if (hasQuote) { dWords += w; continue; }
+    // Action: short sentence, contains a motion verb, few commas (low subordination).
+    const commas = (s.match(/,/g) || []).length;
+    const isAction = _ACTION_VERBS.test(s) && w <= 22 && commas <= 2;
+    if (isAction) aWords += w; else eWords += w;
+  }
+  const total = dWords + aWords + eWords;
+  return { dialogue: dWords, action: aWords, exposition: eWords, total, sentences: sentences.length };
+};
+// Sentence-length series for the micro-pacing waveform — each value is a sentence's word count.
+// Short sentences = fast/choppy; long sentences = dense/slow. Visualizing this reveals rhythm.
+const sentenceLengthSeries = (html) => {
+  const plain = _htmlToPlain(html || "");
+  if (!plain) return [];
+  const sentences = plain.match(/[^.!?]+[.!?]+["'”’)]?|\S[^.!?]*$/g) || [];
+  return sentences.map(s => s.trim().split(/\s+/).filter(Boolean).length).filter(n => n > 0);
+};
+
+// Extract only dialogue lines (quoted speech) from prose — powers the dialogue-isolation toggle,
+// which lets a writer read a conversation straight through to judge voice and cadence.
+const extractDialogueLines = (html) => {
+  const plain = _htmlToPlain(html || "");
+  if (!plain) return [];
+  // Match runs of text inside straight or curly double quotes.
+  const matches = plain.match(/["“]([^"“”]+)["”]/g) || [];
+  return matches.map(m => m.replace(/^["“]|["”]$/g, "").trim()).filter(Boolean);
+};
+
+// Sensory lexicons for the sensory-audit overlay — highlights which senses a passage engages so
+// the writer can spot all-visual description and inject sound/smell/touch/taste.
+const _SENSORY_LEXICON = {
+  sight: { color: "#6ea8fe", words: /\b(saw|see|seen|look(?:ed|ing)?|glanc(?:e|ed|ing)|stare?d?|gaze?d?|watch(?:ed|ing)?|bright|dark|dim|gleam(?:ed|ing)?|shadow|color(?:ed|ful)?|glow(?:ed|ing)?|shimmer(?:ed|ing)?|flicker(?:ed|ing)?|vivid|pale|crimson|golden|silver|glint(?:ed|ing)?|blur(?:red|ry)?|sparkl(?:e|ed|ing)|radiant)\b/gi },
+  sound: { color: "#7ee787", words: /\b(heard?|hear(?:ing|s)?|listen(?:ed|ing)?|sound(?:ed|s)?|loud|quiet|silent|silence|whisper(?:ed|ing)?|shout(?:ed|ing)?|echo(?:ed|ing)?|hum(?:med|ming)?|rumbl(?:e|ed|ing)|crackl(?:e|ed|ing)|clang(?:ed|ing)?|murmur(?:ed|ing)?|thud(?:ded|ding)?|rustl(?:e|ed|ing)|creak(?:ed|ing)?|roar(?:ed|ing)?|buzz(?:ed|ing)?|ring(?:ing)?|chime?d?)\b/gi },
+  smell: { color: "#f0a868", words: /\b(smell(?:ed|s|ing)?|scent(?:ed)?|odor|aroma|fragran(?:ce|t)|stench|reek(?:ed|ing)?|stink(?:ing)?|musty|perfum(?:e|ed)|whiff|pungent|acrid|sweet-smelling)\b/gi },
+  touch: { color: "#ff9492", words: /\b(felt|feel(?:ing|s)?|touch(?:ed|ing)?|rough|smooth|soft|hard|warm|cold|cool|hot|wet|dry|damp|sticky|slick|coarse|silky|prickl(?:e|ed|y|ing)|grip(?:ped|ping)?|brush(?:ed|ing)?|caress(?:ed|ing)?|texture|frigid|searing|tender|stiff)\b/gi },
+  taste: { color: "#d2a8ff", words: /\b(taste?d?|tasting|flavor(?:ed)?|sweet|bitter|sour|salty|savory|tang(?:y)?|spicy|bland|delicious|metallic|sip(?:ped|ping)?|swallow(?:ed|ing)?|chew(?:ed|ing)?|tart|sugary)\b/gi },
+};
+
+// Detect contradictions between a character's recorded appearance and what the prose says — e.g.
+// appearance says "black hair" but a chapter says "blonde hair". Returns a list of flags. Heuristic.
+const _HAIR_COLORS = ["black", "brown", "blonde", "blond", "red", "auburn", "ginger", "white", "grey", "gray", "silver", "chestnut", "raven"];
+const _EYE_COLORS = ["blue", "brown", "green", "hazel", "grey", "gray", "amber", "violet", "black"];
+const detectAppearanceMismatches = (character, chapters) => {
+  if (!character?.appearance) return [];
+  const appLower = character.appearance.toLowerCase();
+  const flags = [];
+  const firstName = (character.name || "").trim().split(/\s+/)[0];
+  if (!firstName) return [];
+  const proseAll = (chapters || []).map(c => _htmlToPlain(c.content || "")).join(" ").toLowerCase();
+  const check = (palette, noun) => {
+    const recorded = palette.find(c => new RegExp(`\\b${c}\\b`).test(appLower) && new RegExp(`${c}\\s+${noun}|${noun}[^.]{0,20}${c}`).test(appLower));
+    if (!recorded) return;
+    // Find a conflicting color mentioned near "<noun>" in prose.
+    const proseMatch = proseAll.match(new RegExp(`(\\w+)\\s+${noun}`, "g")) || [];
+    for (const pm of proseMatch) {
+      const word = pm.split(/\s+/)[0];
+      if (palette.includes(word) && word !== recorded && !(recorded === "blond" && word === "blonde") && !(recorded === "blonde" && word === "blond") && !((recorded === "grey" || recorded === "gray") && (word === "grey" || word === "gray"))) {
+        flags.push({ trait: noun, recorded, found: word });
+        break;
+      }
+    }
+  };
+  check(_HAIR_COLORS, "hair");
+  check(_EYE_COLORS, "eyes");
+  return flags;
+};
+
+// Thematic motif tracking — counts motif keyword hits per chapter so theme distribution across the
+// manuscript is visible (where grief concentrates, where betrayal vanishes for chapters, etc.).
+const DEFAULT_MOTIFS = {
+  grief: /\b(grief|grieving|mourn(?:ed|ing|s)?|loss|lost|sorrow|bereave\w*|wept|weep(?:ing)?|tears?|funeral|buried|mourning)\b/gi,
+  betrayal: /\b(betray(?:ed|al|ing|s)?|treachery|treacherous|backstab\w*|deceit|deceiv\w*|traitor|disloyal|double-cross\w*)\b/gi,
+  love: /\b(love|loved|loving|beloved|adore\w*|affection|tenderness|desire|longing|yearn\w*|devotion)\b/gi,
+  power: /\b(power|throne|crown|rule|reign|command|control|dominion|conquer\w*|authority|empire|tyrann\w*)\b/gi,
+  fear: /\b(fear|afraid|terror|dread|horror|panic|terrified|frighten\w*|nightmare|trembl\w*)\b/gi,
+  redemption: /\b(redeem\w*|redemption|atone\w*|forgive\w*|forgiveness|absolv\w*|salvation|second chance)\b/gi,
+  identity: /\b(identity|who (?:i|he|she|they) (?:am|is|are)|true self|belong\w*|mask|disguise|real name)\b/gi,
+};
+const analyzeMotifs = (chapters, motifs = DEFAULT_MOTIFS) => {
+  return (chapters || []).map((ch, i) => {
+    const plain = _htmlToPlain(ch.content || "").toLowerCase();
+    const words = plain.split(/\s+/).filter(Boolean).length || 1;
+    const counts = {};
+    for (const [name, re] of Object.entries(motifs)) {
+      counts[name] = (plain.match(re) || []).length;
+    }
+    return { i, title: ch.title || `Chapter ${i + 1}`, words, counts };
+  });
+};
+
+// Word count that excludes reference-note blocks (nf-refblock), which are visible while drafting
+// but must not count toward the manuscript or be compiled into exports.
+const _stripRefBlocks = (html) => {
+  if (!html || html.indexOf("nf-refblock") === -1) return html;
+  try {
+    const doc = new DOMParser().parseFromString(`<div>${html}</div>`, "text/html");
+    doc.querySelectorAll(".nf-refblock").forEach(n => n.remove());
+    return doc.body.firstChild ? doc.body.firstChild.innerHTML : html;
+  } catch { return html; }
+};
+const compiledWordCount = (html) => wordCount(_stripRefBlocks(html));
+
+// ─── TEMPORAL LOGIC VALIDATOR ───
+// Anchors chapters to their story dates (via ContextEngine._parseStoryDate) and flags relative-time
+// phrases in the prose that contradict the actual gap to the next dated chapter. Heuristic: it can
+// only check chapters that HAVE dates set, and only catches common phrasings — but it surfaces the
+// classic "see you tomorrow" → next chapter is 3 days later kind of slip.
+const _dateToDayNumber = (n) => {
+  if (n == null) return null;
+  // _parseStoryDate returns either YYYYMMDD-ish ints or ms timestamps. Normalize to a day count.
+  if (n > 1e11) return Math.floor(n / 86400000); // ms timestamp
+  // YYYYMMDD integer → approximate absolute day (y*365 + m*30 + d)
+  const y = Math.floor(n / 10000), m = Math.floor((n % 10000) / 100), d = n % 100;
+  return y * 365 + m * 30 + d;
+};
+const analyzeTemporal = (project) => {
+  const chapters = project?.chapters || [];
+  const flags = [];
+  // gather day numbers per chapter
+  const days = chapters.map((_, i) => _dateToDayNumber(ContextEngine._currentStoryDate(project, i)));
+  for (let i = 0; i < chapters.length; i++) {
+    if (days[i] == null) continue;
+    // find the next chapter with a date
+    let j = i + 1;
+    while (j < chapters.length && days[j] == null) j++;
+    if (j >= chapters.length || days[j] == null) continue;
+    const gap = days[j] - days[i]; // days until next dated chapter
+    const plain = _htmlToPlain(chapters[i].content || "").toLowerCase();
+    // Relative-time cues near the end of the chapter and what gap they imply.
+    const cues = [
+      { re: /\b(see you |back )?tomorrow\b/, impliesMax: 1, label: '"tomorrow"' },
+      { re: /\btonight\b/, impliesMax: 0, label: '"tonight"' },
+      { re: /\bin an hour\b/, impliesMax: 0, label: '"in an hour"' },
+      { re: /\bnext week\b|\bin a week\b/, impliesMin: 5, impliesMax: 9, label: '"next week / in a week"' },
+      { re: /\bin (?:a|one) month\b|\bnext month\b/, impliesMin: 25, impliesMax: 35, label: '"in a month"' },
+      { re: /\byesterday\b/, impliesMax: 0, label: '"yesterday"' }, // about a past day; gap-agnostic but flag if huge
+    ];
+    for (const c of cues) {
+      if (!c.re.test(plain)) continue;
+      const tooLong = c.impliesMax != null && gap > c.impliesMax;
+      const tooShort = c.impliesMin != null && gap < c.impliesMin;
+      if (tooLong) {
+        flags.push({ chapter: i, title: chapters[i].title || `Chapter ${i + 1}`, cue: c.label, gap, expected: c.impliesMax });
+      } else if (tooShort) {
+        flags.push({ chapter: i, title: chapters[i].title || `Chapter ${i + 1}`, cue: c.label, gap, expectedMin: c.impliesMin });
+      }
+    }
+  }
+  return flags;
+};
+
+// ─── PROSE REGISTER GUARD ───
+// Flags vocabulary that clashes with a character's locked linguistic register (set on the
+// character as `register`). Heuristic word-lists, not a full style model — catches obvious
+// anachronisms (a medieval voice using "okay", "guys", "stuff") and register slips.
+const _REGISTER_FLAGS = {
+  archaic: { label: "archaic / pre-modern", banned: /\b(okay|ok|guys|stuff|cool|yeah|yep|nope|gonna|wanna|gotta|kid|kids|teenager|email|phone|car|tv|radio|computer|internet|boss|weekend|hello|hi there|awesome|fine by me|no problem)\b/gi },
+  formal: { label: "formal / educated", banned: /\b(gonna|wanna|gotta|ain't|yeah|nope|dunno|kinda|sorta|gimme|lemme|cuz|y'all|lotta)\b/gi },
+  modern_casual: { label: "modern casual", banned: /\b(thou|thee|thy|thine|hath|doth|prithee|forsooth|verily|whence|hither|thither|mayhap|betwixt|ere\b)\b/gi },
+};
+const analyzeRegister = (project) => {
+  const flags = [];
+  const chars = (project?.characters || []).filter(c => c.register && _REGISTER_FLAGS[c.register]);
+  if (!chars.length) return flags;
+  for (let ci = 0; ci < (project?.chapters || []).length; ci++) {
+    const ch = project.chapters[ci];
+    // Whose POV is this chapter? Match the POV character to a registered profile.
+    const povId = ContextEngine._plotEntryForChapter(project, ci)?.povCharacterId;
+    const povChar = chars.find(c => c.id === povId) ||
+      chars.find(c => c.name && (ch.pov || "").toLowerCase().includes(c.name.toLowerCase().split(/\s+/)[0]));
+    if (!povChar) continue;
+    const prof = _REGISTER_FLAGS[povChar.register];
+    const plain = _htmlToPlain(ch.content || "");
+    const hits = [...new Set((plain.match(prof.banned) || []).map(w => w.toLowerCase()))];
+    if (hits.length) {
+      flags.push({ chapter: ci, title: ch.title || `Chapter ${ci + 1}`, character: povChar.name, register: prof.label, words: hits.slice(0, 6) });
+    }
+  }
+  return flags;
+};
+
+// Minimal store-only ZIP writer (no compression, no dependency) — produces a valid .zip Blob from
+// {name, text} entries. Used for the Markdown manuscript bundle so the project is portable as plain
+// files readable in any editor, even if this app disappears.
+const _crc32 = (() => {
+  let table = null;
+  const build = () => { table = []; for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; table[n] = c >>> 0; } };
+  return (bytes) => { if (!table) build(); let crc = 0xFFFFFFFF; for (let i = 0; i < bytes.length; i++) crc = (crc >>> 8) ^ table[(crc ^ bytes[i]) & 0xFF]; return (crc ^ 0xFFFFFFFF) >>> 0; };
+})();
+const makeZip = (files) => {
+  const enc = new TextEncoder();
+  const chunks = [], central = [];
+  let offset = 0;
+  const u16 = n => [n & 0xFF, (n >>> 8) & 0xFF];
+  const u32 = n => [n & 0xFF, (n >>> 8) & 0xFF, (n >>> 16) & 0xFF, (n >>> 24) & 0xFF];
+  for (const f of files) {
+    const nameB = enc.encode(f.name), dataB = enc.encode(f.text);
+    const crc = _crc32(dataB);
+    const local = [...u32(0x04034b50), ...u16(20), ...u16(0), ...u16(0), ...u16(0), ...u16(0),
+      ...u32(crc), ...u32(dataB.length), ...u32(dataB.length), ...u16(nameB.length), ...u16(0)];
+    chunks.push(new Uint8Array(local), nameB, dataB);
+    central.push({ crc, size: dataB.length, nameB, offset });
+    offset += local.length + nameB.length + dataB.length;
+  }
+  const cdStart = offset;
+  for (const c of central) {
+    const cd = [...u32(0x02014b50), ...u16(20), ...u16(20), ...u16(0), ...u16(0), ...u16(0), ...u16(0),
+      ...u32(c.crc), ...u32(c.size), ...u32(c.size), ...u16(c.nameB.length), ...u16(0), ...u16(0), ...u16(0), ...u16(0), ...u32(0), ...u32(c.offset)];
+    chunks.push(new Uint8Array(cd), c.nameB);
+    offset += cd.length + c.nameB.length;
+  }
+  const cdSize = offset - cdStart;
+  const end = [...u32(0x06054b50), ...u16(0), ...u16(0), ...u16(central.length), ...u16(central.length), ...u32(cdSize), ...u32(cdStart), ...u16(0)];
+  chunks.push(new Uint8Array(end));
+  return new Blob(chunks, { type: "application/zip" });
+};
+
 // Reading time estimate — ~250 wpm for fiction prose
 const readingTime = (words) => {
   if (!words || words <= 0) return "0 min";
@@ -1939,7 +2173,7 @@ const ContextEngine = {
   buildFullContext(project, chapterIdx, opts = {}) {
     if (!project) return "";
     const pov = this._effectivePov(project, chapterIdx);
-    const tokenBudget = opts.tokenBudget || 6000;
+    const tokenBudget = opts.tokenBudget || 24000;
     let tokensUsed = 0;
     const currentChNum = this._chapterNum(project, chapterIdx);
 
@@ -4170,6 +4404,14 @@ Always include the "id" for each character and use character IDs for char1/char2
 };
 
 // ─── DEFAULT FACTORIES ───
+const createDefaultChapter = (title = "Chapter 1") => ({
+  id: uid(), title, content: "", summary: "", notes: "", sceneNotes: "", pov: "",
+  summaryGeneratedAt: "", worldView: "", linkedPlotId: "",
+  narrativeDistance: "", sensoryPalette: "", subtextNotes: "", tensionLevel: 5,
+  chapterEndHookScore: 0, chapterMomentum: 0, emotionalAftertaste: "",
+  bannerImage: "", toneKey: "", graveyard: [],
+});
+
 const createDefaultProject = () => ({
   id: uid(), title: "Untitled Novel", synopsis: "", genre: "Contemporary Romance",
   tone: "", pov: "Third person limited", themes: "", heatLevel: 3,
@@ -4188,15 +4430,7 @@ const createDefaultProject = () => ({
   characterLetters: [], // [{id, charId, chapterIdx, content, generatedAt}] — AI letters from characters
   sessionLogs: [], // [{id, startedAt, endedAt, wordsDelta, ambient, mood, intention}]
   thinkingPad: "", // Freeform scratch space per project
-  chapters: [{ id: uid(), title: "Chapter 1", content: "", summary: "", notes: "", sceneNotes: "", pov: "", summaryGeneratedAt: "", worldView: "", linkedPlotId: "",
-    // ─── CHAPTER CRAFT FIELDS (author-set) ───
-    narrativeDistance: "", sensoryPalette: "", subtextNotes: "", tensionLevel: 5,
-    // ─── AI-MAINTAINED CHAPTER STATE ───
-    chapterEndHookScore: 0, chapterMomentum: 0, emotionalAftertaste: "",
-    // ─── FUN FIELDS ───
-    bannerImage: "", // Chapter header banner
-    toneKey: "", // "melancholy"|"hopeful"|"dread"|"tender"|"wild"|""
-  }],
+  chapters: [createDefaultChapter("Chapter 1")],
   createdAt: new Date().toISOString(),
   wordGoal: 0,
 });
@@ -4205,7 +4439,7 @@ const createDefaultCharacter = () => ({
   id: uid(), name: "", role: "protagonist", gender: "", age: "", pronouns: "",
   aliases: "",
   appearance: "", personality: "", backstory: "", desires: "",
-  speechPattern: "", relationships: "", kinks: "", arc: "", notes: "",
+  speechPattern: "", relationships: "", kinks: "", arc: "", notes: "", register: "",
   // ─── SIMPLIFIED REVEAL STATE (replaces 8 deprecated chapter/date fields) ───
   backstoryRevealed: false, // AI-flipped when backstory is revealed in a chapter
   secretRevealed: false,    // AI-flipped when hidden secrets are revealed
@@ -4516,6 +4750,28 @@ const Storage = {
 };
 
 // ─── PERSISTENT STORAGE (JSON file auto-save) ───
+// ─── BACKUP / FILE PERSISTENCE ───
+// Layered, cross-platform strategy so save/load works on EVERY browser, not just desktop Chrome:
+//   1. IndexedDB autosave (handled by Storage) is always on everywhere — no prompts.
+//   2. Where the File System Access API exists (desktop Chromium), we additionally support
+//      true file-linked autosave: pick a .json once, every change streams to it.
+//   3. Everywhere else (all mobile browsers, Safari, Firefox) we provide universal one-tap
+//      download/upload backups via blob + <input type=file>, which work without any special API.
+const _supportsFSAccess = () => typeof window !== "undefined" && !!window.showSaveFilePicker && !!window.showOpenFilePicker;
+
+// Compact "time ago" for UI labels (e.g. "just now", "5m ago", "3d ago").
+const _timeAgoShort = (iso) => {
+  if (!iso) return "";
+  const s = Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 1000));
+  if (s < 45) return "just now";
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  const d = Math.floor(h / 24);
+  return `${d}d ago`;
+};
+
 let _fileHandle = null;
 let _fileWriteQueue = Promise.resolve();
 
@@ -4524,8 +4780,7 @@ const _writeToFile = async (data) => {
   _fileWriteQueue = _fileWriteQueue.then(async () => {
     try {
       const writable = await _fileHandle.createWritable();
-      // No pretty-print for auto-saves — 3-5x faster serialization
-      await writable.write(JSON.stringify(data));
+      await writable.write(JSON.stringify(data)); // compact for fast autosave
       await writable.close();
     } catch (e) {
       if (e.name === "NotAllowedError" || e.name === "NotFoundError") _fileHandle = null;
@@ -4535,10 +4790,32 @@ const _writeToFile = async (data) => {
   return _fileWriteQueue;
 };
 
+const _buildPayload = (projects, settings, tabChats) => ({
+  _format: "novelforge-autosave",
+  _version: 2,
+  _savedAt: new Date().toISOString(),
+  projects, settings, tabChats,
+});
+
+// Universal download — works on every browser including mobile. Triggers the browser's
+// native "save/download" sheet; on iOS/Android this routes to Files/Downloads/share sheet.
+const _downloadJson = (payload, filename) => {
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = Object.assign(document.createElement("a"), { href: url, download: filename });
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+};
+
 const FileStorage = {
+  supportsFileLink() { return _supportsFSAccess(); },
   hasFileHandle() { return !!_fileHandle; },
+
+  // Desktop Chromium only — link a file for continuous autosave.
   async pickSaveFile() {
-    if (!window.showSaveFilePicker) return false;
+    if (!_supportsFSAccess()) return false;
     try {
       _fileHandle = await window.showSaveFilePicker({
         suggestedName: "novelforge-data.json",
@@ -4550,12 +4827,22 @@ const FileStorage = {
       return false;
     }
   },
+
+  // Autosave path: streams to a linked file if one exists (no-op otherwise — IndexedDB still saves).
   async saveAll(projects, settings, tabChats) {
-    const payload = { _format: "novelforge-autosave", _savedAt: new Date().toISOString(), projects, settings, tabChats };
-    await _writeToFile(payload);
+    if (!_fileHandle) return;
+    await _writeToFile(_buildPayload(projects, settings, tabChats));
   },
+
+  // Universal manual backup — downloads a .json. Works on mobile + every desktop browser.
+  downloadBackup(projects, settings, tabChats) {
+    const stamp = new Date().toISOString().slice(0, 10);
+    _downloadJson(_buildPayload(projects, settings, tabChats), `novelforge-backup-${stamp}.json`);
+  },
+
+  // Desktop Chromium: open a file via the picker AND link it for future autosave.
   async loadFromFile() {
-    if (!window.showOpenFilePicker) return null;
+    if (!_supportsFSAccess()) return null;
     try {
       const [handle] = await window.showOpenFilePicker({
         types: [{ description: "JSON files", accept: { "application/json": [".json"] } }],
@@ -4563,7 +4850,7 @@ const FileStorage = {
       const file = await handle.getFile();
       const text = await file.text();
       let data; try { data = JSON.parse(text); } catch { data = null; }
-      if (data._format === "novelforge-autosave" || data.projects) {
+      if (data && (data._format === "novelforge-autosave" || data.projects)) {
         _fileHandle = handle;
         return data;
       }
@@ -4573,6 +4860,17 @@ const FileStorage = {
       return null;
     }
   },
+
+  // Universal load — parse a File object chosen via <input type=file>. Works everywhere.
+  async parseUploadedFile(file) {
+    if (!file) return null;
+    const text = await file.text();
+    let data; try { data = JSON.parse(text); } catch { return null; }
+    if (data && (data._format === "novelforge-autosave" || data.projects || data.title)) return data;
+    return null;
+  },
+
+  unlink() { _fileHandle = null; },
 };
 
 // ─── UNDO SYSTEM ───
@@ -7788,7 +8086,7 @@ ${desc}`;
   const response = await callOpenRouter([
     { role: "system", content: systemPrompt },
     { role: "user", content: userMessage },
-  ], { maxTokens: 10000, temperature: 0.4 });
+  ], { maxTokens: 24000, temperature: 0.4 });
 
   if (!response) return null;
 
@@ -8237,6 +8535,400 @@ const LocationMap = memo(({ pin, onChange }) => {
   );
 });
 
+// ─── SENSORY AUDIT VIEW ───
+// Read-only overlay that highlights sensory words by sense, so the writer can see at a glance
+// whether a passage is all sight and missing sound/smell/touch/taste. Non-destructive — never
+// mutates the live editor content.
+const SensoryAuditView = memo(({ content, onClose }) => {
+  const { html, counts } = useMemo(() => {
+    const plain = _htmlToPlain(content || "");
+    const counts = { sight: 0, sound: 0, smell: 0, touch: 0, taste: 0 };
+    if (!plain) return { html: "", counts };
+    // Escape, then wrap matches. Apply each sense in turn; track counts.
+    let out = plain.replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+    for (const [sense, { color, words }] of Object.entries(_SENSORY_LEXICON)) {
+      out = out.replace(words, (m) => { counts[sense]++; return `<mark style="background:${color}33;color:${color};border-radius:2px;padding:0 1px;font-weight:600;">${m}</mark>`; });
+    }
+    return { html: out, counts };
+  }, [content]);
+  const total = Object.values(counts).reduce((a, b) => a + b, 0) || 1;
+  return (
+    <div style={{ position: "absolute", inset: 0, background: "var(--nf-bg)", zIndex: 5, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 16px", borderBottom: "1px solid var(--nf-border)", flexShrink: 0, flexWrap: "wrap", gap: 8 }}>
+        <div style={{ fontSize: 12, fontWeight: 600, color: "var(--nf-text)" }}>Sensory Audit</div>
+        <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+          {Object.entries(_SENSORY_LEXICON).map(([sense, { color }]) => (
+            <span key={sense} style={{ fontSize: 11, color, fontWeight: 600, textTransform: "capitalize" }}>
+              {sense} {counts[sense]} <span style={{ color: "var(--nf-text-muted)", fontWeight: 400 }}>({Math.round(counts[sense] / total * 100)}%)</span>
+            </span>
+          ))}
+        </div>
+        <button onClick={onClose} className="nf-btn-icon" aria-label="Close sensory audit"><Icons.X /></button>
+      </div>
+      <div style={{ flex: 1, overflowY: "auto", padding: "20px 24px", maxWidth: 760, margin: "0 auto", width: "100%", fontFamily: "var(--nf-font-prose)", fontSize: 15, lineHeight: 1.9, color: "var(--nf-text)", whiteSpace: "pre-wrap" }}
+        dangerouslySetInnerHTML={{ __html: html || "<span style='color:var(--nf-text-muted);font-style:italic'>Nothing to analyze yet.</span>" }} />
+    </div>
+  );
+});
+
+// ─── LIVE TYPESET PAGINATION (6x9 paperback preview) ───
+// Splits the chapter prose into page-sized blocks at a 6x9 trim so the writer gets physical
+// feedback on paragraph length, scene duration, and page turns. Approximate, not print-exact.
+const TypesetPreview = memo(({ content, chapterTitle, onClose }) => {
+  // ~290 words/page is a typical 6x9 paperback at 11pt with standard margins.
+  const WORDS_PER_PAGE = 290;
+  const pages = useMemo(() => {
+    const plain = _htmlToPlain(content || "");
+    const paras = plain.split(/\n+/).map(p => p.trim()).filter(Boolean);
+    const out = [];
+    let cur = [], curWords = 0;
+    for (const p of paras) {
+      const w = p.split(/\s+/).filter(Boolean).length;
+      if (curWords + w > WORDS_PER_PAGE && cur.length) { out.push(cur); cur = []; curWords = 0; }
+      cur.push(p); curWords += w;
+    }
+    if (cur.length) out.push(cur);
+    return out.length ? out : [["(empty chapter)"]];
+  }, [content]);
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.55)", zIndex: 9000, display: "flex", flexDirection: "column" }} onClick={onClose}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 16px", color: "#ddd" }} onClick={e => e.stopPropagation()}>
+        <span style={{ fontSize: 12, fontWeight: 600 }}>Typeset preview · 6×9 · {pages.length} page{pages.length === 1 ? "" : "s"}</span>
+        <button onClick={onClose} className="nf-btn-icon" style={{ color: "#ddd" }} aria-label="Close preview"><Icons.X /></button>
+      </div>
+      <div onClick={e => e.stopPropagation()} style={{ flex: 1, overflowY: "auto", display: "flex", flexWrap: "wrap", gap: 24, justifyContent: "center", padding: "8px 16px 32px", alignContent: "flex-start" }}>
+        {pages.map((pg, i) => (
+          <div key={i} style={{ width: 360, height: 540, background: "#fdfcf8", color: "#1a1a1a", boxShadow: "0 4px 18px rgba(0,0,0,0.4)", padding: "48px 40px 40px", fontFamily: "Georgia, 'Times New Roman', serif", fontSize: 13, lineHeight: 1.6, overflow: "hidden", position: "relative" }}>
+            {i === 0 && <div style={{ textAlign: "center", fontWeight: 700, fontSize: 15, marginBottom: 18, letterSpacing: "0.02em" }}>{chapterTitle}</div>}
+            {pg.map((p, j) => <p key={j} style={{ margin: 0, textIndent: (i === 0 && j === 0) ? 0 : "1.4em", textAlign: "justify" }}>{p}</p>)}
+            <div style={{ position: "absolute", bottom: 18, left: 0, right: 0, textAlign: "center", fontSize: 11, color: "#999" }}>{i + 1}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+});
+
+// ─── ABSOLUTE SCALE LINEUP ───
+// Compares characters by their height metadata against a measured backdrop, so relative stature is
+// visible (a 5' and a 7' character no longer look the same size). Parses common height formats.
+const _parseHeightCm = (h) => {
+  if (!h) return null;
+  const s = String(h).toLowerCase().trim();
+  let m = s.match(/(\d+)\s*'\s*(\d+)?/); // 5'11"
+  if (m) return Math.round((parseInt(m[1]) * 12 + (parseInt(m[2]) || 0)) * 2.54);
+  m = s.match(/(\d+(?:\.\d+)?)\s*cm/); if (m) return Math.round(parseFloat(m[1]));
+  m = s.match(/(\d+(?:\.\d+)?)\s*m\b/); if (m) return Math.round(parseFloat(m[1]) * 100);
+  m = s.match(/(\d+(?:\.\d+)?)\s*(?:ft|feet|foot)/); if (m) return Math.round(parseFloat(m[1]) * 30.48);
+  m = s.match(/^(\d{2,3})$/); if (m) { const n = parseInt(m[1]); return n > 90 && n < 260 ? n : null; }
+  return null;
+};
+const ScaleLineup = memo(({ characters, onClose }) => {
+  const people = (characters || []).filter(c => !c.isBulk).map(c => ({ ...c, cm: _parseHeightCm(c.height) })).filter(c => c.cm);
+  const maxCm = Math.max(220, ...people.map(p => p.cm));
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 9000, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }} onClick={onClose}>
+      <div onClick={e => e.stopPropagation()} style={{ background: "var(--nf-bg-raised)", border: "1px solid var(--nf-border)", borderRadius: 8, padding: 20, maxWidth: "92vw", maxHeight: "88vh", overflow: "auto" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+          <h3 style={{ margin: 0, fontSize: 14, color: "var(--nf-text)" }}>Height Lineup</h3>
+          <button onClick={onClose} className="nf-btn-icon" aria-label="Close"><Icons.X /></button>
+        </div>
+        {people.length === 0 ? (
+          <div style={{ fontSize: 12, color: "var(--nf-text-muted)" }}>No characters with a parseable height yet. Add heights like 5'11", 180cm, or 1.8m.</div>
+        ) : (
+          <div style={{ display: "flex", alignItems: "flex-end", gap: 18, height: 420, position: "relative", paddingLeft: 36, borderLeft: "1px solid var(--nf-border)", borderBottom: "1px solid var(--nf-border)" }}>
+            {/* gridlines every 50cm */}
+            {[50, 100, 150, 200].map(cm => (
+              <div key={cm} style={{ position: "absolute", left: 0, right: 0, bottom: `${(cm / maxCm) * 100}%`, borderTop: "1px dashed var(--nf-border)", opacity: 0.4 }}>
+                <span style={{ position: "absolute", left: -34, top: -7, fontSize: 9, color: "var(--nf-text-muted)" }}>{cm}cm</span>
+              </div>
+            ))}
+            {people.map(p => (
+              <div key={p.id} style={{ display: "flex", flexDirection: "column", alignItems: "center", height: `${(p.cm / maxCm) * 100}%`, justifyContent: "flex-end", minWidth: 56 }}>
+                <div style={{ width: 48, flex: 1, borderRadius: "4px 4px 0 0", overflow: "hidden", background: "var(--nf-bg-surface)", border: "1px solid var(--nf-border)", display: "flex", alignItems: "flex-end", minHeight: 30 }}>
+                  {p.image ? <img src={p.image} alt={p.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <div style={{ width: "100%", height: "100%", background: "var(--nf-accent-glow)" }} />}
+                </div>
+                <div style={{ fontSize: 10, color: "var(--nf-text)", marginTop: 4, maxWidth: 60, textAlign: "center", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.name}</div>
+                <div style={{ fontSize: 9, color: "var(--nf-text-muted)" }}>{p.height}</div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+});
+
+// ─── IN-LINE MARGIN GRAVEYARD ───
+// Cut snippets that stay retrievable in the right margin, anchored near where they were removed.
+// Hidden from the draft but visible in the periphery — undo without an external "cut file".
+const MarginGraveyard = memo(({ entries, onRestore, onDelete }) => {
+  const [expanded, setExpanded] = useState(null);
+  if (!entries || entries.length === 0) return null;
+  return (
+    <div style={{ position: "absolute", top: 0, right: -8, transform: "translateX(100%)", width: 190, display: "flex", flexDirection: "column", gap: 6, paddingLeft: 10 }}>
+      {entries.map(g => {
+        const isOpen = expanded === g.id;
+        const preview = g.text.length > 60 ? g.text.slice(0, 60) + "…" : g.text;
+        return (
+          <div key={g.id} style={{ fontSize: 11, color: "var(--nf-text-muted)", background: "var(--nf-bg-surface)", border: "1px solid var(--nf-border)", borderRadius: 4, padding: "5px 7px", lineHeight: 1.4, opacity: 0.75, transition: "opacity 0.15s" }}
+            onMouseEnter={e => e.currentTarget.style.opacity = 1} onMouseLeave={e => e.currentTarget.style.opacity = 0.75}>
+            <div onClick={() => setExpanded(isOpen ? null : g.id)} style={{ cursor: "pointer", fontStyle: "italic" }} title="Click to expand">
+              ✂ {isOpen ? g.text : preview}
+            </div>
+            <div style={{ display: "flex", gap: 4, marginTop: 4 }}>
+              <button onClick={() => onRestore(g)} className="nf-btn-micro" style={{ fontSize: 10, padding: "1px 5px", borderColor: "var(--nf-success)", color: "var(--nf-success)" }}>↩ Restore</button>
+              <button onClick={() => onDelete(g.id)} className="nf-btn-micro" style={{ fontSize: 10, padding: "1px 5px" }}>✕</button>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+});
+
+// ─── FOCUS-LOCKED WORD-COUNT SPRINTS ───
+// A status-bar sprint: set a minutes-or-words goal; the UI locks navigation (via body class)
+// until the timer runs out or the word target is hit. Zero-friction momentum tool.
+const SprintTimer = memo(({ sprint, currentWords, onEnd }) => {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    if (!sprint) return;
+    const t = setInterval(() => setNow(Date.now()), 500);
+    return () => clearInterval(t);
+  }, [sprint]);
+  useEffect(() => {
+    if (sprint) document.body.classList.add("nf-sprint-locked");
+    else document.body.classList.remove("nf-sprint-locked");
+    return () => document.body.classList.remove("nf-sprint-locked");
+  }, [sprint]);
+  if (!sprint) return null;
+  const wordsWritten = Math.max(0, currentWords - sprint.startWords);
+  let done = false, label = "";
+  if (sprint.mode === "time") {
+    const remain = Math.max(0, sprint.endsAt - now);
+    done = remain <= 0;
+    const m = Math.floor(remain / 60000), s = Math.floor((remain % 60000) / 1000);
+    label = `${m}:${String(s).padStart(2, "0")} · ${wordsWritten}w`;
+  } else {
+    done = wordsWritten >= sprint.target;
+    label = `${wordsWritten} / ${sprint.target}w`;
+  }
+  useEffect(() => { if (done) onEnd(true); }, [done, onEnd]);
+  return (
+    <span className="nf-word-count" style={{ display: "inline-flex", alignItems: "center", gap: 6, color: "var(--nf-accent)", fontWeight: 600 }}>
+      ⏱ Sprint {label}
+      <button onClick={() => onEnd(false)} className="nf-btn-micro" style={{ fontSize: 10, padding: "1px 5px" }}>End</button>
+    </span>
+  );
+});
+
+// ─── UNRESOLVED [??] NAVIGATION GUTTER ───
+// Thin strip beside the editor with a dot per unresolved [??] placeholder; clicking jumps to it.
+const PlaceholderGutter = memo(({ content, editorRef }) => {
+  const positions = useMemo(() => {
+    const plain = _htmlToPlain(content || "");
+    if (!plain) return [];
+    const total = plain.length || 1;
+    const out = [];
+    let idx = plain.indexOf("[??]"), n = 0;
+    while (idx !== -1 && n < 200) { out.push(idx / total); n++; idx = plain.indexOf("[??]", idx + 1); }
+    return out;
+  }, [content]);
+  if (positions.length === 0) return null;
+  const jumpToNth = (ordinal) => {
+    const el = editorRef.current;
+    if (!el) return;
+    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null, false);
+    let count = 0, node;
+    while ((node = walker.nextNode())) {
+      let from = 0, at;
+      while ((at = node.nodeValue.indexOf("[??]", from)) !== -1) {
+        if (count === ordinal) {
+          const range = document.createRange();
+          range.setStart(node, at); range.setEnd(node, at + 4);
+          const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(range);
+          node.parentElement?.scrollIntoView?.({ behavior: "smooth", block: "center" });
+          return;
+        }
+        count++; from = at + 4;
+      }
+    }
+  };
+  return (
+    <div style={{ position: "absolute", top: 8, bottom: 8, right: 2, width: 10, display: "flex", flexDirection: "column", alignItems: "center", zIndex: 4, pointerEvents: "none" }}
+      title={`${positions.length} unresolved [??] placeholder${positions.length === 1 ? "" : "s"}`}>
+      <div style={{ position: "relative", flex: 1, width: "100%" }}>
+        {positions.map((p, i) => (
+          <button key={i} onClick={() => jumpToNth(i)} aria-label={`Jump to placeholder ${i + 1}`}
+            style={{ position: "absolute", top: `${p * 100}%`, left: "50%", transform: "translate(-50%,-50%)", width: 7, height: 7, borderRadius: "50%", background: "var(--nf-accent)", border: "1px solid var(--nf-bg)", cursor: "pointer", padding: 0, pointerEvents: "auto", boxShadow: "0 0 3px var(--nf-accent)" }} />
+        ))}
+      </div>
+    </div>
+  );
+});
+
+// ─── DIALOGUE ISOLATION VIEW ───
+// Strips description/action/tags, showing only the raw dialogue so the writer can read a
+// conversation straight through and judge whether each voice sounds distinct and natural.
+const DialogueIsolationView = memo(({ content, onClose }) => {
+  const lines = useMemo(() => extractDialogueLines(content), [content]);
+  const [speaking, setSpeaking] = useState(false);
+  const ttsSupported = typeof window !== "undefined" && "speechSynthesis" in window;
+
+  const stopSpeech = useCallback(() => {
+    if (ttsSupported) window.speechSynthesis.cancel();
+    setSpeaking(false);
+  }, [ttsSupported]);
+
+  // Play all dialogue lines back-to-back using the browser's local TTS engine, so the writer can
+  // hear cadence and spot unnatural phrasing. Alternates a slight pitch shift line-to-line to make
+  // turn-taking audible.
+  const playAll = useCallback(() => {
+    if (!ttsSupported || !lines.length) return;
+    window.speechSynthesis.cancel();
+    setSpeaking(true);
+    lines.forEach((line, i) => {
+      const u = new SpeechSynthesisUtterance(line);
+      u.rate = 0.98; u.pitch = i % 2 === 0 ? 1.05 : 0.92;
+      if (i === lines.length - 1) u.onend = () => setSpeaking(false);
+      window.speechSynthesis.speak(u);
+    });
+  }, [ttsSupported, lines]);
+
+  const speakLine = useCallback((line, i) => {
+    if (!ttsSupported) return;
+    window.speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(line);
+    u.rate = 0.98; u.pitch = i % 2 === 0 ? 1.05 : 0.92;
+    window.speechSynthesis.speak(u);
+  }, [ttsSupported]);
+
+  useEffect(() => () => { if (ttsSupported) window.speechSynthesis.cancel(); }, [ttsSupported]);
+
+  return (
+    <div style={{ position: "absolute", inset: 0, background: "var(--nf-bg)", zIndex: 5, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 16px", borderBottom: "1px solid var(--nf-border)", flexShrink: 0, gap: 8, flexWrap: "wrap" }}>
+        <div style={{ fontSize: 12, fontWeight: 600, color: "var(--nf-text)", display: "flex", alignItems: "center", gap: 8 }}>
+          Dialogue Isolation <span style={{ fontSize: 11, color: "var(--nf-text-muted)", fontWeight: 400 }}>· {lines.length} line{lines.length === 1 ? "" : "s"} · read for voice & cadence</span>
+        </div>
+        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+          {ttsSupported && lines.length > 0 && (
+            speaking
+              ? <button onClick={stopSpeech} className="nf-btn-micro" style={{ fontSize: 11, borderColor: "var(--nf-accent)", color: "var(--nf-accent)" }}>■ Stop</button>
+              : <button onClick={playAll} className="nf-btn-micro" style={{ fontSize: 11 }}>▶ Play all</button>
+          )}
+          <button onClick={() => { stopSpeech(); onClose(); }} className="nf-btn-icon" aria-label="Close dialogue isolation"><Icons.X /></button>
+        </div>
+      </div>
+      <div style={{ flex: 1, overflowY: "auto", padding: "20px 24px", maxWidth: 720, margin: "0 auto", width: "100%" }}>
+        {!ttsSupported && lines.length > 0 && (
+          <div style={{ fontSize: 11, color: "var(--nf-text-muted)", marginBottom: 12, fontStyle: "italic" }}>Audio playback isn't available in this browser, but you can still read the lines through.</div>
+        )}
+        {lines.length === 0 ? (
+          <div style={{ color: "var(--nf-text-muted)", fontStyle: "italic", fontSize: 13 }}>No dialogue found in this chapter.</div>
+        ) : lines.map((l, i) => (
+          <div key={i} onClick={() => speakLine(l, i)} title={ttsSupported ? "Click to hear this line" : ""}
+            style={{ fontFamily: "var(--nf-font-prose)", fontSize: 15, lineHeight: 1.9, color: "var(--nf-text)", marginBottom: 4, paddingLeft: 14, borderLeft: "2px solid var(--nf-border)", cursor: ttsSupported ? "pointer" : "default" }}>
+            “{l}”
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+});
+
+// ─── MICRO-PACING WAVEFORM ───
+// Renders sentence lengths as a running bar series below the editor. Tall spikes = long/dense
+// sentences (risk of over-writing); flat low runs = short choppy sentences. Helps the writer
+// see rhythm they'd otherwise only judge by ear.
+const PacingWaveform = memo(({ content }) => {
+  const series = useMemo(() => sentenceLengthSeries(content), [content]);
+  if (series.length < 3) return null;
+  const max = Math.max(...series, 1);
+  const avg = series.reduce((a, b) => a + b, 0) / series.length;
+  // Cap displayed bars to keep it readable; sample if very long.
+  const MAXBARS = 160;
+  const shown = series.length <= MAXBARS ? series : series.filter((_, i) => i % Math.ceil(series.length / MAXBARS) === 0);
+  return (
+    <div style={{ display: "flex", alignItems: "flex-end", gap: 1, height: 34, padding: "4px 8px", borderTop: "1px solid var(--nf-border)", background: "var(--nf-bg-deep)", overflow: "hidden" }}
+      title={`Pacing — ${series.length} sentences, avg ${avg.toFixed(1)} words/sentence. Tall bars = long sentences, short bars = punchy ones.`}>
+      {shown.map((n, i) => {
+        const h = Math.max(2, (n / max) * 26);
+        // Color: long sentences lean to the "dense" accent, short to the "fast" accent-2.
+        const t = Math.min(1, n / (avg * 1.8 || 1));
+        return <div key={i} style={{ width: 2, height: h, flexShrink: 0, background: t > 0.66 ? "var(--nf-accent)" : t > 0.33 ? "var(--nf-accent-2)" : "var(--nf-text-muted)", opacity: 0.55 + t * 0.45, borderRadius: 1 }} />;
+      })}
+    </div>
+  );
+});
+
+// ─── COMMAND PALETTE (Ctrl+K) ───
+// Global fuzzy search over chapters, characters, world entries, and relationships. Selecting a
+// result jumps straight there — keyboard-first navigation that bypasses the sidebar tree.
+const CommandPalette = memo(({ open, onClose, project, onNavigate }) => {
+  const [q, setQ] = useState("");
+  const [sel, setSel] = useState(0);
+  const inputRef = useRef(null);
+  useEffect(() => { if (open) { setQ(""); setSel(0); setTimeout(() => inputRef.current?.focus(), 30); } }, [open]);
+
+  const results = useMemo(() => {
+    if (!project) return [];
+    const items = [];
+    (project.chapters || []).forEach((ch, i) => items.push({ type: "Chapter", icon: "📄", label: ch.title || `Chapter ${i + 1}`, sub: `Ch ${i + 1}`, go: { tab: "write", chapterIdx: i } }));
+    (project.characters || []).filter(c => c.name).forEach(c => items.push({ type: "Character", icon: "👤", label: c.name, sub: c.role || "", go: { tab: "characters", entityId: c.id } }));
+    (project.worldBuilding || []).filter(w => w.name).forEach(w => items.push({ type: "World", icon: "🗺", label: w.name, sub: w.category || "", go: { tab: "world", entityId: w.id } }));
+    const ql = q.trim().toLowerCase();
+    if (!ql) return items.slice(0, 12);
+    // Simple subsequence/substring fuzzy match with light scoring.
+    const scored = [];
+    for (const it of items) {
+      const hay = (it.label + " " + it.sub).toLowerCase();
+      const idx = hay.indexOf(ql);
+      if (idx !== -1) { scored.push({ it, score: idx === 0 ? 0 : 1 + idx }); continue; }
+      // subsequence
+      let qi = 0; for (let i = 0; i < hay.length && qi < ql.length; i++) if (hay[i] === ql[qi]) qi++;
+      if (qi === ql.length) scored.push({ it, score: 100 });
+    }
+    return scored.sort((a, b) => a.score - b.score).slice(0, 12).map(s => s.it);
+  }, [project, q]);
+
+  useEffect(() => { setSel(s => Math.min(s, Math.max(0, results.length - 1))); }, [results.length]);
+  if (!open) return null;
+
+  const choose = (it) => { if (it) { onNavigate(it.go); onClose(); } };
+  const onKey = (e) => {
+    if (e.key === "ArrowDown") { e.preventDefault(); setSel(s => Math.min(s + 1, results.length - 1)); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); setSel(s => Math.max(0, s - 1)); }
+    else if (e.key === "Enter") { e.preventDefault(); choose(results[sel]); }
+  };
+
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", zIndex: 9999, display: "flex", alignItems: "flex-start", justifyContent: "center", paddingTop: "12vh" }}>
+      <div onClick={e => e.stopPropagation()} style={{ width: "min(560px, 92vw)", background: "var(--nf-bg-raised)", border: "1px solid var(--nf-border)", borderRadius: 8, boxShadow: "0 16px 48px rgba(0,0,0,0.4)", overflow: "hidden" }}>
+        <input ref={inputRef} value={q} onChange={e => { setQ(e.target.value); setSel(0); }} onKeyDown={onKey}
+          placeholder="Jump to a chapter, character, or place…"
+          style={{ width: "100%", padding: "14px 18px", fontSize: 15, background: "transparent", border: "none", borderBottom: "1px solid var(--nf-border)", color: "var(--nf-text)", outline: "none", boxSizing: "border-box" }} />
+        <div style={{ maxHeight: "50vh", overflowY: "auto" }}>
+          {results.length === 0 ? (
+            <div style={{ padding: "16px 18px", color: "var(--nf-text-muted)", fontSize: 13 }}>No matches.</div>
+          ) : results.map((it, i) => (
+            <div key={i} onClick={() => choose(it)} onMouseEnter={() => setSel(i)}
+              style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 18px", cursor: "pointer", background: i === sel ? "var(--nf-accent-glow)" : "transparent" }}>
+              <span style={{ fontSize: 15, opacity: 0.8 }}>{it.icon}</span>
+              <span style={{ flex: 1, color: "var(--nf-text)", fontSize: 14, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{it.label}</span>
+              <span style={{ fontSize: 11, color: "var(--nf-text-muted)", textTransform: "capitalize" }}>{it.sub || it.type}</span>
+            </div>
+          ))}
+        </div>
+        <div style={{ padding: "7px 18px", borderTop: "1px solid var(--nf-border)", fontSize: 11, color: "var(--nf-text-muted)", display: "flex", gap: 14 }}>
+          <span>↑↓ navigate</span><span>↵ open</span><span>esc close</span>
+        </div>
+      </div>
+    </div>
+  );
+});
+
 // ─── SAVE STATUS ───
 const SaveIndicator = memo(({ status, fileLinked }) => {
   const [lastSaved, setLastSaved] = useState(null);
@@ -8535,7 +9227,7 @@ AI-EVOLVING: dynamic, status, tension, tensionType, powerDynamic, trustLevel, ch
       const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
         method: "POST",
         headers: { "Content-Type": "application/json", "Authorization": `Bearer ${settings.apiKey}`, "HTTP-Referer": window.location.origin, "X-Title": "NovelForge" },
-        body: JSON.stringify({ model: settings.tabModels?.[tabName] || settings.model, messages: allMessages, max_tokens: tabMaxTokens[tabName] || 2048, temperature: tabTemperatures[tabName] || 0.8 }),
+        body: JSON.stringify({ model: settings.tabModels?.[tabName] || settings.model, messages: allMessages, max_tokens: tabMaxTokens[tabName] || 8192, temperature: tabTemperatures[tabName] || 0.8 }),
         signal: controller.signal,
       });
       if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error?.message || `API error ${res.status}`); }
@@ -10178,6 +10870,8 @@ const _syncCrossRefs = (oldP, newP) => {
   let newRels = [...(p.relationships || [])];
   const oldWorlds = oldP.worldBuilding || [];
   let newWorlds = [...(p.worldBuilding || [])];
+  let newReaderKnowledge = Array.isArray(p.readerKnowledge) ? [...p.readerKnowledge] : p.readerKnowledge;
+  let newThematicArgument = p.thematicArgument ? { ...p.thematicArgument } : p.thematicArgument;
   let newPlots = [...(p.plotOutline || [])];
   let newChapters = [...(p.chapters || [])];
   let dirty = false;
@@ -10620,6 +11314,16 @@ const _syncCrossRefs = (oldP, newP) => {
     newRels = newRels.filter(r => !deletedCharIds.includes(r.char1) && !deletedCharIds.includes(r.char2));
     newPlots = newPlots.map(pl => ({ ...pl, characters: Array.isArray(pl.characters) ? pl.characters.filter(cid => !deletedCharIds.includes(cid)) : pl.characters, povCharacterId: deletedCharIds.includes(pl.povCharacterId) ? "" : pl.povCharacterId }));
     newWorlds = newWorlds.map(w => ({ ...w, frequentCharacters: Array.isArray(w.frequentCharacters) ? w.frequentCharacters.filter(cid => !deletedCharIds.includes(cid)) : w.frequentCharacters, orgMembers: Array.isArray(w.orgMembers) ? w.orgMembers.filter(cid => !deletedCharIds.includes(cid)) : w.orgMembers, orgHierarchy: Array.isArray(w.orgHierarchy) ? w.orgHierarchy.map(pos => deletedCharIds.includes(pos.charId) ? { ...pos, charId: "" } : pos) : w.orgHierarchy }));
+    // Parity with the Characters-tab delete handler: also scrub knownBy + embodiedBy so no
+    // dangling character IDs survive when deletion happens via this cascade path.
+    if (Array.isArray(newReaderKnowledge)) {
+      newReaderKnowledge = newReaderKnowledge.map(rk => ({ ...rk, knownBy: Array.isArray(rk.knownBy) ? rk.knownBy.filter(cid => !deletedCharIds.includes(cid)) : rk.knownBy }));
+    }
+    if (newThematicArgument?.embodiedBy) {
+      const eb = { ...newThematicArgument.embodiedBy };
+      deletedCharIds.forEach(cid => { delete eb[cid]; });
+      newThematicArgument = { ...newThematicArgument, embodiedBy: eb };
+    }
     dirty = true;
   }
   const deletedWorldIds = oldWorlds.filter(ow => !newWorlds.find(nw => nw.id === ow.id)).map(w => w.id);
@@ -10664,7 +11368,7 @@ const _syncCrossRefs = (oldP, newP) => {
 
   // ─── Apply ───
   if (dirty) {
-    p = { ...p, characters: newChars, relationships: newRels, worldBuilding: newWorlds, plotOutline: newPlots, chapters: newChapters };
+    p = { ...p, characters: newChars, relationships: newRels, worldBuilding: newWorlds, plotOutline: newPlots, chapters: newChapters, readerKnowledge: newReaderKnowledge, thematicArgument: newThematicArgument };
   }
   return p;
 };
@@ -10678,7 +11382,7 @@ export default function NovelForge() {
   const [activeProjectId, setActiveProjectId] = useState(null);
   const [activeTab, setActiveTab] = useState(() => { try { return sessionStorage.getItem("nf-activeTab") || "write"; } catch { /* silent */ return "write"; } });
   const [settings, setSettings] = useState({
-    apiKey: "", model: "anthropic/claude-sonnet-4", maxTokens: 4096,
+    apiKey: "", model: "anthropic/claude-sonnet-4", maxTokens: 16384,
     temperature: 0.85, systemPrompt: "",
     frequencyPenalty: 0.1, presencePenalty: 0.15,
     modelContextWindow: 200000,
@@ -10694,7 +11398,14 @@ export default function NovelForge() {
     ambientVolume: 0.4,
     silentWritingMode: false, // hides all stats when writing
     lineFocusMode: false, // fade non-current paragraphs
+    strictDraftMode: false, // fade everything except the active sentence (forward-drafting)
+    pacingWaveform: false, // show sentence-length waveform below editor
     typewriterPacing: false, // slow cursor for meditative pace
+    typewriterCentering: false, // lock active line to vertical center
+    autoFadeChrome: false, // fade sidebar/status after typing, restore on mouse move/Esc
+    hoverPeek: false, // hover a name in the editor → entity quick-look popup
+    sidebarHoverExpand: false, // collapse sidebar to edge; hover to expand
+    microOutlineDock: false, // floating setup/action/payoff dock for active scene
     circadianDimming: false, // auto-shift warmer at night
     breathingPauser: true, // 4-4-6 breath nudge after N minutes
     breathingPauserInterval: 45, // minutes
@@ -10725,6 +11436,8 @@ export default function NovelForge() {
   const [streamingContent, setStreamingContent] = useState("");
   const [focusMode, setFocusMode] = useState(false);
   const [fileLinked, setFileLinked] = useState(false); // JSON file auto-save linked
+  const [lastBackupAt, setLastBackupAt] = useState(null); // last manual backup download timestamp
+  const fileLinkSupported = useMemo(() => FileStorage.supportsFileLink(), []);
   const [diffReview, setDiffReview] = useState(null);
   const [selectedText, setSelectedText] = useState("");
   const [selectionRange, setSelectionRange] = useState(null);
@@ -10752,6 +11465,17 @@ export default function NovelForge() {
   const [deleteConfirmText, setDeleteConfirmText] = useState(""); // E7: Type-to-confirm delete
   const [findReplaceOpen, setFindReplaceOpen] = useState(false); // Find & Replace modal
   const [sentenceGardenOpen, setSentenceGardenOpen] = useState(false); // Sentence Garden viewer
+  const [scratchpadOpen, setScratchpadOpen] = useState(false); // async structural scratchpad overlay
+  const [scratchpadText, setScratchpadText] = useState("");
+  const [scratchpadTargetCh, setScratchpadTargetCh] = useState(0);
+  const [sprint, setSprint] = useState(null); // { mode:'time'|'words', target, startWords, endsAt, startedAt }
+  const [atMenu, setAtMenu] = useState(null); // { query, x, y, items, index } for @-autocomplete
+  const [showLineup, setShowLineup] = useState(false); // height comparison lineup
+  const [renameDialog, setRenameDialog] = useState(null); // { charId, oldName, newName }
+  const [showTypeset, setShowTypeset] = useState(false); // 6x9 paperback preview
+  const [hoverPeek, setHoverPeek] = useState(null); // { entity, x, y } entity quick-look on hover
+  const [clipStrips, setClipStrips] = useState([]); // up to 10 project-local text clips
+  const [showClips, setShowClips] = useState(false);
   const [showBreathingPauser, setShowBreathingPauser] = useState(false);
   const [showChapterCelebration, setShowChapterCelebration] = useState(false);
   const [sessionStartedAt] = useState(() => Date.now());
@@ -10773,6 +11497,8 @@ export default function NovelForge() {
   const [showRelWeb, setShowRelWeb] = useState(false);
   const [cleanView, setCleanView] = useState(false); // Full-screen reader mode
   const [colorMode, setColorMode] = useState("off"); // "off" | "voice" | "narrative"
+  const [dialogueIsolation, setDialogueIsolation] = useState(false); // strip prose, show only dialogue
+  const [sensoryAudit, setSensoryAudit] = useState(false); // highlight sensory words by sense
   const [whipMode, setWhipMode] = useState(false); // Write or Whip! mode
   const [pdfExportMode, setPdfExportMode] = useState(null);
   const [imagePromptData, setImagePromptData] = useState(null); // { prompt, mentionedChars, primaryWorld, worldRefImages }
@@ -10782,6 +11508,7 @@ export default function NovelForge() {
   const [imageGen4x, setImageGen4x] = useState(false); // Toggle for 4-variant generation
   const [imageGenAspect, setImageGenAspect] = useState(""); // Aspect ratio for single image
   const [showDrafts, setShowDrafts] = useState(false);
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [draftsChapterFilter, setDraftsChapterFilter] = useState(false);
   const [viewingDraftId, setViewingDraftId] = useState(null);
   const [activeBeatId, setActiveBeatId] = useState(null); // Tracks which beat cursor is in
@@ -11029,7 +11756,7 @@ export default function NovelForge() {
           } catch (e) { console.warn("[NovelForge] Image map population failed:", e); }
         }
         if (s && typeof s === "object") {
-          const knownKeys = ["apiKey", "model", "imageModel", "tabModels", "maxTokens", "temperature", "systemPrompt", "frequencyPenalty", "presencePenalty", "modelContextWindow", "agentsEnabled", "agentModels", "agentPostProcessors", "language", "ambientSound", "ambientVolume", "silentWritingMode", "lineFocusMode", "typewriterPacing", "circadianDimming", "breathingPauser", "breathingPauserInterval", "sessionDecompression", "chapterCelebration", "questionOfTheDay", "forgeChanGoodNight", "ambientBrightness"];
+          const knownKeys = ["apiKey", "model", "imageModel", "tabModels", "maxTokens", "temperature", "systemPrompt", "frequencyPenalty", "presencePenalty", "modelContextWindow", "agentsEnabled", "agentModels", "agentPostProcessors", "language", "ambientSound", "ambientVolume", "silentWritingMode", "lineFocusMode", "strictDraftMode", "pacingWaveform", "typewriterPacing", "typewriterCentering", "autoFadeChrome", "hoverPeek", "sidebarHoverExpand", "microOutlineDock", "circadianDimming", "breathingPauser", "breathingPauserInterval", "sessionDecompression", "chapterCelebration", "questionOfTheDay", "forgeChanGoodNight", "ambientBrightness"];
           const filtered = {};
           knownKeys.forEach(k => { if (s[k] !== undefined) filtered[k] = s[k]; });
           if (Object.keys(filtered).length) setSettings(prev => ({ ...prev, ...filtered }));
@@ -11142,6 +11869,13 @@ export default function NovelForge() {
         e.preventDefault();
         setFindReplaceOpen(true);
       }
+      // Cmd/Ctrl+Shift+N: Async structural scratchpad — jot an idea for any chapter without leaving
+      // the current page. Defaults the target to the current chapter.
+      if (mod && e.shiftKey && (e.key === "N" || e.key === "n")) {
+        e.preventDefault();
+        setScratchpadTargetCh(activeChapterIdx);
+        setScratchpadOpen(o => !o);
+      }
       // Ctrl+PageDown: Next chapter
       if (mod && e.key === "PageDown") {
         e.preventDefault();
@@ -11155,9 +11889,15 @@ export default function NovelForge() {
         setActiveChapterIdx(prev => Math.max(0, prev - 1));
         forceRepopulateEditor();
       }
+      // Cmd+K: Command palette
+      if (mod && (e.key === "k" || e.key === "K")) {
+        e.preventDefault();
+        setCommandPaletteOpen(prev => !prev);
+      }
       // Escape: Close active modal/panel
       if (e.key === "Escape") {
-        if (showRelWeb) { setShowRelWeb(false); e.preventDefault(); }
+        if (commandPaletteOpen) { setCommandPaletteOpen(false); e.preventDefault(); }
+        else if (showRelWeb) { setShowRelWeb(false); e.preventDefault(); }
         else if (showAiMobile) { setShowAiMobile(false); e.preventDefault(); }
         else if (showTimeline) { setShowTimeline(false); e.preventDefault(); }
         else if (cleanView) { setCleanView(false); e.preventDefault(); }
@@ -11167,11 +11907,12 @@ export default function NovelForge() {
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [debouncedSaveProjects, debouncedSaveSettings, debouncedSaveTabChats, debouncedFileSave, projects, activeProjectId]);
+  }, [debouncedSaveProjects, debouncedSaveSettings, debouncedSaveTabChats, debouncedFileSave, projects, activeProjectId, activeChapterIdx]);
 
   // G4: Flush pending saves on beforeunload to prevent data loss on sudden close
   // Use refs so the handler always reads current values without re-registering
   const projectsRef = useRef(projects);
+  const handleImportJsonRef = useRef(null);
   const settingsRef = useRef(settings);
   const themeRef = useRef(theme);
   const tabChatHistoriesRef = useRef(tabChatHistories);
@@ -11276,12 +12017,100 @@ export default function NovelForge() {
     return () => document.body.classList.remove("nf-line-focus");
   }, [settings?.lineFocusMode]);
 
+  // Strict forward-drafting: fade everything except the sentence the caret is in. This physically
+  // discourages compulsive back-editing during a first draft by dimming all prior prose.
+  useEffect(() => {
+    if (settings?.strictDraftMode) document.body.classList.add("nf-strict-draft");
+    else document.body.classList.remove("nf-strict-draft");
+    return () => document.body.classList.remove("nf-strict-draft");
+  }, [settings?.strictDraftMode]);
+
+  useEffect(() => {
+    if (!settings?.strictDraftMode) return;
+    const el = editorRef.current;
+    if (!el) return;
+    // Mark the block element containing the caret as "active"; CSS fades the rest. We mark at the
+    // block level (not mid-text-node) to avoid mutating the DOM the user is typing into.
+    const mark = () => {
+      const sel = window.getSelection();
+      if (!sel || sel.rangeCount === 0) return;
+      let node = sel.anchorNode;
+      if (!node || !el.contains(node)) return;
+      // Walk up to the direct child block of the editor.
+      let block = node.nodeType === 3 ? node.parentElement : node;
+      while (block && block.parentElement !== el) block = block.parentElement;
+      if (!block) return;
+      const prev = el.querySelector(".nf-active-block");
+      if (prev && prev !== block) prev.classList.remove("nf-active-block");
+      block.classList.add("nf-active-block");
+    };
+    document.addEventListener("selectionchange", mark);
+    mark();
+    return () => {
+      document.removeEventListener("selectionchange", mark);
+      el.querySelectorAll(".nf-active-block").forEach(b => b.classList.remove("nf-active-block"));
+    };
+  }, [settings?.strictDraftMode, activeChapterIdx]);
+
   // Typewriter pacing
   useEffect(() => {
     if (settings?.typewriterPacing) document.body.classList.add("nf-typewriter-pacing");
     else document.body.classList.remove("nf-typewriter-pacing");
     return () => document.body.classList.remove("nf-typewriter-pacing");
   }, [settings?.typewriterPacing]);
+
+  // Sidebar hover-expand: collapse the chapter sidebar to a thin strip; hovering it expands.
+  useEffect(() => {
+    if (settings?.sidebarHoverExpand) document.body.classList.add("nf-sidebar-hover");
+    else document.body.classList.remove("nf-sidebar-hover");
+    return () => document.body.classList.remove("nf-sidebar-hover");
+  }, [settings?.sidebarHoverExpand]);
+
+  // No-click distraction fade: once the writer types a few words, fade the sidebar/status/title
+  // chrome to ease into flow. Any mouse movement or Esc brings it back instantly.
+  useEffect(() => {
+    if (!settings?.autoFadeChrome) { document.body.classList.remove("nf-chrome-faded"); return; }
+    const el = editorRef.current;
+    if (!el) return;
+    let typedWords = 0;
+    const fade = () => document.body.classList.add("nf-chrome-faded");
+    const unfade = () => { document.body.classList.remove("nf-chrome-faded"); typedWords = 0; };
+    const onKey = (e) => {
+      if (e.key === "Escape") { unfade(); return; }
+      if (e.key === " " || e.key === "Enter") { typedWords++; if (typedWords >= 3) fade(); }
+    };
+    el.addEventListener("keydown", onKey);
+    document.addEventListener("mousemove", unfade);
+    return () => { el.removeEventListener("keydown", onKey); document.removeEventListener("mousemove", unfade); document.body.classList.remove("nf-chrome-faded"); };
+  }, [settings?.autoFadeChrome, activeChapterIdx]);
+
+  // Typewriter centering: keep the active line locked at the vertical center of the editor's
+  // scroll area, so the writer's eyes stay at a comfortable level instead of chasing the bottom.
+  useEffect(() => {
+    if (!settings?.typewriterCentering) return;
+    const el = editorRef.current;
+    if (!el) return;
+    const scroller = el.closest(".nf-editor-scroll") || el.parentElement;
+    if (!scroller) return;
+    const center = () => {
+      const sel = window.getSelection();
+      if (!sel || sel.rangeCount === 0) return;
+      let node = sel.anchorNode;
+      if (!node || !el.contains(node)) return;
+      let block = node.nodeType === 3 ? node.parentElement : node;
+      while (block && block.parentElement !== el) block = block.parentElement;
+      if (!block) return;
+      const blockRect = block.getBoundingClientRect();
+      const scRect = scroller.getBoundingClientRect();
+      const delta = (blockRect.top + blockRect.height / 2) - (scRect.top + scRect.height / 2);
+      if (Math.abs(delta) > 4) scroller.scrollBy({ top: delta, behavior: "smooth" });
+    };
+    const onInput = () => { window.requestAnimationFrame(center); };
+    el.addEventListener("input", onInput);
+    el.addEventListener("keyup", onInput);
+    center();
+    return () => { el.removeEventListener("input", onInput); el.removeEventListener("keyup", onInput); };
+  }, [settings?.typewriterCentering, activeChapterIdx]);
 
   // Chapter tone tint
   useEffect(() => {
@@ -11404,7 +12233,7 @@ CRITICAL REQUIREMENTS:
             { role: "system", content: `You are a fiction writing assistant. Fill empty fields with creative, genre-appropriate content.\n\n${contextInfo || ""}\n\nRULES:\n- Return ONLY valid JSON — no markdown, no backticks, no explanation.\n- Only include fields that are currently empty.\n- Be creative and specific.\n- Make content consistent with existing filled fields.` },
             { role: "user", content: prompt },
           ],
-          max_tokens: 2500, temperature: 0.85,
+          max_tokens: 10000, temperature: 0.85,
         }),
       });
       if (!res.ok) { const errData = await res.json().catch(() => ({})); throw new Error(errData.error?.message || `API error (${res.status})`); }
@@ -11591,7 +12420,18 @@ CRITICAL REQUIREMENTS:
       }
       return pl;
     });
-    updateProject({ chapters: chs, plotOutline: updatedPlot });
+    // writingJournal is keyed by chapter index — remap keys so diary entries follow their chapter
+    // through the reorder instead of detaching onto whatever chapter now sits at that index.
+    const oldJournal = project.writingJournal || {};
+    let remappedJournal = oldJournal;
+    if (Object.keys(oldJournal).length) {
+      remappedJournal = {};
+      project.chapters.forEach((ch, oldIdx) => {
+        const newIdx = chs.indexOf(ch);
+        if (oldJournal[oldIdx] !== undefined && newIdx >= 0) remappedJournal[newIdx] = oldJournal[oldIdx];
+      });
+    }
+    updateProject({ chapters: chs, plotOutline: updatedPlot, writingJournal: remappedJournal });
     // I6: Correct index tracking — track where the active chapter ended up after the splice
     if (activeChapterIdx === fromIdx) {
       setActiveChapterIdx(toIdx);
@@ -11732,6 +12572,41 @@ CRITICAL REQUIREMENTS:
     return () => clearInterval(_undoIntervalRef.current);
   }, [activeTab, pushUndo]);
 
+  // Deletion safety net: if a single edit removes more than ~100 words, silently snapshot the
+  // PRE-deletion text into a persistent recovery log for this chapter. Unlike Ctrl+Z, this
+  // survives app restarts, so a scene deleted in frustration can be recovered days later.
+  const _lastWordCountRef = useRef(0);
+  const _lastContentForSnapRef = useRef("");
+  useEffect(() => {
+    _lastWordCountRef.current = wordCount(activeChapter?.content || "");
+    _lastContentForSnapRef.current = activeChapter?.content || "";
+  }, [activeChapterIdx]); // reset baseline on chapter switch only
+
+  const maybeSnapshotDeletion = useCallback((newHtml) => {
+    const prevWords = _lastWordCountRef.current;
+    const newWords = wordCount(newHtml || "");
+    const dropped = prevWords - newWords;
+    if (dropped >= 100 && _lastContentForSnapRef.current) {
+      const snap = {
+        id: uid(),
+        type: "deletion-recovery",
+        chapterId: activeChapter?.id,
+        chapterTitle: activeChapter?.title || `Chapter ${activeChapterIdx + 1}`,
+        content: _lastContentForSnapRef.current,
+        wordsRemoved: dropped,
+        savedAt: new Date().toISOString(),
+      };
+      setProjects(prev => prev.map(p => p.id !== activeProjectId ? p : {
+        ...p,
+        // Keep the 20 most recent recovery snapshots.
+        drafts: [snap, ...(p.drafts || [])].slice(0, 20),
+      }));
+      showToast(`${dropped.toLocaleString()} words removed — recovery snapshot saved`, "info");
+    }
+    _lastWordCountRef.current = newWords;
+    _lastContentForSnapRef.current = newHtml || "";
+  }, [activeChapter?.id, activeChapter?.title, activeChapterIdx, activeProjectId, showToast]);
+
 
 
   // Immediate sync for explicit actions (blur, before AI call, etc.)
@@ -11744,6 +12619,7 @@ CRITICAL REQUIREMENTS:
     html = html.replace(/\s*style="color:[^"]*!important;?\s*"/g, "").replace(/\s*style="color: rgb\([^"]*\);?"/g, "").replace(/\s*data-nf-speaker="[^"]*"/g, "").replace(/\s*data-nfc="[^"]*"/g, "");
     const currentContent = activeChapter?.content || "";
     if (html !== lastSyncedContentRef.current || html !== currentContent) {
+      if (!viewingDraftId) maybeSnapshotDeletion(html);
       lastSyncedContentRef.current = html;
       if (immediate) {
         setProjects(prev => prev.map(p => {
@@ -12088,6 +12964,260 @@ Then 2-3 sentences describing the specific scene idea, character actions, and em
     debouncedSyncEditor.cancel();
     lastSyncedContentRef.current = null;
   }, [debouncedSyncEditor]);
+
+  // Jump to the next [??] placeholder in the editor and select it, so the writer can fill blanks
+  // they dropped during flow. Wraps to the first if past the last.
+  // ─── @-AUTOCOMPLETE for character & location names ───
+  // After the caret, detect a trailing "@query" and offer matching project entities. Selecting one
+  // replaces the @query with the canonical name (correct casing/spelling every time).
+  const _atCandidates = useCallback((query) => {
+    const q = query.toLowerCase();
+    const chars = (project?.characters || []).filter(c => c.name && !c.isBulk).map(c => ({ id: c.id, name: c.name, kind: "character" }));
+    const places = (project?.worldBuilding || []).filter(w => w.name).map(w => ({ id: w.id, name: w.name, kind: w.category || "world" }));
+    const all = [...chars, ...places];
+    if (!q) return all.slice(0, 8);
+    return all.filter(e => e.name.toLowerCase().includes(q)).slice(0, 8);
+  }, [project?.characters, project?.worldBuilding]);
+
+  const detectAtTrigger = useCallback(() => {
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0 || !sel.isCollapsed) { setAtMenu(null); return; }
+    const node = sel.anchorNode;
+    if (!node || node.nodeType !== 3) { setAtMenu(null); return; }
+    const textBefore = node.nodeValue.slice(0, sel.anchorOffset);
+    const m = textBefore.match(/@([\p{L}\p{N}'’-]*)$/u);
+    if (!m) { setAtMenu(null); return; }
+    const query = m[1];
+    const items = _atCandidates(query);
+    if (items.length === 0) { setAtMenu(null); return; }
+    let rect;
+    try { const r = sel.getRangeAt(0).cloneRange(); r.collapse(true); rect = r.getBoundingClientRect(); } catch { rect = null; }
+    setAtMenu({ query, items, index: 0, x: rect ? rect.left : 100, y: rect ? rect.bottom + 4 : 100 });
+  }, [_atCandidates]);
+
+  const applyAtChoice = useCallback((entity) => {
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) { setAtMenu(null); return; }
+    const node = sel.anchorNode;
+    if (!node || node.nodeType !== 3) { setAtMenu(null); return; }
+    const offset = sel.anchorOffset;
+    const textBefore = node.nodeValue.slice(0, offset);
+    const m = textBefore.match(/@([\p{L}\p{N}'’-]*)$/u);
+    if (!m) { setAtMenu(null); return; }
+    const start = offset - m[0].length;
+    const range = document.createRange();
+    range.setStart(node, start); range.setEnd(node, offset);
+    sel.removeAllRanges(); sel.addRange(range);
+    document.execCommand("insertText", false, entity.name);
+    setAtMenu(null);
+    syncEditorContent();
+  }, [syncEditorContent]);
+
+  // Graveyard restore: re-insert the snippet near its original block; delete removes it.
+  const handleRestoreGraveyard = useCallback((entry) => {
+    const el = editorRef.current;
+    if (el) {
+      const blocks = el.children;
+      const target = blocks[Math.min(entry.anchorIndex, blocks.length - 1)];
+      const p = document.createElement("p");
+      p.textContent = entry.text;
+      if (target) target.after(p); else el.appendChild(p);
+      syncEditorContent(true);
+    }
+    setProjects(prev => prev.map(p => {
+      if (p.id !== activeProjectId) return p;
+      const chapters = [...(p.chapters || [])];
+      const ch = chapters[activeChapterIdx];
+      if (ch) chapters[activeChapterIdx] = { ...ch, graveyard: (ch.graveyard || []).filter(g => g.id !== entry.id) };
+      return { ...p, chapters };
+    }));
+    forceRepopulateEditor();
+    showToast("Restored from graveyard", "success");
+  }, [activeProjectId, activeChapterIdx, syncEditorContent, forceRepopulateEditor, showToast]);
+
+  const handleDeleteGraveyard = useCallback((gid) => {
+    setProjects(prev => prev.map(p => {
+      if (p.id !== activeProjectId) return p;
+      const chapters = [...(p.chapters || [])];
+      const ch = chapters[activeChapterIdx];
+      if (ch) chapters[activeChapterIdx] = { ...ch, graveyard: (ch.graveyard || []).filter(g => g.id !== gid) };
+      return { ...p, chapters };
+    }));
+  }, [activeProjectId, activeChapterIdx]);
+
+  // ─── CHARACTER ART HELPERS (model sheet, relighting) ───
+  // Compose a consistent base description from the character's appearance fields. A stable seed
+  // phrase keeps identity recognizable across variants without any body-isolation mechanic.
+  const buildCharacterArtPrompt = useCallback((char) => {
+    if (!char) return "";
+    const bits = [];
+    if (char.age) bits.push(`${char.age} years old`);
+    if (char.gender) bits.push(char.gender);
+    if (char.appearance) bits.push(char.appearance);
+    if (char.build) bits.push(char.build);
+    if (char.signatureItems) bits.push(`wearing ${char.signatureItems}`);
+    // Honor any pinned traits (see spatial trait pinning) for consistency.
+    if (Array.isArray(char.traitPins)) char.traitPins.forEach(p => { if (p.prompt) bits.push(p.prompt); });
+    const base = bits.filter(Boolean).join(", ");
+    return `Character portrait of ${char.name || "a person"}: ${base}. Clothed, tasteful, character-design reference art.`;
+  }, []);
+
+  const generateCharVariant = useCallback(async (char, variant) => {
+    if (!settings.apiKey) { showToast("Add an API key in Settings first", "error"); return; }
+    const base = buildCharacterArtPrompt(char);
+    let prompt = base, ratio = "3:4", caption = variant;
+    if (variant === "model-sheet") {
+      prompt = `${base} Character model sheet: three-angle turnaround showing front view, side profile, and back view of the same fully-clothed character, consistent design, neutral pose, plain background, architectural reference style.`;
+      ratio = "16:9"; caption = "Model sheet (turnaround)";
+    } else if (variant?.startsWith("relight:")) {
+      const light = variant.split(":")[1];
+      prompt = `${base} Lighting: ${light}. Same character and outfit, only the lighting, shadows, and color temperature change.`;
+      caption = `Lighting — ${light}`;
+    } else if (variant?.startsWith("age:")) {
+      const age = variant.split(":")[1];
+      // Aging: regenerate the WHOLE character at a target age, reusing pinned traits for identity
+      // continuity. No body isolation — the model renders a complete clothed person each step.
+      prompt = `${base} Depict this same character at age ${age}, keeping their identity recognizable (same eye color, bone structure, distinguishing features). Age-appropriate clothing.`;
+      caption = `Age ${age}`;
+    } else if (variant?.startsWith("outfit:")) {
+      const outfit = variant.split(":").slice(1).join(":");
+      // Whole-character outfit variation — generates a complete clothed character, not a layer.
+      prompt = `${base.replace(/Clothed,.*$/, "")} Wearing: ${outfit}. Full character illustration.`;
+      caption = `Outfit — ${outfit}`;
+    } else if (variant?.startsWith("expr:")) {
+      const emotion = variant.split(":")[1];
+      // Whole-portrait expression variation — a full new portrait, not masked face inpainting.
+      prompt = `${base} Facial expression: ${emotion}. Full character portrait.`;
+      caption = `Expression — ${emotion}`;
+    }
+    showToast("Generating…", "info");
+    try {
+      // Global style-lock: if a master style reference is set on the project, pass it so all
+      // character art shares one aesthetic (grain, line weight, color grading).
+      const styleRef = project?.styleLockImage;
+      const refs = styleRef && styleRef.startsWith("data:") ? [styleRef] : null;
+      if (refs) prompt += " Match the artistic style, line weight, and color grading of the reference image.";
+      const img = await _generateSingleImage(prompt, ratio, refs);
+      if (img) {
+        updateCharById(char.id, "moodBoard", [...(char.moodBoard || []), { id: uid(), data: img, caption, addedAt: new Date().toISOString() }]);
+        showToast("Image added to mood board", "success");
+      }
+    } catch (e) { showToast("Generation failed", "error"); }
+  }, [settings.apiKey, buildCharacterArtPrompt, _generateSingleImage, updateCharById, showToast, project?.styleLockImage]);
+
+  // Entity-safe rename: replace a character's name across all prose using whole-word boundaries
+  // (so "Will" → "Sam" never corrupts "will go"), and update the character record. Scoped to the
+  // exact old name/aliases, never arbitrary substrings.
+  const handleSafeRename = useCallback((charId, oldName, newName) => {
+    const o = (oldName || "").trim(), n = (newName || "").trim();
+    if (!o || !n || o === n) return 0;
+    const esc = o.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const re = new RegExp(`\\b${esc}\\b`, "g");
+    let count = 0;
+    setProjects(prev => prev.map(p => {
+      if (p.id !== activeProjectId) return p;
+      const chapters = (p.chapters || []).map(ch => {
+        if (!ch.content || !re.test(ch.content)) return ch;
+        re.lastIndex = 0;
+        const newContent = ch.content.replace(re, () => { count++; return n; });
+        return { ...ch, content: newContent };
+      });
+      const characters = (p.characters || []).map(c => c.id === charId ? { ...c, name: n } : c);
+      return { ...p, chapters, characters };
+    }));
+    forceRepopulateEditor();
+    showToast(`Renamed "${o}" → "${n}" (${count} occurrence${count === 1 ? "" : "s"} in prose)`, "success");
+    return count;
+  }, [activeProjectId, forceRepopulateEditor, showToast]);
+
+  // Hover-peek: find the word under the cursor and, if it matches a character or location, surface
+  // a 3-bullet quick-look. Uses caretRangeFromPoint to read the word without changing selection.
+  const _peekEntityAt = useCallback((clientX, clientY) => {
+    const docAny = document;
+    let range = null;
+    if (docAny.caretRangeFromPoint) range = docAny.caretRangeFromPoint(clientX, clientY);
+    else if (docAny.caretPositionFromPoint) { const cp = docAny.caretPositionFromPoint(clientX, clientY); if (cp) { range = document.createRange(); range.setStart(cp.offsetNode, cp.offset); } }
+    if (!range || !range.startContainer || range.startContainer.nodeType !== 3) return null;
+    const text = range.startContainer.nodeValue;
+    const off = range.startOffset;
+    // expand to the word around offset
+    let s = off, e = off;
+    while (s > 0 && /[\p{L}'’-]/u.test(text[s - 1])) s--;
+    while (e < text.length && /[\p{L}'’-]/u.test(text[e])) e++;
+    const word = text.slice(s, e);
+    if (!word || word.length < 2) return null;
+    const wl = word.toLowerCase();
+    const char = (project?.characters || []).find(c => {
+      if (!c.name) return false;
+      const parts = c.name.toLowerCase().split(/\s+/);
+      if (parts.includes(wl) || c.name.toLowerCase() === wl) return true;
+      if (c.aliases) return (Array.isArray(c.aliases) ? c.aliases : String(c.aliases).split(",")).some(a => a.trim().toLowerCase() === wl);
+      return false;
+    });
+    if (char) {
+      const bullets = [];
+      if (char.role) bullets.push(char.role);
+      if (char.appearance) bullets.push(_truncateAtBoundary(char.appearance, 70));
+      if (char.personality) bullets.push(_truncateAtBoundary(char.personality, 70));
+      else if (char.occupation) bullets.push(char.occupation);
+      return { name: char.name, kind: "character", bullets: bullets.slice(0, 3) };
+    }
+    const place = (project?.worldBuilding || []).find(w => w.name && w.name.toLowerCase().split(/\s+/).includes(wl));
+    if (place) {
+      const bullets = [];
+      if (place.category) bullets.push(place.category);
+      if (place.description) bullets.push(_truncateAtBoundary(place.description, 80));
+      if (place.atmosphere) bullets.push(_truncateAtBoundary(place.atmosphere, 70));
+      return { name: place.name, kind: "world", bullets: bullets.slice(0, 3) };
+    }
+    return null;
+  }, [project?.characters, project?.worldBuilding]);
+
+  // Clipboard strips: grab the current selection into a project-local clip (max 10); insert a clip
+  // at the caret and consume it. Lightweight structural-rearrangement aid, no third-party manager.
+  const grabClip = useCallback(() => {
+    const sel = window.getSelection();
+    const text = sel ? sel.toString().trim() : "";
+    if (!text) { showToast("Select some text first", "info"); return; }
+    setClipStrips(prev => [{ id: uid(), text }, ...prev].slice(0, 10));
+    setShowClips(true);
+    showToast("Saved to clip strip", "success");
+  }, [showToast]);
+
+  const insertClip = useCallback((clip) => {
+    const el = editorRef.current;
+    if (el) el.focus();
+    document.execCommand("insertText", false, clip.text);
+    setClipStrips(prev => prev.filter(c => c.id !== clip.id)); // consumed
+    syncEditorContent(true);
+  }, [syncEditorContent]);
+
+  const jumpToNextBlank = useCallback(() => {
+    const el = editorRef.current;
+    if (!el) return;
+    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null, false);
+    const sel = window.getSelection();
+    const caretNode = sel?.anchorNode;
+    const caretOffset = sel?.anchorOffset ?? 0;
+    let firstMatch = null, afterCaret = null, passedCaret = !caretNode;
+    let n;
+    while ((n = walker.nextNode())) {
+      const idx = n.nodeValue.indexOf("[??]");
+      if (idx === -1) { if (n === caretNode) passedCaret = true; continue; }
+      const hit = { node: n, idx };
+      if (!firstMatch) firstMatch = hit;
+      if (passedCaret && !afterCaret && !(n === caretNode && idx < caretOffset)) afterCaret = hit;
+      if (n === caretNode) passedCaret = true;
+    }
+    const target = afterCaret || firstMatch;
+    if (!target) { showToast("No [??] placeholders found", "info"); return; }
+    const range = document.createRange();
+    range.setStart(target.node, target.idx);
+    range.setEnd(target.node, target.idx + 4);
+    sel.removeAllRanges(); sel.addRange(range);
+    const parent = target.node.parentElement;
+    if (parent?.scrollIntoView) parent.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [showToast]);
   
   const handleGenerate = useCallback(async () => {
     if (isGenerating) return;
@@ -12694,7 +13824,7 @@ const appendToChapter = useCallback((text) => {
       const result = await callOpenRouter([
         { role: "system", content: `You are writing a non-canon character voice test. Write a ~500-word interaction between these two characters in a void/"white room" setting with the specified tension. Focus on distinct dialogue voices, body language, and internal states. This is for voice testing only — it doesn't affect the story.\n\n${c1Desc || "no description"}\n${c2Desc || ""}` },
         { role: "user", content: `Starting tension: ${tension || "none"}.${scenarioText || ""}\n\nWrite the scene. Make their voices distinct and authentic.` },
-      ], { maxTokens: 1200, temperature: 0.9 });
+      ], { maxTokens: 4800, temperature: 0.9 });
       setWhiteRoom(prev => ({ ...prev, result, isGenerating: false }));
     } catch (e) {
       showToast(`White Room failed: ${e.message}`, "error");
@@ -12724,7 +13854,7 @@ const appendToChapter = useCallback((text) => {
       const result = await callOpenRouter([
         { role: "system", content: `You are rewriting a passage from a different character's internal perspective. Preserve the same scene events but shift entirely into ${flipTo?.name || "unknown"}'s psychological state, thoughts, and sensory experience.\n\n${flipTo?.name || "unknown"} (${flipTo?.role || "character"}): ${flipTo.personality || ""}. ${flipTo.desires ? `Desires: ${flipTo.desires}` : ""}` },
         { role: "user", content: `Rewrite this passage entirely from ${flipTo?.name || "unknown"}'s internal perspective (currently written from ${currentPov?.name || "the character"}'s perspective):\n\n${selectedText || ""}` },
-      ], { maxTokens: 10000, temperature: 0.8 });
+      ], { maxTokens: 24000, temperature: 0.8 });
       if (result) {
         setDiffReview({
           original: selectedText, proposed: result,
@@ -12794,7 +13924,7 @@ Write a detailed summary that a writing AI can use to maintain consistency in fu
 
 Be specific with character names. Write as a factual reference, not a story recap.` },
         { role: "user", content: `Summarize Chapter ${chNum || 1}${chapterDate ? ` (${chapterDate})` : ""}: "${ch.title || 'Untitled'}":\n\n${sample || ""}` },
-      ], { maxTokens: 10000, temperature: 0.3 });
+      ], { maxTokens: 24000, temperature: 0.3 });
 
       // E1: Track when summary was generated for stale detection
       updateChapter(idx, { summary, summaryGeneratedAt: new Date().toISOString() });
@@ -12861,7 +13991,7 @@ For each character who changed, output:
 Fields you can suggest: desires, shortTermGoals, longTermGoals, arc, status, canonNotes, backstory, speechPattern, internalConflict, externalConflict, allegiances, secrets, currentEmotionalState, obligationsOwed, knowledgeState.
 If no updates are needed, respond "No character updates needed."` },
             { role: "user", content: `Chapter ${chNum || 1}${chapterDate ? ` (${chapterDate})` : ""} summary: ${summary || ""}\n\nCurrent character profiles:\n${charContext || ""}\n\nChapter number: ${chNum || 1}${chapterDate ? `\nStory date: ${chapterDate}` : ""}` },
-          ], { maxTokens: 10000, temperature: 0.4 });
+          ], { maxTokens: 24000, temperature: 0.4 });
 
           if (suggestions && !suggestions.toLowerCase().includes("no character updates needed")) {
             // FIX: Parse structured JSON suggestions for reviewable UI
@@ -12979,7 +14109,7 @@ Example output:
 
 If no relationship changes, respond "No relationship updates needed."` },
               { role: "user", content: `Chapter ${chNum || 1}${chapterDate ? ` (${chapterDate})` : ""} summary: ${summary || ""}\n\nChapter number: ${chNum || 1}${chapterDate ? `\nStory date: ${chapterDate}` : ""}\nCharacters in scene: ${mentionedChars.map(c => c.name).join(", ")}` },
-            ], { maxTokens: 10000, temperature: 0.5 });
+            ], { maxTokens: 24000, temperature: 0.5 });
 
             if (relSuggestions && !relSuggestions.toLowerCase().includes("no relationship updates needed")) {
               let parsedRelSuggestions = [];
@@ -13077,11 +14207,46 @@ If no relationship changes, respond "No relationship updates needed."` },
     setIsSummarizing(false);
   }, [project, callOpenRouter, updateChapter, showToast, setChatMessages]);
 
+  // Markdown bundle export — one .md per chapter + manifest.json, zipped. Portable, plain-text,
+  // readable anywhere even without this app. Reference notes are stripped from compiled prose.
+  const handleExportMarkdownBundle = useCallback(() => {
+    if (!project) return;
+    const slug = (s) => (s || "untitled").toLowerCase().replace(/[^\w]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 50);
+    const files = [];
+    const htmlToMd = (html) => {
+      let c = _stripRefBlocks(html || "");
+      c = c.replace(/<(strong|b)>(.*?)<\/\1>/gi, "**$2**").replace(/<(em|i)>(.*?)<\/\1>/gi, "*$2*");
+      c = c.replace(/<h([1-3])[^>]*>(.*?)<\/h\1>/gi, (_, n, t) => "\n" + "#".repeat(+n) + " " + t + "\n");
+      c = c.replace(/<br\s*\/?>/gi, "\n").replace(/<\/p>\s*<p[^>]*>/gi, "\n\n").replace(/<[^>]*>/g, "");
+      c = c.replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'");
+      return c.replace(/\n{3,}/g, "\n\n").trim();
+    };
+    (project.chapters || []).forEach((ch, i) => {
+      const num = String(i + 1).padStart(3, "0");
+      files.push({ name: `chapters/${num}-${slug(ch.title)}.md`, text: `# ${ch.title || `Chapter ${i + 1}`}\n\n${htmlToMd(ch.content)}\n` });
+    });
+    // Manifest with structure + metadata (so the app or a human can reconstruct order).
+    const manifest = {
+      title: project.title, genre: project.genre, pov: project.pov,
+      exportedAt: new Date().toISOString(), format: "novelforge-md-bundle",
+      chapters: (project.chapters || []).map((ch, i) => ({ index: i, title: ch.title, file: `chapters/${String(i + 1).padStart(3, "0")}-${slug(ch.title)}.md`, words: compiledWordCount(ch.content), summary: ch.summary || "", pov: ch.pov || "" })),
+      characters: (project.characters || []).map(c => ({ name: c.name, role: c.role })),
+    };
+    files.push({ name: "manifest.json", text: JSON.stringify(manifest, null, 2) });
+    // A readable outline too.
+    files.push({ name: "outline.md", text: `# ${project.title}\n\n${(project.chapters || []).map((ch, i) => `${i + 1}. **${ch.title || "Untitled"}** (${compiledWordCount(ch.content)} words)${ch.summary ? `\n   ${ch.summary}` : ""}`).join("\n\n")}\n` });
+    const blob = makeZip(files);
+    const url = URL.createObjectURL(blob);
+    Object.assign(document.createElement("a"), { href: url, download: `${slug(project.title)}-manuscript.zip` }).click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    showToast("Exported Markdown bundle (.zip)", "success");
+  }, [project, showToast]);
+
   const handleExportTxt = useCallback(() => {
     if (!project) return;
     // E10: Preserve formatting markers in export
     const text = project.chapters?.map(ch => {
-      let content = ch.content || "";
+      let content = _stripRefBlocks(ch.content || "");
       // Convert HTML formatting to plain text markers
       content = content.replace(/<hr[^>]*>/gi, '\n* * *\n');
       content = content.replace(/<h[1-3][^>]*>(.*?)<\/h[1-3]>/gi, '\n## $1\n');
@@ -13206,7 +14371,7 @@ If no relationship changes, respond "No relationship updates needed."` },
     setActiveChapterIdx(0);
     setChatMessages([]);
     setSettings({
-      apiKey: "", model: "anthropic/claude-sonnet-4", maxTokens: 4096,
+      apiKey: "", model: "anthropic/claude-sonnet-4", maxTokens: 16384,
       temperature: 0.85, systemPrompt: "",
       frequencyPenalty: 0.1, presencePenalty: 0.15,
       modelContextWindow: 200000,
@@ -13343,7 +14508,7 @@ SCENE BOUNDARY RULE: A new [SCENE] block starts whenever a character PHYSICALLY 
 For each scene:
 1. [SCENE: description] — state the EXACT physical location (apartment, stairwell, street, park, etc.)
 2. Environment — describe ONLY what exists in THIS location. Visual details only. No sounds, smells, or non-visual sensations.
-3. Each character: Clothing (enhance described clothing or INFER if not described), appearance (only mention the lookalike name), positioning — all VISUAL ONLY
+3. Each character: Clothing (enhance described clothing or INFER if not described), appearance (enhance or infer), positioning — all VISUAL ONLY
 4. Clothing continuity — if no change is described, carry forward the outfit from the previous scene
 
 CRITICAL: Every sentence must describe something visible. If a detail cannot be seen in a photograph, remove it. Write for an image renderer that is completely blind to sound, smell, touch, and taste` },
@@ -13474,6 +14639,22 @@ CRITICAL: Every sentence must describe something visible. If a detail cannot be 
     forceRepopulateEditor();
     showToast(`"${draft.title}" restored`, "success");
   }, [project, activeChapterIdx, updateProject, showToast]);
+
+  // Restore a deletion-recovery snapshot back into its chapter. These are keyed by chapterId
+  // (not originalIndex) and only restore if the writer confirms, since it overwrites current text.
+  const handleRestoreRecovery = useCallback((snapId) => {
+    const snap = (project?.drafts || []).find(d => d.id === snapId);
+    if (!snap) return;
+    const chapters = [...(project?.chapters || [])];
+    let idx = chapters.findIndex(c => c.id === snap.chapterId);
+    if (idx < 0) idx = activeChapterIdx; // chapter gone → restore into current
+    if (!chapters[idx]) return;
+    chapters[idx] = { ...chapters[idx], content: snap.content };
+    updateProject({ chapters, drafts: (project?.drafts || []).filter(d => d.id !== snapId) });
+    setActiveChapterIdx(idx);
+    forceRepopulateEditor();
+    showToast(`Recovered ${snap.wordsRemoved?.toLocaleString() || ""} words into "${snap.chapterTitle || "chapter"}"`, "success");
+  }, [project, activeChapterIdx, updateProject, forceRepopulateEditor, showToast]);
 
   const handleDeleteDraft = useCallback((draftId) => {
     const d = (project?.drafts || []).find(x => x.id === draftId);
@@ -14027,6 +15208,38 @@ The FIRST attached image is the master photograph of this exact room. ${WALL_REF
     setPdfExportMode(null);
   }, [project, activeChapterIdx, showToast]);
 
+  // Apply a parsed backup payload (full multi-project autosave format). Used by both the
+  // desktop file-link path and the universal upload path so behavior is identical everywhere.
+  const applyLoadedBackup = useCallback((data, { linkFile = false } = {}) => {
+    if (!data) { showToast("Couldn't read that backup file", "error"); return; }
+    if (Array.isArray(data.projects) && data.projects.length) {
+      setProjects(data.projects);
+      setActiveProjectId(data.projects[0].id);
+      if (data.settings) setSettings(prev => ({ ...prev, ...data.settings }));
+      if (data.tabChats) setTabChatHistories(data.tabChats);
+      if (linkFile) setFileLinked(true);
+      showToast(`Restored ${data.projects.length} project${data.projects.length === 1 ? "" : "s"} from backup`, "success");
+    } else {
+      showToast("No projects found in that file", "error");
+    }
+  }, [showToast]);
+
+  // Universal restore from an <input type=file> — works on every browser including mobile.
+  const handleRestoreBackup = useCallback(async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = ""; // allow re-selecting the same file later
+    if (!file) return;
+    if (file.size > 25 * 1024 * 1024) { showToast("File too large (max 25MB)", "error"); return; }
+    const data = await FileStorage.parseUploadedFile(file);
+    if (!data) { showToast("That doesn't look like a NovelForge backup", "error"); return; }
+    // Full backup → restore everything; single project → delegate to the project importer.
+    if (Array.isArray(data.projects)) {
+      applyLoadedBackup(data);
+    } else if (data.title) {
+      handleImportJsonRef.current?.({ target: { files: [file], value: "" } });
+    }
+  }, [showToast, applyLoadedBackup]);
+
   const handleImportJson = useCallback((e) => {
     const file = e.target.files?.[0]; if (!file) return;
     // E9: Reject files over 10MB to prevent freezing
@@ -14065,6 +15278,7 @@ The FIRST attached image is the master photograph of this exact room. ${WALL_REF
           pov: ch.pov || "",
           summaryGeneratedAt: ch.summaryGeneratedAt || "",
           worldView: ch.worldView || "",
+          graveyard: Array.isArray(ch.graveyard) ? ch.graveyard : [],
         }));
         // Ensure characters have IDs and new fields default properly
         if (Array.isArray(imported.characters)) {
@@ -14141,6 +15355,8 @@ The FIRST attached image is the master photograph of this exact room. ${WALL_REF
     };
     reader.readAsText(file); e.target.value = "";
   }, [showToast]);
+
+  useEffect(() => { handleImportJsonRef.current = handleImportJson; }, [handleImportJson]);
 
   const handleCopyMsg = useCallback(async (msg) => {
     // F12: Prefer modern Clipboard API, fallback gracefully
@@ -14753,7 +15969,7 @@ The FIRST attached image is the master photograph of this exact room. ${WALL_REF
     { id: "settings", label: "Settings", icon: <Icons.Settings /> },
   ], []);
 
-  const currentChapterWords = wordCount(activeChapter?.content);
+  const currentChapterWords = compiledWordCount(activeChapter?.content);
 
   // A15: Memoize chapter word counts to avoid recalculating on every render
   const chapterWordCounts = useMemo(() => {
@@ -14994,7 +16210,7 @@ YOUR OUTPUT FORMAT (follow this EXACTLY):
 
 (Include this sentence) You must decide your choices on 1-7 sequentially & completely, no summarizing) before rendering! See this instructions: For next scene, still adhering to the character’s profile, do this:
 
-(1) CHARACTER APPEARANCE: For each character, describe their EXACT physical appearance using their look-alike as the face reference (describe everything but omit out face details except for the lookalike name). Include: build, height, skin tone, expression in THIS scene (no hair and no face description, only mention the look alike name). Write it as if describing a real person to a photographer. You must always mention the look-alike names for each character. VISUAL ONLY — no sound, no smell, no sensation.
+(1) CHARACTER APPEARANCE: For each character, describe their EXACT physical appearance using their look-alike as the face reference. Include: build, height, skin tone, hair, facial features, expression in THIS scene. Write it as if describing a real person to a photographer. You must always mention the look-alike names for each character. VISUAL ONLY — no sound, no smell, no sensation.
 
 (2) CLOTHING: USE THE CLOTHING FROM THE WORLD VIEW — the world view tracks what characters are wearing scene-by-scene. Find the matching scene and use those exact clothing details. Do NOT invent new outfits. Every detail must be something a camera can see: color, fabric, fit, condition. Never describe what's under the clothing. Treats nudity like this: add a foreground blurred item(s) that blocks that specific sensitive body part without mentioning those body part(s).
 
@@ -15548,7 +16764,7 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                   </div>
                 </div>
                 {/* Drafts for this chapter — shown inline when sidebar drafts section is open */}
-                {showDrafts && (project?.drafts || []).filter(d => (d.originalIndex ?? -1) === i).map(draft => (
+                {showDrafts && (project?.drafts || []).filter(d => d.type !== "deletion-recovery" && (d.originalIndex ?? -1) === i).map(draft => (
                   <div key={draft.id} style={{
                     padding: "4px 10px 5px 28px", color: "var(--nf-text-muted)",
                     borderLeft: "2px solid var(--nf-accent)", marginLeft: 14, marginBottom: 2,
@@ -15578,8 +16794,32 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                 ))}
               </div>
             ))}
+            {/* Deletion-recovery snapshots — auto-saved when 100+ words were deleted at once */}
+            {showDrafts && (project?.drafts || []).filter(d => d.type === "deletion-recovery").length > 0 && (
+              <div style={{ marginLeft: 14, marginTop: 6, marginBottom: 4 }}>
+                <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--nf-accent)", padding: "2px 10px", display: "flex", alignItems: "center", gap: 6 }}>
+                  ⚠ Recovery snapshots
+                </div>
+                {(project?.drafts || []).filter(d => d.type === "deletion-recovery").map(snap => (
+                  <div key={snap.id} style={{ padding: "4px 10px", color: "var(--nf-text-muted)", borderLeft: "2px solid var(--nf-accent)", marginBottom: 2, background: "var(--nf-bg-surface)", borderRadius: "0 2px 2px 0" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 4 }}>
+                      <span title={snap.chapterTitle} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, fontSize: 11 }}>
+                        ↳ {snap.chapterTitle} <span style={{ opacity: 0.6 }}>· −{snap.wordsRemoved?.toLocaleString()}w · {_timeAgoShort(snap.savedAt)}</span>
+                      </span>
+                    </div>
+                    <div style={{ display: "flex", gap: 3, marginTop: 2 }}>
+                      <button onClick={(e) => { e.stopPropagation(); setConfirmDialog({ message: `Recover ${snap.wordsRemoved?.toLocaleString()} words back into "${snap.chapterTitle}"? This replaces the chapter's current text.`, onConfirm: () => { handleRestoreRecovery(snap.id); setConfirmDialog(null); } }); }}
+                        className="nf-btn-micro" style={{ fontSize: 11, padding: "2px 5px", borderColor: "var(--nf-success)", color: "var(--nf-success)" }}>
+                        ↩ Recover
+                      </button>
+                      <button onClick={(e) => { e.stopPropagation(); handleDeleteDraft(snap.id); }} className="nf-btn-micro" style={{ fontSize: 11, padding: "2px 5px" }}>✕</button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
             {/* Drafts for chapters that no longer exist (position out of range) */}
-            {showDrafts && (project?.drafts || []).filter(d => (d.originalIndex ?? 0) >= (project?.chapters?.length || 0)).map(draft => (
+            {showDrafts && (project?.drafts || []).filter(d => d.type !== "deletion-recovery" && (d.originalIndex ?? 0) >= (project?.chapters?.length || 0)).map(draft => (
               <div key={draft.id} style={{
                 padding: "4px 10px", color: "var(--nf-text-muted)",
                 borderLeft: "2px solid var(--nf-accent-2)", marginLeft: 14, marginBottom: 2,
@@ -15902,6 +17142,34 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
           {!settings.silentWritingMode && (
             <span className="nf-word-count">{currentChapterWords > 0 ? `${currentChapterWords.toLocaleString()} words · ${Math.max(1, Math.ceil(currentChapterWords / 250))}m read` : ""}</span>
           )}
+          {/* Focus-locked sprint */}
+          {sprint ? (
+            <SprintTimer sprint={sprint} currentWords={totalProjectWords}
+              onEnd={(completed) => { setSprint(null); if (completed) showToast("Sprint complete! 🎉", "success"); }} />
+          ) : !settings.silentWritingMode && (
+            <span style={{ display: "inline-flex", gap: 4, alignItems: "center" }}>
+              <button onClick={() => setSprint({ mode: "time", target: 20, startWords: totalProjectWords, endsAt: Date.now() + 20 * 60000, startedAt: Date.now() })}
+                className="nf-btn-micro" style={{ fontSize: 10, padding: "1px 6px" }} title="20-minute writing sprint — locks navigation">⏱ 20m</button>
+              <button onClick={() => setSprint({ mode: "words", target: 500, startWords: totalProjectWords, startedAt: Date.now() })}
+                className="nf-btn-micro" style={{ fontSize: 10, padding: "1px 6px" }} title="500-word sprint — locks navigation">500w</button>
+            </span>
+          )}
+          {!settings.silentWritingMode && (() => {
+            const pe = ContextEngine._plotEntryForChapter(project, activeChapterIdx);
+            const target = pe?.wordTarget;
+            if (!target || target <= 0) return null;
+            const pct = Math.min(100, Math.round(currentChapterWords / target * 100));
+            const over = currentChapterWords > target;
+            const color = over ? "var(--nf-accent)" : pct >= 80 ? "var(--nf-success)" : "var(--nf-text-muted)";
+            return (
+              <span className="nf-word-count" title={`Scene target: ${target.toLocaleString()} words${over ? " — running long" : ""}`} style={{ color, display: "inline-flex", alignItems: "center", gap: 6 }}>
+                Scene: {currentChapterWords.toLocaleString()} / {target.toLocaleString()}
+                <span style={{ display: "inline-block", width: 40, height: 4, background: "var(--nf-bg-deep)", borderRadius: 2, overflow: "hidden" }}>
+                  <span style={{ display: "block", height: "100%", width: `${pct}%`, background: color }} />
+                </span>
+              </span>
+            );
+          })()}
           <div className="nf-header-actions">
             <select value={activeChapter?.pov || ""} onChange={e => updateChapter(activeChapterIdx, { pov: e.target.value })}
               aria-label="Chapter POV"
@@ -16079,6 +17347,11 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
               {focusMode ? <Icons.Minimize /> : <Icons.Maximize />}
             </button>
             <button onClick={() => setCleanView(true)} className="nf-btn-icon-sm" title="Clean view — read your chapters"><Icons.Eye /> Read</button>
+            <button onClick={() => setDialogueIsolation(d => !d)} className="nf-btn-icon-sm" style={dialogueIsolation ? { borderColor: "var(--nf-accent)", color: "var(--nf-accent)" } : {}} title="Dialogue isolation — read just the spoken lines" aria-label="Toggle dialogue isolation">💬 Dialogue</button>
+            <button onClick={() => setSensoryAudit(s => !s)} className="nf-btn-icon-sm" style={sensoryAudit ? { borderColor: "var(--nf-accent)", color: "var(--nf-accent)" } : {}} title="Sensory audit — highlight which senses your prose engages" aria-label="Toggle sensory audit">👁 Senses</button>
+            <button onClick={jumpToNextBlank} className="nf-btn-icon-sm" title="Jump to next [??] placeholder (Ctrl+Shift+[ to drop one)" aria-label="Jump to next placeholder">⟶ [??]</button>
+            <button onClick={() => setShowTypeset(true)} className="nf-btn-icon-sm" title="Typeset preview — see this chapter as 6×9 paperback pages" aria-label="Typeset preview">📖 Pages</button>
+            <button onClick={() => setShowClips(s => !s)} className="nf-btn-icon-sm" style={clipStrips.length ? { borderColor: "var(--nf-accent-2)", color: "var(--nf-accent-2)" } : {}} title="Clip strips — stash snippets (Ctrl+Shift+C) and drop them back in" aria-label="Clip strips">📎 {clipStrips.length || ""}</button>
             <Tooltip text="Color: Character voices">
               <button onClick={() => setColorMode(prev => prev === "voice" ? "off" : "voice")} className="nf-btn-icon-sm" style={colorMode === "voice" ? { borderColor: "var(--nf-accent)", color: "var(--nf-accent)" } : {}} aria-label="Character voice colors">
                 <Icons.Users /> {!isMobile && "Voice"}
@@ -16110,7 +17383,19 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                 message: `Delete "${activeChapter?.title}"?`,
                 onConfirm: () => {
                   const chs = project.chapters.filter((_, i) => i !== activeChapterIdx);
-                  updateProject({ chapters: chs.length ? chs : [{ id: uid(), title: "Chapter 1", content: "", summary: "", notes: "", sceneNotes: "", pov: "", summaryGeneratedAt: "", narrativeDistance: "", sensoryPalette: "", subtextNotes: "", tensionLevel: 5, chapterEndHookScore: 0, chapterEndHookNotes: "" }] });
+                  // Remap journal keys: drop the deleted chapter's entry, shift later entries down.
+                  const oldJournal = project.writingJournal || {};
+                  let remappedJournal = oldJournal;
+                  if (Object.keys(oldJournal).length) {
+                    remappedJournal = {};
+                    let w = 0;
+                    project.chapters.forEach((_, i) => {
+                      if (i === activeChapterIdx) return;
+                      if (oldJournal[i] !== undefined) remappedJournal[w] = oldJournal[i];
+                      w++;
+                    });
+                  }
+                  updateProject({ chapters: chs.length ? chs : [createDefaultChapter("Chapter 1")], writingJournal: chs.length ? remappedJournal : {} });
                   setActiveChapterIdx(Math.min(activeChapterIdx, Math.max(0, chs.length - 1)));
                   forceRepopulateEditor(); setConfirmDialog(null); showToast("Deleted", "success");
                 },
@@ -16174,7 +17459,24 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
               chapterContent={activeChapter?.content}
             />
           )}
-          <div className="nf-text-editor">
+          <div className="nf-text-editor" style={{ position: "relative" }}>
+            {atMenu && (
+              <div style={{ position: "fixed", left: Math.min(atMenu.x, window.innerWidth - 240), top: atMenu.y, zIndex: 9500, background: "var(--nf-bg-raised)", border: "1px solid var(--nf-border)", borderRadius: 6, boxShadow: "0 8px 28px rgba(0,0,0,0.4)", overflow: "hidden", minWidth: 200, maxWidth: 280 }}>
+                {atMenu.items.map((it, i) => (
+                  <button key={it.id} onMouseDown={(e) => { e.preventDefault(); applyAtChoice(it); }}
+                    style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, width: "100%", textAlign: "left", padding: "6px 10px", border: "none", cursor: "pointer", fontSize: 12, background: i === atMenu.index ? "var(--nf-accent-glow)" : "transparent", color: "var(--nf-text)" }}>
+                    <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{it.name}</span>
+                    <span style={{ fontSize: 10, color: "var(--nf-text-muted)", flexShrink: 0, textTransform: "lowercase" }}>{it.kind}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+            {!focusMode && !viewingDraftId && (
+              <PlaceholderGutter content={activeChapter?.content} editorRef={editorRef} />
+            )}
+            {!focusMode && !viewingDraftId && (activeChapter?.graveyard?.length > 0) && (
+              <MarginGraveyard entries={activeChapter.graveyard} onRestore={handleRestoreGraveyard} onDelete={handleDeleteGraveyard} />
+            )}
             {/* Chapter banner image — optional mood-setter */}
             {activeChapter?.bannerImage && !focusMode && (
               <div style={{ position: "relative", marginBottom: 12, borderRadius: 3, overflow: "hidden", border: "1px solid var(--nf-border)" }}>
@@ -16213,6 +17515,7 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                 }
                 const el = e.currentTarget;
                 el.classList.toggle("nf-has-content", el.textContent.trim().length > 0);
+                if (!viewingDraftId) detectAtTrigger();
               }}
               onBlur={() => { debouncedSyncEditor.cancel(); pushUndo(); syncEditorContent(); }}
               onMouseUp={(e) => {
@@ -16221,6 +17524,13 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
 			    const text = sel ? sel.toString().trim() : "";
 			    if (text.length > 0) pendingSelectionRef.current = text;
 			  }}
+              onMouseMove={(e) => {
+                if (!settings?.hoverPeek) return;
+                const peek = _peekEntityAt(e.clientX, e.clientY);
+                if (peek) setHoverPeek({ ...peek, x: e.clientX, y: e.clientY });
+                else setHoverPeek(null);
+              }}
+              onMouseLeave={() => setHoverPeek(null)}
               onKeyUp={(e) => {
 			    handleEditorSelect(e);
 			    // Detect which beat cursor is in
@@ -16228,11 +17538,69 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
 			    if (beatId) setActiveBeatId(beatId);
 			  }}
               onKeyDown={(e) => {
+                // @-autocomplete menu navigation takes priority when open.
+                if (atMenu) {
+                  if (e.key === "ArrowDown") { e.preventDefault(); setAtMenu(m => m && { ...m, index: (m.index + 1) % m.items.length }); return; }
+                  if (e.key === "ArrowUp") { e.preventDefault(); setAtMenu(m => m && { ...m, index: (m.index - 1 + m.items.length) % m.items.length }); return; }
+                  if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); applyAtChoice(atMenu.items[atMenu.index]); return; }
+                  if (e.key === "Escape") { e.preventDefault(); setAtMenu(null); return; }
+                }
                 // A8: Keyboard shortcuts for formatting
                 const mod = e.metaKey || e.ctrlKey;
                 if (mod && e.key === 'b') { e.preventDefault(); document.execCommand('bold'); syncEditorContent(); }
                 else if (mod && e.key === 'i') { e.preventDefault(); document.execCommand('italic'); syncEditorContent(); }
                 else if (mod && e.shiftKey && e.key === 'x') { e.preventDefault(); document.execCommand('strikeThrough'); syncEditorContent(); }
+                // Blank-marker: drop a [??] placeholder to keep flow; jump between them later.
+                else if (mod && e.shiftKey && (e.key === '[' || e.code === 'BracketLeft')) {
+                  e.preventDefault();
+                  document.execCommand('insertText', false, '[??]');
+                  syncEditorContent();
+                }
+                // Scene break: centered *** on its own line, cursor continues below.
+                else if (mod && e.key === 'Enter') {
+                  e.preventDefault();
+                  document.execCommand('insertHTML', false, '<p style="text-align:center" class="nf-scene-break">* * *</p><p><br></p>');
+                  syncEditorContent();
+                }
+                // Clipboard strip: grab selection to a project-local clip (Ctrl+Shift+C).
+                else if (mod && e.shiftKey && (e.key === 'C' || e.key === 'c')) {
+                  e.preventDefault();
+                  grabClip();
+                }
+                // Toggle current block as a non-compiling reference note (Ctrl+Shift+R).
+                else if (mod && e.shiftKey && (e.key === 'R' || e.key === 'r')) {
+                  e.preventDefault();
+                  const sel = window.getSelection();
+                  let block = sel?.anchorNode?.nodeType === 3 ? sel.anchorNode.parentElement : sel?.anchorNode;
+                  const el = editorRef.current;
+                  while (block && block.parentElement !== el) block = block.parentElement;
+                  if (block) { block.classList.toggle("nf-refblock"); syncEditorContent(true); }
+                }
+                // In-line graveyard: cut the selection out of the draft but keep it retrievable,
+                // anchored to its spot, in the margin gutter (Ctrl+Shift+G).
+                else if (mod && e.shiftKey && (e.key === 'G' || e.key === 'g')) {
+                  e.preventDefault();
+                  const sel = window.getSelection();
+                  const text = sel ? sel.toString().trim() : "";
+                  if (text.length > 0) {
+                    // anchor = index of the block the selection starts in
+                    let block = sel.anchorNode?.nodeType === 3 ? sel.anchorNode.parentElement : sel.anchorNode;
+                    const el = editorRef.current;
+                    while (block && block.parentElement !== el) block = block.parentElement;
+                    const anchorIndex = block ? Array.from(el.children).indexOf(block) : 0;
+                    document.execCommand('delete');
+                    syncEditorContent(true);
+                    const entry = { id: uid(), text, anchorIndex, cutAt: new Date().toISOString() };
+                    setProjects(prev => prev.map(p => {
+                      if (p.id !== activeProjectId) return p;
+                      const chapters = [...(p.chapters || [])];
+                      const ch = chapters[activeChapterIdx];
+                      if (ch) chapters[activeChapterIdx] = { ...ch, graveyard: [...(ch.graveyard || []), entry] };
+                      return { ...p, chapters };
+                    }));
+                    showToast("Moved to margin graveyard", "info");
+                  }
+                }
               }}
               onPaste={(e) => {
                 // Check for image data in clipboard
@@ -16337,6 +17705,18 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
 				  }
 				}
 			  }} />
+          {/* ─── DIALOGUE ISOLATION OVERLAY ─── */}
+          {dialogueIsolation && !viewingDraftId && (
+            <DialogueIsolationView content={activeChapter?.content} onClose={() => setDialogueIsolation(false)} />
+          )}
+          {/* ─── SENSORY AUDIT OVERLAY ─── */}
+          {sensoryAudit && !viewingDraftId && (
+            <SensoryAuditView content={activeChapter?.content} onClose={() => setSensoryAudit(false)} />
+          )}
+          {/* ─── MICRO-PACING WAVEFORM ─── */}
+          {!viewingDraftId && !focusMode && settings?.pacingWaveform && (
+            <PacingWaveform content={activeChapter?.content} />
+          )}
           {/* ─── INLINE IMAGE PROMPT BOX ─── */}
           {imagePromptData && (
             <div style={{
@@ -16611,8 +17991,32 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                 className="nf-btn-icon-sm" aria-label="Add character"><Icons.Plus /></button>
               <button onClick={() => setShowGroupForm(prev => !prev)}
                 className="nf-btn-icon-sm" aria-label="Add bulk group" title="Add bulk character group" style={{ color: "var(--nf-accent-2)", borderColor: "var(--nf-accent-2)" }}><Icons.Users /></button>
+              <button onClick={() => setShowLineup(true)} className="nf-btn-icon-sm" aria-label="Height lineup" title="Compare character heights">↕</button>
             </div>
           </div>
+          {/* Global style-lock — one reference image standardizes the roster's art aesthetic */}
+          {settings.apiKey && (
+            <div style={{ padding: "8px 10px", borderBottom: "1px solid var(--nf-border)", display: "flex", alignItems: "center", gap: 8 }}>
+              {project?.styleLockImage ? (
+                <>
+                  <img src={project.styleLockImage} alt="Style lock" style={{ width: 28, height: 28, borderRadius: 3, objectFit: "cover", border: "1px solid var(--nf-accent)" }} />
+                  <span style={{ fontSize: 11, color: "var(--nf-text-muted)", flex: 1 }}>Style locked — new art matches this</span>
+                  <button onClick={() => updateProject({ styleLockImage: "" })} className="nf-btn-micro" style={{ fontSize: 10, padding: "1px 5px" }}>Clear</button>
+                </>
+              ) : (
+                <label style={{ fontSize: 11, color: "var(--nf-text-muted)", cursor: "pointer", display: "flex", alignItems: "center", gap: 6, flex: 1 }}>
+                  <Icons.Image /> Set roster style-lock image…
+                  <input type="file" accept="image/*" style={{ display: "none" }} onChange={e => {
+                    const file = e.target.files?.[0]; e.target.value = "";
+                    if (!file) return;
+                    const reader = new FileReader();
+                    reader.onload = ev => updateProject({ styleLockImage: ev.target.result });
+                    reader.readAsDataURL(file);
+                  }} />
+                </label>
+              )}
+            </div>
+          )}
           {showGroupForm && (
             <div style={{ padding: "8px 10px", borderBottom: "1px solid var(--nf-border)", background: "var(--nf-bg-raised)" }}>
               <div style={{ fontSize: 11, fontWeight: 600, color: "var(--nf-accent-2)", marginBottom: 6 }}>New Character Group</div>
@@ -16909,6 +18313,12 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
             <div className="nf-char-section">
               <div className="nf-char-section-label">Identity</div>
               <DebouncedField label="Name" value={editingChar.name} onChange={v => updateCharById(editingCharId, "name", v)} placeholder="Full name" />
+              <div style={{ marginTop: -2, marginBottom: 6 }}>
+                <button onClick={() => {
+                  const cur = editingChar.name || "";
+                  setRenameDialog({ charId: editingCharId, oldName: cur, newName: cur });
+                }} className="nf-btn-micro" style={{ fontSize: 10, padding: "2px 6px" }} title="Safely rename this character everywhere in the prose (whole-word only)">⇄ Rename everywhere</button>
+              </div>
               <DebouncedField label="Aliases / Nicknames" value={editingChar.aliases} onChange={v => updateCharById(editingCharId, "aliases", v)} placeholder="Comma-separated: Lizzy, Lady B, The Duchess" small />
               <DebouncedField label="Look-Alike (for image prompts)" value={editingChar.lookAlike} onChange={v => updateCharById(editingCharId, "lookAlike", v)} placeholder="Famous person name, e.g. Joe Manganiello, Ana de Armas" small />
               {/* D5: Group role + gender + pronouns, then age + status + appearance ch */}
@@ -17007,6 +18417,16 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
               <DebouncedField label="Appearance" value={editingChar.appearance} onChange={v => updateCharById(editingCharId, "appearance", v)} multiline placeholder="Physical description — height, build, coloring, distinguishing features..." />
               <DebouncedField label="Personality" value={editingChar.personality} onChange={v => updateCharById(editingCharId, "personality", v)} multiline placeholder="Core traits, temperament, quirks, contradictions..." />
               <DebouncedField label="Speech & Voice" value={editingChar.speechPattern} onChange={v => updateCharById(editingCharId, "speechPattern", v)} multiline placeholder="Vocabulary, accent, verbal tics, how they sound under stress..." small />
+              <div className="nf-field" style={{ marginTop: 6 }}>
+                <label className="nf-label" style={{ fontSize: 11 }}>Locked linguistic register (voice guard)</label>
+                <select value={editingChar.register || ""} onChange={e => updateCharById(editingCharId, "register", e.target.value)} className="nf-select" style={{ fontSize: 12 }}>
+                  <option value="">None — don't check</option>
+                  <option value="archaic">Archaic / pre-modern (flags modern words)</option>
+                  <option value="formal">Formal / educated (flags slang & contractions)</option>
+                  <option value="modern_casual">Modern casual (flags archaic words)</option>
+                </select>
+                <div style={{ fontSize: 10, color: "var(--nf-text-muted)", marginTop: 3 }}>Flags voice violations in chapters this character narrates — see Memory tab.</div>
+              </div>
               {/* Auto-derived: how others address this character (from relationship terms) */}
               {(() => {
                 const addressTerms = [];
@@ -17146,6 +18566,95 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
                 <DebouncedField label="Knowledge State" value={editingChar.knowledgeState || ""} onChange={v => updateCharById(editingCharId, "knowledgeState", v)} multiline placeholder="e.g. 'Knows the letter is forged. Doesn't know Marcus's secret. Suspects the affair.'" small />
               </div>
             </div>
+
+            {/* Spatial trait pins — bind exact descriptors (eye color hex, etc.) to all future gens */}
+            {(() => {
+              const mm = detectAppearanceMismatches(editingChar, project?.chapters);
+              if (!mm.length) return null;
+              return (
+                <div style={{ margin: "0 0 12px", padding: "8px 12px", background: "var(--nf-accent-glow)", border: "1px solid var(--nf-accent)", borderRadius: 4 }}>
+                  {mm.map((f, i) => (
+                    <div key={i} style={{ fontSize: 11, color: "var(--nf-accent)", display: "flex", alignItems: "center", gap: 6 }}>
+                      ⚠ Appearance lists <strong>{f.recorded} {f.trait}</strong>, but the prose mentions <strong>{f.found} {f.trait}</strong> — possible continuity slip.
+                    </div>
+                  ))}
+                </div>
+              );
+            })()}
+
+            {/* Spatial trait pins — bind exact descriptors (eye color hex, etc.) to all future gens */}
+            {settings.apiKey && (
+              <div className="nf-char-section">
+                <div className="nf-char-section-label">Locked Visual Traits</div>
+                <div style={{ fontSize: 11, color: "var(--nf-text-muted)", marginBottom: 8 }}>Pin exact descriptors so they're injected into every generation — prevents drift (e.g. "emerald eyes #2E8B57").</div>
+                {(editingChar.traitPins || []).map(pin => (
+                  <div key={pin.id} style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 4 }}>
+                    {pin.hex && <span style={{ width: 14, height: 14, borderRadius: 3, background: pin.hex, border: "1px solid var(--nf-border)", flexShrink: 0 }} />}
+                    <span style={{ fontSize: 12, color: "var(--nf-text)", flex: 1 }}>{pin.prompt}</span>
+                    <button onClick={() => updateCharById(editingCharId, "traitPins", (editingChar.traitPins || []).filter(p => p.id !== pin.id))} className="nf-btn-micro" style={{ fontSize: 10, padding: "1px 5px" }}>✕</button>
+                  </div>
+                ))}
+                <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+                  <input id={`traitprompt-${editingCharId}`} placeholder='e.g. "emerald green eyes"' className="nf-input" style={{ flex: 1, fontSize: 11, padding: "3px 8px" }} />
+                  <input id={`traithex-${editingCharId}`} type="color" defaultValue="#2E8B57" style={{ width: 32, height: 26, padding: 0, border: "1px solid var(--nf-border)", borderRadius: 3, background: "none" }} />
+                  <button onClick={() => {
+                    const pEl = document.getElementById(`traitprompt-${editingCharId}`);
+                    const hEl = document.getElementById(`traithex-${editingCharId}`);
+                    const prompt = pEl?.value.trim();
+                    if (!prompt) return;
+                    updateCharById(editingCharId, "traitPins", [...(editingChar.traitPins || []), { id: uid(), prompt, hex: hEl?.value || "" }]);
+                    if (pEl) pEl.value = "";
+                  }} className="nf-btn-micro" style={{ fontSize: 11 }}>Pin</button>
+                </div>
+              </div>
+            )}
+
+            {/* AI character art — model sheet + relighting (clothed reference art) */}
+            {settings.apiKey && (
+              <div className="nf-char-section">
+                <div className="nf-char-section-label">Generate Reference Art</div>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                  <button onClick={() => generateCharVariant(editingChar, "portrait")} className="nf-btn-micro" style={{ fontSize: 11 }}>Portrait</button>
+                  <button onClick={() => generateCharVariant(editingChar, "model-sheet")} className="nf-btn-micro" style={{ fontSize: 11 }} title="Front / side / back turnaround">Model sheet</button>
+                  <select onChange={e => { if (e.target.value) { generateCharVariant(editingChar, `relight:${e.target.value}`); e.target.value = ""; } }}
+                    defaultValue="" className="nf-input" style={{ fontSize: 11, padding: "3px 8px" }} title="Relight a portrait">
+                    <option value="">Relight…</option>
+                    <option value="harsh midday sun">Harsh midday</option>
+                    <option value="warm candlelight">Candlelight</option>
+                    <option value="cool moonlight">Moonlight</option>
+                    <option value="neon city glow">Neon</option>
+                    <option value="soft overcast">Overcast</option>
+                    <option value="golden hour">Golden hour</option>
+                  </select>
+                </div>
+                <div style={{ fontSize: 11, color: "var(--nf-text-muted)", marginTop: 6 }}>Generates clothed character-design reference art into the mood board below, using this character's appearance fields.</div>
+                {/* Chronological aging — full-character regen at a target age, identity kept via pins */}
+                <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid var(--nf-border)" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <span style={{ fontSize: 11, color: "var(--nf-text-muted)", minWidth: 40 }}>Age</span>
+                    <input type="range" min="5" max="90" defaultValue={editingChar.age || 30}
+                      onChange={e => { const lbl = document.getElementById(`agelbl-${editingCharId}`); if (lbl) lbl.textContent = e.target.value; }}
+                      style={{ flex: 1 }} id={`agerange-${editingCharId}`} />
+                    <span id={`agelbl-${editingCharId}`} style={{ fontSize: 12, color: "var(--nf-text)", minWidth: 24 }}>{editingChar.age || 30}</span>
+                    <button onClick={() => { const v = document.getElementById(`agerange-${editingCharId}`)?.value; generateCharVariant(editingChar, `age:${v}`); }}
+                      className="nf-btn-micro" style={{ fontSize: 11 }}>Age it</button>
+                  </div>
+                  <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+                    <input id={`outfit-${editingCharId}`} placeholder="Outfit (e.g. travel robes)" className="nf-input" style={{ flex: 1, fontSize: 11, padding: "3px 8px" }} />
+                    <button onClick={() => { const v = document.getElementById(`outfit-${editingCharId}`)?.value.trim(); if (v) generateCharVariant(editingChar, `outfit:${v}`); }} className="nf-btn-micro" style={{ fontSize: 11 }}>Outfit</button>
+                    <select onChange={e => { if (e.target.value) { generateCharVariant(editingChar, `expr:${e.target.value}`); e.target.value = ""; } }} defaultValue="" className="nf-input" style={{ fontSize: 11, padding: "3px 8px" }}>
+                      <option value="">Expression…</option>
+                      <option value="angry">Angry</option>
+                      <option value="joyful">Joyful</option>
+                      <option value="grieving">Grieving</option>
+                      <option value="afraid">Afraid</option>
+                      <option value="determined">Determined</option>
+                      <option value="surprised">Surprised</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/* Mood Board — multiple reference images for character */}
             <div className="nf-char-section">
@@ -18455,6 +19964,7 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
                       }
                     }} placeholder="Chapter title" small />
                     <SelectField label="Scene Type" value={p.sceneType || "narrative"} onChange={v => updateProject({ plotOutline: outline.map(pl => pl.id === p.id ? { ...pl, sceneType: v } : pl) })} options={SCENE_TYPE_OPTIONS} />
+                    <DebouncedField label="Word Target (optional)" type="number" value={p.wordTarget || ""} onChange={v => updateProject({ plotOutline: outline.map(pl => pl.id === p.id ? { ...pl, wordTarget: parseInt(v) || 0 } : pl) })} placeholder="e.g. 600" small />
                   </div>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px 12px", marginBottom: 8 }}>
                     <SelectField label="POV Style" value={p.pov || ""} onChange={v => updateProject({ plotOutline: outline.map(pl => pl.id === p.id ? { ...pl, pov: v } : pl) })} options={POV_OPTIONS} placeholder="Default" />
@@ -18866,6 +20376,30 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
                         </div>
                       </div>
                     )}
+                    {/* Relationship Vector Map — timeline of how status/tension shifted per chapter */}
+                    {Object.keys(r.chapterEvolution || {}).length > 0 && (() => {
+                      const evoKeys = Object.keys(r.chapterEvolution).map(Number).filter(n => !isNaN(n)).sort((a, b) => a - b);
+                      const points = evoKeys.map(k => ({ ch: k, ...r.chapterEvolution[k] }));
+                      const tensionVal = { low: 1, medium: 2, high: 3, extreme: 4 };
+                      return (
+                        <div style={{ margin: "4px 0 12px", padding: "10px 14px", background: "var(--nf-bg-deep)", border: "1px solid var(--nf-border)", borderRadius: 2 }}>
+                          <div style={{ fontSize: 11, fontWeight: 500, color: "var(--nf-text-muted)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 }}>Vector Map — tracked evolution</div>
+                          <div style={{ display: "flex", alignItems: "stretch", gap: 0, overflowX: "auto", paddingBottom: 4 }}>
+                            {points.map((p, pi) => (
+                              <div key={p.ch} style={{ display: "flex", alignItems: "center", flexShrink: 0 }}>
+                                <div style={{ minWidth: 92, padding: "6px 8px", background: "var(--nf-bg-surface)", border: "1px solid var(--nf-border)", borderRadius: 4, fontSize: 10 }}>
+                                  <div style={{ color: "var(--nf-accent-2)", fontWeight: 600, fontFamily: "var(--nf-font-mono)" }}>Ch{p.ch + 1}</div>
+                                  {p.status && <div style={{ color: "var(--nf-text)", marginTop: 2 }}>{p.status}</div>}
+                                  {p.tension && <div style={{ color: "var(--nf-text-muted)" }}>tension: {p.tension}</div>}
+                                  {p.trustLevel && <div style={{ color: "var(--nf-text-muted)" }}>trust: {p.trustLevel}</div>}
+                                </div>
+                                {pi < points.length - 1 && <span style={{ color: "var(--nf-text-muted)", padding: "0 4px" }}>→</span>}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      );
+                    })()}
                     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                       <SelectField label="Power Dynamic" value={r.powerDynamic || "equal"} onChange={v => updateProject({ relationships: rels.map(re => re.id === r.id ? { ...re, powerDynamic: v } : re) })} options={POWER_DYNAMIC_OPTIONS} />
                       <SelectField label="Trust Level" value={r.trustLevel || "medium"} onChange={v => updateProject({ relationships: rels.map(re => re.id === r.id ? { ...re, trustLevel: v } : re) })} options={TRUST_LEVEL_OPTIONS} />
@@ -19018,7 +20552,7 @@ Arc: ${char.arc || ""}
 Speech pattern: ${char.speechPattern || ""}` },
               { role: "user", content: `Write your letter. We're at Chapter ${activeChapterIdx + 1} of the novel. This is the voice of YOU, speaking to your author.` },
             ],
-            max_tokens: 600, temperature: 0.9,
+            max_tokens: 2400, temperature: 0.9,
           }),
         });
         if (!res.ok) throw new Error(`API error ${res.status}`);
@@ -19457,11 +20991,148 @@ Speech pattern: ${char.speechPattern || ""}` },
             <pre className="nf-context-preview" dangerouslySetInnerHTML={{ __html: _highlightContextPayload(fullPayload) }} />
           )}
         </div>
+
+        {/* ─── DENSITY & RHYTHM HEATMAP (feature #5) ─── */}
+        {(project?.chapters || []).some(ch => ch.content) && (() => {
+          const rows = (project.chapters || []).map((ch, i) => {
+            const r = analyzeProseRhythm(ch.content);
+            return { i, title: ch.title || `Chapter ${i + 1}`, ...r };
+          });
+          const maxTotal = Math.max(1, ...rows.map(r => r.total));
+          const COLORS = { dialogue: "var(--nf-accent-2)", action: "var(--nf-accent)", exposition: "var(--nf-text-muted)" };
+          return (
+            <div className="nf-card" style={{ marginTop: 16 }}>
+              <h3 className="nf-card-title">Density & Rhythm</h3>
+              <p className="nf-hint" style={{ marginTop: -4, marginBottom: 14 }}>
+                Per-chapter pacing — proportion of <span style={{ color: COLORS.dialogue, fontWeight: 600 }}>dialogue</span>, <span style={{ color: COLORS.action, fontWeight: 600 }}>action</span>, and <span style={{ color: "var(--nf-text)", fontWeight: 600 }}>exposition</span>. Bar length reflects chapter length. Watch for long exposition-heavy stretches (sluggish) or all-action runs (rushed).
+              </p>
+              <div style={{ display: "grid", gap: 8 }}>
+                {rows.map(r => {
+                  const pct = (n) => r.total ? (n / r.total * 100) : 0;
+                  const widthPct = (r.total / maxTotal) * 100;
+                  return (
+                    <div key={r.i} style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                      <button onClick={() => { setActiveChapterIdx(r.i); setActiveTab("write"); }}
+                        title="Go to chapter"
+                        style={{ flex: "0 0 120px", textAlign: "left", fontSize: 11, color: "var(--nf-text-muted)", background: "none", border: "none", cursor: "pointer", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        {r.i + 1}. {r.title}
+                      </button>
+                      <div style={{ flex: 1, height: 18, display: "flex", borderRadius: 3, overflow: "hidden", background: "var(--nf-bg-deep)", width: `${Math.max(widthPct, 2)}%`, minWidth: 40 }} title={`${r.total} words · ${Math.round(pct(r.dialogue))}% dialogue, ${Math.round(pct(r.action))}% action, ${Math.round(pct(r.exposition))}% exposition`}>
+                        {r.total > 0 ? (
+                          <>
+                            <div style={{ width: `${pct(r.dialogue)}%`, background: COLORS.dialogue }} />
+                            <div style={{ width: `${pct(r.action)}%`, background: COLORS.action }} />
+                            <div style={{ width: `${pct(r.exposition)}%`, background: COLORS.exposition, opacity: 0.5 }} />
+                          </>
+                        ) : null}
+                      </div>
+                      <span style={{ flex: "0 0 52px", textAlign: "right", fontSize: 11, color: "var(--nf-text-muted)", fontFamily: "var(--nf-font-mono)" }}>{r.total.toLocaleString()}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })()}
+
+        {/* ─── THEMATIC THREAD HEATMAP ─── */}
+        {(project?.chapters || []).some(ch => ch.content) && (() => {
+          const rows = analyzeMotifs(project.chapters);
+          const motifNames = Object.keys(DEFAULT_MOTIFS);
+          // Normalize each motif's intensity to its own max across chapters (per-1000-words density).
+          const densities = {};
+          motifNames.forEach(m => {
+            const vals = rows.map(r => (r.counts[m] / r.words) * 1000);
+            densities[m] = { vals, max: Math.max(0.0001, ...vals) };
+          });
+          const anyHits = motifNames.some(m => rows.some(r => r.counts[m] > 0));
+          if (!anyHits) return null;
+          return (
+            <div className="nf-card" style={{ marginTop: 16 }}>
+              <h3 className="nf-card-title">Thematic Threads</h3>
+              <p className="nf-hint" style={{ marginTop: -4, marginBottom: 14 }}>
+                Where each motif concentrates across chapters (intensity relative to that motif's own peak). Gaps show where a theme disappears.
+              </p>
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ borderCollapse: "collapse", fontSize: 11 }}>
+                  <thead>
+                    <tr>
+                      <th style={{ textAlign: "left", padding: "2px 8px", color: "var(--nf-text-muted)", fontWeight: 500 }}>Motif</th>
+                      {rows.map(r => (
+                        <th key={r.i} title={r.title} style={{ padding: "2px 3px", color: "var(--nf-text-muted)", fontWeight: 400, fontSize: 10, cursor: "pointer" }}
+                          onClick={() => { setActiveChapterIdx(r.i); setActiveTab("write"); }}>{r.i + 1}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {motifNames.map(m => (
+                      <tr key={m}>
+                        <td style={{ padding: "2px 8px", color: "var(--nf-text)", textTransform: "capitalize", whiteSpace: "nowrap" }}>{m}</td>
+                        {rows.map((r, ci) => {
+                          const intensity = densities[m].vals[ci] / densities[m].max;
+                          return (
+                            <td key={ci} title={`${r.title}: ${r.counts[m]} hit${r.counts[m] === 1 ? "" : "s"}`}
+                              style={{ width: 18, height: 18, padding: 0, background: r.counts[m] > 0 ? `rgba(196,154,108,${0.12 + intensity * 0.78})` : "var(--nf-bg-deep)", border: "1px solid var(--nf-bg)" }} />
+                          );
+                        })}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          );
+        })()}
+
+        {/* ─── TEMPORAL LOGIC VALIDATOR ─── */}
+        {(() => {
+          const tflags = analyzeTemporal(project);
+          if (!tflags.length) return null;
+          return (
+            <div className="nf-card" style={{ marginTop: 16 }}>
+              <h3 className="nf-card-title">Timeline Checks</h3>
+              <p className="nf-hint" style={{ marginTop: -4, marginBottom: 12 }}>
+                Possible time contradictions between the prose and your chapters' story dates. Set chapter dates in the Plot tab for this to work.
+              </p>
+              {tflags.map((f, i) => (
+                <div key={i} style={{ fontSize: 12, color: "var(--nf-text)", padding: "6px 0", borderBottom: i < tflags.length - 1 ? "1px solid var(--nf-border)" : "none", display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{ color: "var(--nf-accent)" }}>⚠</span>
+                  <button onClick={() => { setActiveChapterIdx(f.chapter); setActiveTab("write"); }} style={{ background: "none", border: "none", color: "var(--nf-accent-2)", cursor: "pointer", padding: 0, fontWeight: 600 }}>{f.title}</button>
+                  <span style={{ color: "var(--nf-text-muted)" }}>
+                    says {f.cue} but the next dated chapter is {f.gap} day{f.gap === 1 ? "" : "s"} later{f.expected != null ? ` (expected ≤${f.expected})` : f.expectedMin != null ? ` (expected ≥${f.expectedMin})` : ""}.
+                  </span>
+                </div>
+              ))}
+            </div>
+          );
+        })()}
+
+        {/* ─── PROSE REGISTER GUARD ─── */}
+        {(() => {
+          const rflags = analyzeRegister(project);
+          if (!rflags.length) return null;
+          return (
+            <div className="nf-card" style={{ marginTop: 16 }}>
+              <h3 className="nf-card-title">Voice Register Checks</h3>
+              <p className="nf-hint" style={{ marginTop: -4, marginBottom: 12 }}>
+                Words that clash with a POV character's locked register. Set a register on a character (Speech &amp; Voice section) to enable.
+              </p>
+              {rflags.map((f, i) => (
+                <div key={i} style={{ fontSize: 12, padding: "6px 0", borderBottom: i < rflags.length - 1 ? "1px solid var(--nf-border)" : "none" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <span style={{ color: "var(--nf-accent)" }}>⚠</span>
+                    <button onClick={() => { setActiveChapterIdx(f.chapter); setActiveTab("write"); }} style={{ background: "none", border: "none", color: "var(--nf-accent-2)", cursor: "pointer", padding: 0, fontWeight: 600 }}>{f.title}</button>
+                    <span style={{ color: "var(--nf-text-muted)" }}>— {f.character} ({f.register})</span>
+                  </div>
+                  <div style={{ marginLeft: 24, marginTop: 2, color: "var(--nf-text-muted)", fontSize: 11 }}>off-register: {f.words.map(w => `"${w}"`).join(", ")}</div>
+                </div>
+              ))}
+            </div>
+          );
+        })()}
       </div>
     );
   };
-
-  // ─── TAB: SETTINGS ───
   const renderSettings = () => (
     <div className="nf-content-scroll" style={{ maxWidth: 700 }}>
       <h2 className="nf-page-title">Settings</h2>
@@ -19569,6 +21240,76 @@ Speech pattern: ${char.speechPattern || ""}` },
         </label>
         <div style={{ fontSize: 11, color: "var(--nf-text-muted)", marginTop: 4, marginLeft: 22 }}>
           Fade non-current paragraphs. Like looking through a soft lens at your current thought.
+        </div>
+
+        {/* Strict forward-drafting */}
+        <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 12, marginTop: 10 }}>
+          <input type="checkbox" checked={!!settings.strictDraftMode}
+            onChange={e => setSettings(prev => ({ ...prev, strictDraftMode: e.target.checked }))} />
+          <span style={{ color: "var(--nf-text)", fontWeight: 500 }}>Strict forward-drafting</span>
+        </label>
+        <div style={{ fontSize: 11, color: "var(--nf-text-muted)", marginTop: 4, marginLeft: 22 }}>
+          Dims everything except the block you're writing in — forces momentum and stops you compulsively re-editing earlier prose during a first draft.
+        </div>
+
+        {/* No-click distraction fade */}
+        <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 12, marginTop: 10 }}>
+          <input type="checkbox" checked={!!settings.hoverPeek}
+            onChange={e => setSettings(prev => ({ ...prev, hoverPeek: e.target.checked }))} />
+          <span style={{ color: "var(--nf-text)", fontWeight: 500 }}>Hover-peek entity cards</span>
+        </label>
+        <div style={{ fontSize: 11, color: "var(--nf-text-muted)", marginTop: 4, marginLeft: 22 }}>
+          Hover a character or location name in the editor to see a quick 3-point summary without leaving the page.
+        </div>
+
+        {/* Sidebar hover-expand */}
+        <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 12, marginTop: 10 }}>
+          <input type="checkbox" checked={!!settings.sidebarHoverExpand}
+            onChange={e => setSettings(prev => ({ ...prev, sidebarHoverExpand: e.target.checked }))} />
+          <span style={{ color: "var(--nf-text)", fontWeight: 500 }}>Collapse sidebar (hover to expand)</span>
+        </label>
+        <div style={{ fontSize: 11, color: "var(--nf-text-muted)", marginTop: 4, marginLeft: 22 }}>
+          Shrinks the chapter sidebar to a thin strip for maximum writing space; hover it to slide it back out.
+        </div>
+
+        {/* Micro-outline dock */}
+        <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 12, marginTop: 10 }}>
+          <input type="checkbox" checked={!!settings.microOutlineDock}
+            onChange={e => setSettings(prev => ({ ...prev, microOutlineDock: e.target.checked }))} />
+          <span style={{ color: "var(--nf-text)", fontWeight: 500 }}>Scene micro-goal dock</span>
+        </label>
+        <div style={{ fontSize: 11, color: "var(--nf-text-muted)", marginTop: 4, marginLeft: 22 }}>
+          A small floating card showing the active scene's setup, current beat, and intended payoff — keeps the scene's goal in your peripheral vision.
+        </div>
+
+        {/* No-click distraction fade */}
+        <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 12, marginTop: 10 }}>
+          <input type="checkbox" checked={!!settings.autoFadeChrome}
+            onChange={e => setSettings(prev => ({ ...prev, autoFadeChrome: e.target.checked }))} />
+          <span style={{ color: "var(--nf-text)", fontWeight: 500 }}>Auto-fade interface while writing</span>
+        </label>
+        <div style={{ fontSize: 11, color: "var(--nf-text-muted)", marginTop: 4, marginLeft: 22 }}>
+          Fades the sidebar and status bar after you type a few words. Move the mouse or hit Esc to bring them back.
+        </div>
+
+        {/* Typewriter centering */}
+        <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 12, marginTop: 10 }}>
+          <input type="checkbox" checked={!!settings.typewriterCentering}
+            onChange={e => setSettings(prev => ({ ...prev, typewriterCentering: e.target.checked }))} />
+          <span style={{ color: "var(--nf-text)", fontWeight: 500 }}>Typewriter centering</span>
+        </label>
+        <div style={{ fontSize: 11, color: "var(--nf-text-muted)", marginTop: 4, marginLeft: 22 }}>
+          Keeps the line you're writing locked at the vertical center of the editor, so your eyes stay at a comfortable level.
+        </div>
+
+        {/* Micro-pacing waveform */}
+        <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 12, marginTop: 10 }}>
+          <input type="checkbox" checked={!!settings.pacingWaveform}
+            onChange={e => setSettings(prev => ({ ...prev, pacingWaveform: e.target.checked }))} />
+          <span style={{ color: "var(--nf-text)", fontWeight: 500 }}>Micro-pacing waveform</span>
+        </label>
+        <div style={{ fontSize: 11, color: "var(--nf-text-muted)", marginTop: 4, marginLeft: 22 }}>
+          Shows a sentence-length waveform below the editor. Spiky = choppy; long flat runs = dense, over-written passages.
         </div>
 
         {/* Circadian dimming */}
@@ -20028,46 +21769,64 @@ Speech pattern: ${char.speechPattern || ""}` },
         )}
       </div>
 	  <div className="nf-card">
-        <h3 className="nf-card-title">Auto-Save to File</h3>
-        <p style={{ fontSize: 12, color: "var(--nf-text-muted)", marginBottom: 22, lineHeight: 1.6 }}>
-          Link a JSON file on your computer. All changes auto-save to this file continuously — no more relying only on browser storage.
+        <h3 className="nf-card-title">Backup & Save</h3>
+        <p style={{ fontSize: 12, color: "var(--nf-text-muted)", marginBottom: 18, lineHeight: 1.6 }}>
+          Your work auto-saves to this browser continuously. For safekeeping, download a backup file you can store anywhere or move between devices — this works on phones and computers alike.
         </p>
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-          <button onClick={async () => {
-            const ok = await FileStorage.pickSaveFile();
-            if (ok) {
-              setFileLinked(true);
-              await FileStorage.saveAll(projects, { ...settings, theme }, tabChatHistories);
-              showToast("File linked — auto-saving enabled", "success");
-            }
-          }} className={`nf-btn ${fileLinked ? "nf-btn-ghost" : "nf-btn-primary"}`}>
-            <Icons.Save /> {fileLinked ? "Change File" : "Choose Save File"}
+
+        {/* Universal — works on every browser including mobile */}
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: fileLinkSupported ? 18 : 0 }}>
+          <button onClick={() => {
+            FileStorage.downloadBackup(projects, { ...settings, theme }, tabChatHistories);
+            setLastBackupAt(new Date().toISOString());
+            showToast("Backup downloaded", "success");
+          }} className="nf-btn nf-btn-primary">
+            <Icons.Export /> Download Backup
           </button>
-          <button onClick={async () => {
-            const data = await FileStorage.loadFromFile();
-            if (data) {
-              if (data.projects?.length) {
-                setProjects(data.projects);
-                setActiveProjectId(data.projects[0].id);
-              }
-              if (data.settings) setSettings(prev => ({ ...prev, ...data.settings }));
-              if (data.tabChats) setTabChatHistories(data.tabChats);
-              setFileLinked(true);
-              showToast(`Loaded ${data.projects?.length || 0} projects from file`, "success");
-            }
-          }} className="nf-btn nf-btn-ghost">
-            <Icons.Export /> Load from File
-          </button>
-          {fileLinked && (
-            <span style={{ fontSize: 11, color: "var(--nf-success)", fontWeight: 600, display: "flex", alignItems: "center", gap: 4 }}>
-              <Icons.CloudCheck /> Auto-saving to file
+          <label className="nf-btn nf-btn-ghost" style={{ cursor: "pointer" }}>
+            <Icons.Save /> Restore Backup
+            <input type="file" accept=".json,application/json" style={{ display: "none" }} onChange={handleRestoreBackup} />
+          </label>
+          {lastBackupAt && (
+            <span style={{ fontSize: 11, color: "var(--nf-text-muted)", display: "flex", alignItems: "center", gap: 4 }}>
+              Last backup {_timeAgoShort(lastBackupAt)}
             </span>
           )}
         </div>
-        {!window.showSaveFilePicker && (
-          <p style={{ fontSize: 11, color: "var(--nf-accent)", marginTop: 8 }}>
-            ⚠ Your browser doesn't support the File System Access API. Use Chrome or Edge for auto-save to file.
-          </p>
+
+        {/* Progressive enhancement — desktop Chromium only: continuous file autosave */}
+        {fileLinkSupported && (
+          <div style={{ paddingTop: 16, borderTop: "1px solid var(--nf-border)" }}>
+            <div style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--nf-text-muted)", marginBottom: 6 }}>
+              Continuous file auto-save {fileLinked && <span style={{ color: "var(--nf-success)", textTransform: "none", letterSpacing: 0 }}>· active</span>}
+            </div>
+            <p style={{ fontSize: 12, color: "var(--nf-text-muted)", marginBottom: 12, lineHeight: 1.6 }}>
+              Link a file once and every change streams to it automatically — no manual backups needed. (Supported in Chrome, Edge & Opera on desktop.)
+            </p>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+              <button onClick={async () => {
+                const ok = await FileStorage.pickSaveFile();
+                if (ok) {
+                  setFileLinked(true);
+                  await FileStorage.saveAll(projects, { ...settings, theme }, tabChatHistories);
+                  showToast("File linked — auto-saving enabled", "success");
+                }
+              }} className={`nf-btn ${fileLinked ? "nf-btn-ghost" : "nf-btn-primary"}`}>
+                <Icons.Save /> {fileLinked ? "Change Linked File" : "Link a File"}
+              </button>
+              <button onClick={async () => {
+                const data = await FileStorage.loadFromFile();
+                if (data) { applyLoadedBackup(data, { linkFile: true }); }
+              }} className="nf-btn nf-btn-ghost">
+                <Icons.Export /> Open Linked File
+              </button>
+              {fileLinked && (
+                <button onClick={() => { FileStorage.unlink(); setFileLinked(false); showToast("File unlinked — still saving to browser", "info"); }} className="nf-btn nf-btn-ghost">
+                  Unlink
+                </button>
+              )}
+            </div>
+          </div>
         )}
       </div>
 
@@ -20075,6 +21834,7 @@ Speech pattern: ${char.speechPattern || ""}` },
         <h3 className="nf-card-title">Export & Import</h3>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <button onClick={handleExportTxt} className="nf-btn nf-btn-ghost"><Icons.Export /> .txt</button>
+          <button onClick={handleExportMarkdownBundle} className="nf-btn nf-btn-ghost"><Icons.Export /> .md bundle (.zip)</button>
           <button onClick={handleExportJson} className="nf-btn nf-btn-ghost"><Icons.Export /> JSON</button>
           <label className="nf-btn nf-btn-ghost" style={{ cursor: "pointer" }}><Icons.Save /> Import<input type="file" accept=".json" style={{ display: "none" }} onChange={handleImportJson} /></label>
         </div>
@@ -20325,6 +22085,18 @@ Speech pattern: ${char.speechPattern || ""}` },
           .nf-line-focus .nf-editor-contenteditable > *:not(:focus-within):not(:hover) { opacity: 0.3; transition: opacity 0.4s ease; }
           .nf-line-focus .nf-editor-contenteditable > *:focus-within,
           .nf-line-focus .nf-editor-contenteditable > *:hover { opacity: 1; }
+          .nf-strict-draft .nf-editor-contenteditable > * { opacity: 0.12; transition: opacity 0.5s ease; filter: blur(0.4px); }
+          .nf-strict-draft .nf-editor-contenteditable > *.nf-active-block { opacity: 1; filter: none; }
+          .nf-scene-break { letter-spacing: 0.6em; color: var(--nf-text-muted); margin: 1.4em 0; user-select: none; }
+          .nf-refblock { background: var(--nf-accent-glow-2); border-left: 3px solid var(--nf-accent-2); padding: 4px 10px; color: var(--nf-text-muted); font-style: italic; border-radius: 0 3px 3px 0; }
+          .nf-refblock::before { content: "✎ note (not compiled) "; font-size: 9px; text-transform: uppercase; letter-spacing: 0.06em; opacity: 0.7; }
+          .nf-sidebar-hover .nf-chapter-sidebar { width: 14px; min-width: 14px; overflow: hidden; transition: width 0.25s ease, min-width 0.25s ease; position: relative; }
+          .nf-sidebar-hover .nf-chapter-sidebar:hover { width: 260px; min-width: 260px; overflow: visible; box-shadow: 4px 0 18px rgba(0,0,0,0.25); z-index: 50; }
+          .nf-sidebar-hover .nf-chapter-sidebar::after { content: "⋮"; position: absolute; top: 50%; left: 0; right: 0; text-align: center; color: var(--nf-text-muted); pointer-events: none; }
+          .nf-sidebar-hover .nf-chapter-sidebar:hover::after { display: none; }
+          .nf-chrome-faded .nf-sidebar, .nf-chrome-faded .nf-write-header, .nf-chrome-faded .nf-word-count, .nf-chrome-faded .nf-tabbar { opacity: 0.12; transition: opacity 0.6s ease; }
+          .nf-chrome-faded .nf-sidebar:hover, .nf-chrome-faded .nf-write-header:hover { opacity: 1; }
+          .nf-sprint-locked .nf-sidebar, .nf-sprint-locked .nf-tabbar, .nf-sprint-locked .nf-chapter-nav { pointer-events: none; opacity: 0.4; filter: grayscale(0.4); }
           /* Chapter tone tint overlay */
           body.nf-tone-melancholy .nf-text-editor { background: linear-gradient(to bottom, rgba(90,106,122,0.03), transparent 200px); }
           body.nf-tone-hopeful .nf-text-editor { background: linear-gradient(to bottom, rgba(125,138,111,0.035), transparent 200px); }
@@ -21250,6 +23022,123 @@ Speech pattern: ${char.speechPattern || ""}` },
             }}
           />
         )}
+        {settings?.microOutlineDock && !focusMode && activeTab === "write" && (() => {
+          const pe = ContextEngine._plotEntryForChapter(project, activeChapterIdx);
+          if (!pe) return null;
+          const beats = Array.isArray(pe.beats) ? pe.beats : [];
+          const activeBeat = beats.find(b => b.id === activeBeatId);
+          const setup = pe.summary ? _truncateAtBoundary(pe.summary, 90) : (pe.title || "—");
+          const action = activeBeat ? (activeBeat.title || activeBeat.description || "—") : (beats[0]?.title || "the scene unfolds");
+          const payoff = pe.sceneType ? `land the ${pe.sceneType}` : (beats[beats.length - 1]?.title || "reach the turn");
+          return (
+            <div style={{ position: "fixed", right: 18, top: 120, zIndex: 40, width: 200, background: "var(--nf-bg-raised)", border: "1px solid var(--nf-border)", borderRadius: 8, padding: "8px 10px", opacity: 0.85, fontSize: 11, lineHeight: 1.4, boxShadow: "0 4px 14px rgba(0,0,0,0.25)" }}>
+              <div style={{ color: "var(--nf-text-muted)", fontSize: 9, textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 4 }}>Scene micro-goal</div>
+              <div style={{ color: "var(--nf-text-muted)" }}><strong style={{ color: "var(--nf-accent-2)" }}>Setup:</strong> {setup}</div>
+              <div style={{ color: "var(--nf-text)", margin: "2px 0" }}><strong style={{ color: "var(--nf-accent)" }}>Now:</strong> {action}</div>
+              <div style={{ color: "var(--nf-text-muted)" }}><strong style={{ color: "var(--nf-accent-2)" }}>Payoff:</strong> {payoff}</div>
+            </div>
+          );
+        })()}
+        {showClips && (
+          <div style={{ position: "fixed", right: 16, bottom: 72, zIndex: 8000, width: 240, maxHeight: "60vh", overflowY: "auto", background: "var(--nf-bg-raised)", border: "1px solid var(--nf-border)", borderRadius: 8, boxShadow: "0 8px 28px rgba(0,0,0,0.35)", padding: 10 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+              <span style={{ fontSize: 11, fontWeight: 600, color: "var(--nf-text)" }}>Clip Strips ({clipStrips.length}/10)</span>
+              <button onClick={() => setShowClips(false)} className="nf-btn-icon" aria-label="Close clips"><Icons.X /></button>
+            </div>
+            {clipStrips.length === 0 ? (
+              <div style={{ fontSize: 11, color: "var(--nf-text-muted)", lineHeight: 1.5 }}>Select text and press Ctrl+Shift+C to stash a clip. Click a clip to drop it at the cursor (it's consumed on use).</div>
+            ) : clipStrips.map(c => (
+              <div key={c.id} style={{ display: "flex", gap: 6, alignItems: "flex-start", marginBottom: 6, padding: 6, background: "var(--nf-bg-surface)", border: "1px solid var(--nf-border)", borderRadius: 4 }}>
+                <button onClick={() => insertClip(c)} title="Insert at cursor" style={{ flex: 1, textAlign: "left", background: "none", border: "none", cursor: "pointer", fontSize: 11, color: "var(--nf-text)", lineHeight: 1.4 }}>
+                  {c.text.length > 90 ? c.text.slice(0, 90) + "…" : c.text}
+                </button>
+                <button onClick={() => setClipStrips(prev => prev.filter(x => x.id !== c.id))} className="nf-btn-micro" style={{ fontSize: 10, padding: "1px 4px", flexShrink: 0 }}>✕</button>
+              </div>
+            ))}
+          </div>
+        )}
+        {hoverPeek && (
+          <div style={{ position: "fixed", left: Math.min(hoverPeek.x + 14, window.innerWidth - 230), top: hoverPeek.y + 16, zIndex: 9600, pointerEvents: "none", width: 210, background: "var(--nf-bg-raised)", border: "1px solid var(--nf-accent)", borderRadius: 6, padding: "8px 10px", boxShadow: "0 6px 22px rgba(0,0,0,0.4)" }}>
+            <div style={{ fontSize: 12, fontWeight: 600, color: "var(--nf-text)", display: "flex", justifyContent: "space-between", gap: 8 }}>
+              {hoverPeek.name}<span style={{ fontSize: 9, color: "var(--nf-text-muted)", textTransform: "lowercase", fontWeight: 400 }}>{hoverPeek.kind}</span>
+            </div>
+            {hoverPeek.bullets.map((b, i) => (
+              <div key={i} style={{ fontSize: 11, color: "var(--nf-text-muted)", marginTop: 3, lineHeight: 1.4 }}>• {b}</div>
+            ))}
+          </div>
+        )}
+        {showTypeset && <TypesetPreview content={activeChapter?.content} chapterTitle={activeChapter?.title || "Chapter"} onClose={() => setShowTypeset(false)} />}
+        {showLineup && <ScaleLineup characters={project?.characters} onClose={() => setShowLineup(false)} />}
+        {renameDialog && (
+          <div onClick={() => setRenameDialog(null)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", zIndex: 9100, display: "flex", alignItems: "flex-start", justifyContent: "center", paddingTop: "16vh" }}>
+            <div onClick={e => e.stopPropagation()} style={{ width: "min(400px,92vw)", background: "var(--nf-bg-raised)", border: "1px solid var(--nf-border)", borderRadius: 8, padding: 18 }}>
+              <h3 style={{ margin: "0 0 6px", fontSize: 14, color: "var(--nf-text)" }}>Rename everywhere</h3>
+              <p style={{ fontSize: 11, color: "var(--nf-text-muted)", margin: "0 0 12px", lineHeight: 1.5 }}>Replaces whole-word matches of "{renameDialog.oldName}" in all chapters and updates the character. Won't touch substrings inside other words.</p>
+              <input value={renameDialog.newName} onChange={e => setRenameDialog(d => ({ ...d, newName: e.target.value }))}
+                className="nf-input" style={{ width: "100%", fontSize: 13, marginBottom: 12 }} placeholder="New name" autoFocus />
+              <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+                <button onClick={() => setRenameDialog(null)} className="nf-btn nf-btn-ghost" style={{ fontSize: 12 }}>Cancel</button>
+                <button onClick={() => { handleSafeRename(renameDialog.charId, renameDialog.oldName, renameDialog.newName); setRenameDialog(null); }} className="nf-btn nf-btn-primary" style={{ fontSize: 12 }}>Rename</button>
+              </div>
+            </div>
+          </div>
+        )}
+        {scratchpadOpen && project && (
+          <div onClick={() => setScratchpadOpen(false)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.35)", zIndex: 9000, display: "flex", alignItems: "flex-start", justifyContent: "center", paddingTop: "12vh" }}>
+            <div onClick={e => e.stopPropagation()} style={{ width: "min(440px, 92vw)", background: "var(--nf-bg-raised)", border: "1px solid var(--nf-border)", borderRadius: 8, boxShadow: "0 12px 40px rgba(0,0,0,0.4)", overflow: "hidden" }}>
+              <div style={{ padding: "12px 16px", borderBottom: "1px solid var(--nf-border)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <span style={{ fontSize: 13, fontWeight: 600, color: "var(--nf-text)" }}>Quick note</span>
+                <button onClick={() => setScratchpadOpen(false)} className="nf-btn-icon" aria-label="Close"><Icons.X /></button>
+              </div>
+              <div style={{ padding: 16 }}>
+                <textarea autoFocus value={scratchpadText} onChange={e => setScratchpadText(e.target.value)}
+                  onKeyDown={e => {
+                    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                      e.preventDefault();
+                      const note = scratchpadText.trim();
+                      if (note) {
+                        const chs = [...(project.chapters || [])];
+                        const t = scratchpadTargetCh;
+                        if (chs[t]) {
+                          const stamp = new Date().toLocaleDateString();
+                          chs[t] = { ...chs[t], notes: (chs[t].notes ? chs[t].notes + "\n" : "") + `• ${note} (${stamp})` };
+                          updateProject({ chapters: chs });
+                          showToast(`Note added to "${chs[t].title || `Chapter ${t + 1}`}"`, "success");
+                        }
+                      }
+                      setScratchpadText(""); setScratchpadOpen(false);
+                    }
+                  }}
+                  placeholder="Jot an idea — it attaches to the chapter you pick below…"
+                  className="nf-input" style={{ width: "100%", minHeight: 90, resize: "vertical", fontSize: 13, lineHeight: 1.5 }} />
+                <div style={{ display: "flex", gap: 8, marginTop: 12, alignItems: "center" }}>
+                  <span style={{ fontSize: 11, color: "var(--nf-text-muted)" }}>Attach to:</span>
+                  <select value={scratchpadTargetCh} onChange={e => setScratchpadTargetCh(parseInt(e.target.value))}
+                    className="nf-input" style={{ flex: 1, fontSize: 12, padding: "4px 8px" }}>
+                    {(project.chapters || []).map((ch, i) => (
+                      <option key={ch.id || i} value={i}>{i + 1}. {ch.title || `Chapter ${i + 1}`}</option>
+                    ))}
+                  </select>
+                  <button onClick={() => {
+                    const note = scratchpadText.trim();
+                    if (note) {
+                      const chs = [...(project.chapters || [])];
+                      const t = scratchpadTargetCh;
+                      if (chs[t]) {
+                        const stamp = new Date().toLocaleDateString();
+                        chs[t] = { ...chs[t], notes: (chs[t].notes ? chs[t].notes + "\n" : "") + `• ${note} (${stamp})` };
+                        updateProject({ chapters: chs });
+                        showToast(`Note added to "${chs[t].title || `Chapter ${t + 1}`}"`, "success");
+                      }
+                    }
+                    setScratchpadText(""); setScratchpadOpen(false);
+                  }} className="nf-btn nf-btn-primary" style={{ fontSize: 12 }}>Add</button>
+                </div>
+                <div style={{ fontSize: 10, color: "var(--nf-text-muted)", marginTop: 8 }}>⌘/Ctrl+Enter to add · the note lands in that chapter's notes</div>
+              </div>
+            </div>
+          </div>
+        )}
         {sentenceGardenOpen && project && (
           <SentenceGardenModal
             project={project}
@@ -21436,6 +23325,14 @@ Speech pattern: ${char.speechPattern || ""}` },
         )}
         {whiteRoom && <WhiteRoomModal char1={whiteRoom.char1Id} char2={whiteRoom.char2Id} tension={whiteRoom.tension} result={whiteRoom.result} isGenerating={whiteRoom.isGenerating} onGenerate={handleWhiteRoomGenerate} onClose={() => setWhiteRoom(null)} settings={settings} characters={project?.characters} />}
         {showTimeline && <TimelineView plotOutline={project?.plotOutline} chapters={project?.chapters} characters={project?.characters} onClose={() => setShowTimeline(false)} restoreImages={restoreImagesForTimeline} />}
+        <CommandPalette open={commandPaletteOpen} onClose={() => setCommandPaletteOpen(false)} project={project}
+          onNavigate={(go) => {
+            if (go.tab) setActiveTab(go.tab);
+            if (typeof go.chapterIdx === "number") { setActiveChapterIdx(go.chapterIdx); forceRepopulateEditor(); }
+            if (go.entityId) {
+              if (go.tab === "characters") setEditingCharId(go.entityId);
+            }
+          }} />
         {cleanView && <CleanViewModal project={project} startChapter={activeChapterIdx} onClose={() => setCleanView(false)} />}
         {showRelWeb && (
           <RelationshipWebModal
