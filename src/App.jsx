@@ -8282,11 +8282,12 @@ const buildEditorialStudioFragments = (studio) => {
   const exprTxt = _resolveChoice(studio.expression, exprPresets);
   if (exprTxt) f.push(`EXPRESSION — ${exprTxt}, with the micro-musculature of the face (eyes, brow, mouth corners) consistent with that emotion.`);
 
-  // ── Module 1: Garment layering ──
+  // ── Module 1: Clothing (CLOSED, exhaustive outfit — the #1 thing the model tries to "helpfully"
+  // override, so the wording is emphatic that this is the entire outfit and nothing else.) ──
   const layers = (studio.garmentLayers || []).map(l => (l.text || "").trim()).filter(Boolean);
   if (layers.length) {
-    const stacked = layers.map((g, i) => i === 0 ? `base layer: ${g}` : `layered over it: ${g}`).join("; ");
-    f.push(`WARDROBE (layered, from skin outward) — ${stacked}. Render each layer reading as a distinct garment with believable thickness: the outer layers sit visibly on top of the inner ones, collars and cuffs of inner layers peek out where expected, and the heaviest outer layer drapes over and slightly compresses what is beneath it. Fabric weight is visible in how each layer folds and hangs. No garments fused or clipping into one another.`);
+    const stacked = layers.map((g, i) => i === 0 ? `(worn against the skin) ${g}` : `(layered over that) ${g}`).join("; ");
+    f.push(`CLOTHING — the subject wears ONLY the following complete outfit, and NOTHING else: ${stacked}. This is the entire wardrobe — do not add, substitute, or invent any other garment (no extra jackets, shirts, shoes, hats, scarves, ties, or accessories) beyond what is listed and beyond anything specified elsewhere in this direction. Ignore what their job, role, or name might suggest they would wear. Each listed piece reads as a distinct garment with believable fabric weight: outer pieces sit visibly on top of inner ones, inner collars and cuffs peek out where expected, fabric folds and hangs naturally, nothing fused or clipping. If a body area would be bare given only these items, leave it as the garments dictate rather than adding clothing to cover it.`);
   }
 
   // ── Module 15: Hair & makeup ──
@@ -9275,18 +9276,19 @@ const EditorialStudioModal = memo(({ char, onClose, onGenerate, isGenerating }) 
               options={[{v:"teal-orange",l:"Teal & orange"},{v:"bleach",l:"Bleach bypass"},{v:"warm",l:"Warm nostalgic"},{v:"cool",l:"Cool clinical"},{v:"high-key",l:"High-key"},{v:"low-key",l:"Low-key"},{v:"sepia",l:"Sepia"},{v:"bw",l:"Black & white"}]} />
           </div>
 
-          {/* Module 1 — Garment layering */}
+          {/* Module 1 — Clothing */}
           <div style={sectionStyle}>
-            <label style={labelStyle}>1 · Garment Layering</label>
+            <label style={labelStyle}>1 · Clothing</label>
+            <div style={{ fontSize: 10, color: "var(--nf-text-muted)", marginTop: -4, marginBottom: 8, lineHeight: 1.4 }}>This is the <strong>complete</strong> outfit — the subject wears only what you list here (innermost first), nothing else. Leave empty to let the model dress them.</div>
             {studio.garmentLayers.map((l, i) => (
               <div key={l.id} style={rowStyle}>
-                <span style={{ fontSize: 11, color: "var(--nf-text-muted)", minWidth: 42 }}>{i === 0 ? "Base" : `Layer ${i + 1}`}</span>
+                <span style={{ fontSize: 11, color: "var(--nf-text-muted)", minWidth: 42 }}>{i === 0 ? "Inner" : `+ Over`}</span>
                 <input value={l.text} placeholder={i === 0 ? "e.g. tailored white dress shirt" : "e.g. charcoal wool trench coat"} className="nf-input" style={{ flex: 1, ...sel }}
                   onChange={e => setStudio(s => ({ ...s, garmentLayers: s.garmentLayers.map(x => x.id === l.id ? { ...x, text: e.target.value } : x) }))} />
-                <button onClick={() => setStudio(s => ({ ...s, garmentLayers: s.garmentLayers.filter(x => x.id !== l.id) }))} className="nf-btn-icon" aria-label="Remove layer"><Icons.X /></button>
+                <button onClick={() => setStudio(s => ({ ...s, garmentLayers: s.garmentLayers.filter(x => x.id !== l.id) }))} className="nf-btn-icon" aria-label="Remove item"><Icons.X /></button>
               </div>
             ))}
-            <button onClick={addLayer} className="nf-btn-micro" style={{ fontSize: 11 }}>+ Add layer</button>
+            <button onClick={addLayer} className="nf-btn-micro" style={{ fontSize: 11 }}>+ Add item</button>
           </div>
 
           {/* Module 2 — Wind & physics */}
@@ -14234,7 +14236,7 @@ Then 2-3 sentences describing the specific scene idea, character actions, and em
     // weight the opening of the prompt most heavily.
     const hasWardrobe = (studio?.garmentLayers || []).some(l => (l.text || "").trim());
     const hasBackdrop = (studio?.cyclorama && studio.cyclorama !== "none");
-    const authority = `IMPORTANT: This person's clothing and setting are NOT determined by their job, name, or any assumption — ${hasWardrobe ? "wear EXACTLY the wardrobe specified below and nothing implied by their occupation" : "dress them in neutral, unbranded contemporary clothing appropriate to the styling below, NOT any occupational uniform or costume"}; ${hasBackdrop ? "use EXACTLY the backdrop specified below" : "place them against a clean, simple, neutral studio background unless the direction below says otherwise"}.`;
+    const authority = `IMPORTANT: This person's clothing and setting are NOT determined by their job, name, or any assumption — ${hasWardrobe ? "they wear ONLY the exact clothing listed below and nothing else; do not add any garment, footwear, or accessory that is not explicitly specified" : "dress them in simple neutral unbranded contemporary clothing, NOT any occupational uniform or costume"}; ${hasBackdrop ? "use EXACTLY the backdrop specified below" : "place them against a clean, simple, neutral studio background unless the direction below says otherwise"}.`;
     let prompt = `${photoBase}\n\n${authority}\n\n=== EDITORIAL STUDIO DIRECTION (this is the authoritative styling — follow every item precisely; all visual, camera-capturable only) ===\n${fragments.join("\n\n")}`;
     setEditorialBusy(true);
     showToast("Generating in studio…", "info");
