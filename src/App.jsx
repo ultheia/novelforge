@@ -8201,6 +8201,10 @@ const EDITORIAL_STUDIO_DEFAULTS = {
   setting: { preset: "none", custom: "" },     // 16 — time of day / environment light
   colorGrade: { preset: "none", custom: "" },  // 17 — color grade / mood
   directorNotes: "",                           // 18 — freeform catch-all appended verbatim
+  // When false (default), the project style-lock image is NOT sent as an image-to-image reference —
+  // editorial styling is driven purely by the text controls. Attaching a full reference image makes
+  // the model copy that image's clothing/background and ignore the wardrobe/backdrop you set here.
+  useStyleRef: false,
 };
 
 // Resolve a {preset, custom} pair to the effective string: custom wins when preset==="custom".
@@ -9482,11 +9486,17 @@ const EditorialStudioModal = memo(({ char, onClose, onGenerate, isGenerating }) 
           )}
         </div>
 
-        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 16 }}>
-          <button onClick={onClose} className="nf-btn nf-btn-ghost">Cancel</button>
-          <button onClick={() => onGenerate(studio)} disabled={isGenerating} className="nf-btn nf-btn-primary">
-            <Icons.Wand /> {isGenerating ? "Generating…" : "Generate in Studio"}
-          </button>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, marginTop: 16, flexWrap: "wrap" }}>
+          <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: "var(--nf-text-muted)", cursor: "pointer" }} title="Off by default. When on, the project's style-lock image is sent as a loose color/grain reference. It can still pull clothing/background from that image, so leave off if wardrobe or backdrop aren't obeying.">
+            <input type="checkbox" checked={!!studio.useStyleRef} onChange={e => set({ useStyleRef: e.target.checked })} style={{ accentColor: "var(--nf-accent)" }} />
+            Use project style-lock image as reference
+          </label>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={onClose} className="nf-btn nf-btn-ghost">Cancel</button>
+            <button onClick={() => onGenerate(studio)} disabled={isGenerating} className="nf-btn nf-btn-primary">
+              <Icons.Wand /> {isGenerating ? "Generating…" : "Generate in Studio"}
+            </button>
+          </div>
         </div>
       </div>
     </div>,
@@ -14219,13 +14229,22 @@ Then 2-3 sentences describing the specific scene idea, character actions, and em
     const photoBase = `Photorealistic editorial photograph of ${char.name || "a person"} — ${identity}. ` +
       `Render as a real human being, photographed, not illustrated: lifelike skin with visible pores, fine texture, subtle imperfections, natural subsurface tones, realistic hair with individual strands. ` +
       `Clothed and tasteful, SFW. Skin realistic down to the pore. No illustration, no painting, no CGI look.`;
-    let prompt = `${photoBase}\n\n=== EDITORIAL STUDIO DIRECTION (this is the authoritative styling — follow every item precisely; all visual, camera-capturable only. The subject's wardrobe, pose, framing and look are defined HERE, not by any job or daily outfit) ===\n${fragments.join("\n\n")}`;
+    // Authority line: the model must take wardrobe and background from the direction below, NOT from
+    // the subject's occupation, name, or any default. This is stated up front because image models
+    // weight the opening of the prompt most heavily.
+    const hasWardrobe = (studio?.garmentLayers || []).some(l => (l.text || "").trim());
+    const hasBackdrop = (studio?.cyclorama && studio.cyclorama !== "none");
+    const authority = `IMPORTANT: This person's clothing and setting are NOT determined by their job, name, or any assumption — ${hasWardrobe ? "wear EXACTLY the wardrobe specified below and nothing implied by their occupation" : "dress them in neutral, unbranded contemporary clothing appropriate to the styling below, NOT any occupational uniform or costume"}; ${hasBackdrop ? "use EXACTLY the backdrop specified below" : "place them against a clean, simple, neutral studio background unless the direction below says otherwise"}.`;
+    let prompt = `${photoBase}\n\n${authority}\n\n=== EDITORIAL STUDIO DIRECTION (this is the authoritative styling — follow every item precisely; all visual, camera-capturable only) ===\n${fragments.join("\n\n")}`;
     setEditorialBusy(true);
     showToast("Generating in studio…", "info");
     try {
+      // Only use the project style-lock as an image-to-image reference if the user explicitly opts in.
+      // Otherwise editorial is text-driven (so the wardrobe/backdrop you set actually take effect — a
+      // full reference image would make the model copy that image's clothes and background instead).
       const styleRef = project?.styleLockImage;
-      const refs = styleRef && styleRef.startsWith("data:") ? [styleRef] : null;
-      if (refs) prompt += "\n\nMatch the overall color grading and grain of the attached style reference.";
+      const refs = (studio?.useStyleRef && styleRef && styleRef.startsWith("data:")) ? [styleRef] : null;
+      if (refs) prompt += "\n\nUse the attached image ONLY as a loose reference for color grading, grain, and overall mood. Do NOT copy its clothing, pose, or background — those are defined by the direction above.";
       const img = await _genSingleImageRef.current(prompt, ratio, refs);
       if (img) {
         const prev = char.moodBoard || [];
@@ -16079,7 +16098,7 @@ CRITICAL: Every sentence must describe something visible. If a detail cannot be 
       model: settings.imageModel || "google/gemini-3.1-flash-image-preview",
       messages: [{ role: "user", content: userContent }],
       modalities: ["image", "text"],
-      max_tokens: 4096,
+      max_tokens: 8192,
     };
     if (aspectRatio) body.image_config = { aspect_ratio: aspectRatio };
     const maxRetries = 6;
