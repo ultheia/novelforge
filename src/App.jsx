@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, useMemo, useReducer, memo, createContext, useContext } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo, useReducer, memo, createContext, useContext, Fragment } from "react";
 import { createPortal } from "react-dom";
 
 // ─── CONSTANTS ───
@@ -3644,6 +3644,11 @@ const ContextEngine = {
               }).filter(n => n !== "?");
               if (connNames.length) line += ` | Connected to: ${connNames.join(", ")}`;
             }
+            // Include parent location (geographic nesting)
+            if (w.parentLocation) {
+              const parent = project.worldBuilding.find(ww => ww.id === w.parentLocation);
+              if (parent?.name) line += ` | Located within: ${parent.name}`;
+            }
             parts.push(line);
           });
           parts.push(`</existing_world_entries>`);
@@ -4554,6 +4559,7 @@ const createDefaultCharacter = () => ({
   isBulk: false,
   bulkCount: 0,
   bulkDescription: "",
+  notableMembers: "", // bulk groups only — standout individuals (was overloaded onto canonNotes)
   // ─── AI-MAINTAINED LIVING STATE (updated per chapter by stateUpdater agent) ───
   currentEmotionalState: "",
   obligationsOwed: "",
@@ -4581,17 +4587,18 @@ const createBulkCharacterGroup = (name, count, description, role = "minor") => (
 // `id` is used as the scroll anchor and the collapse key; `fields` are the character keys that
 // count toward that section's "filled" ratio (only narrative fields, not images/notes).
 const CHAR_EDITOR_SECTIONS = [
-  { id: "identity", label: "Identity", icon: "◆", fields: ["name", "role", "age", "gender"] },
-  { id: "appearance", label: "Character & Appearance", icon: "❉", fields: ["appearance", "personality", "speechPattern", "voiceSamples", "habits"] },
-  { id: "psychology", label: "Psychology & Conflict", icon: "✸", fields: ["fears", "flaws", "strengths", "skills", "internalConflict", "externalConflict"] },
-  { id: "goals", label: "Goals & Desires", icon: "➤", fields: ["desires", "shortTermGoals", "longTermGoals"] },
-  { id: "story", label: "Story & Backstory", icon: "✶", fields: ["backstory", "arc", "signatureItems", "secrets"] },
-  { id: "visualtraits", label: "Locked Visual Traits", icon: "⊡", fields: [] },
-  { id: "refart", label: "Reference Art", icon: "✦", fields: [] },
-  { id: "moodboard", label: "Mood Board", icon: "▦", fields: [] },
-  { id: "sigitems", label: "Signature Items", icon: "❖", fields: [] },
-  { id: "intimate", label: "Intimate Details", icon: "♥", fields: [] },
-  { id: "notes", label: "Notes", icon: "✎", fields: [] },
+  { id: "identity", label: "Identity", icon: "◆", tier: "core", fields: ["name", "role", "age", "gender"] },
+  { id: "appearance", label: "Character & Appearance", icon: "❉", tier: "core", fields: ["appearance", "personality", "speechPattern", "voiceSamples", "habits"] },
+  { id: "psychology", label: "Psychology & Conflict", icon: "✸", tier: "deep", fields: ["fears", "flaws", "strengths", "skills", "internalConflict", "externalConflict"] },
+  { id: "goals", label: "Goals & Desires", icon: "➤", tier: "deep", fields: ["desires", "shortTermGoals", "longTermGoals"] },
+  { id: "story", label: "Story & Backstory", icon: "✶", tier: "core", fields: ["backstory", "arc", "signatureItems", "secrets"] },
+  { id: "livingstate", label: "Living State", icon: "◌", tier: "deep", aiMaintained: true, fields: ["currentEmotionalState", "obligationsOwed", "knowledgeState"] },
+  { id: "visualtraits", label: "Locked Visual Traits", icon: "⊡", tier: "deep", fields: [] },
+  { id: "refart", label: "Reference Art", icon: "✦", tier: "deep", fields: [] },
+  { id: "moodboard", label: "Mood Board", icon: "▦", tier: "deep", fields: [] },
+  { id: "sigitems", label: "Signature Items", icon: "❖", tier: "deep", fields: [] },
+  { id: "intimate", label: "Intimate Details", icon: "♥", tier: "deep", fields: [] },
+  { id: "notes", label: "Notes", icon: "✎", tier: "core", fields: [] },
 ];
 
 // Returns { filled, total, ratio } for a section against a character.
@@ -5065,7 +5072,7 @@ const Toast = memo(({ message, type, onDone }) => {
   return (
     <div role="alert" aria-live="polite" style={{
       position: "fixed", bottom: 20, right: 20, zIndex: 9999,
-      padding: "12px 18px", borderRadius: 3,
+      padding: "12px 18px", borderRadius: 2,
       background: "var(--nf-toast-bg)", backdropFilter: "blur(16px)",
       border: `1px solid var(--nf-toast-border)`,
       color: "var(--nf-text)", fontSize: 12, fontWeight: 500,
@@ -5342,7 +5349,7 @@ const MultiImageGallery = memo(({ label, hint, images, onAdd, onRemove, onUpdate
       <div style={{ display: "grid", gridTemplateColumns: `repeat(auto-fill, minmax(${thumbSize}px, 1fr))`, gap: 10 }}>
         {imgs.map((img, idx) => (
           <div key={img.id} style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-            <div style={{ position: "relative", borderRadius: 3, overflow: "hidden", border: "1px solid var(--nf-border)", background: "var(--nf-bg-deep)", aspectRatio: "1/1", cursor: "zoom-in" }}
+            <div style={{ position: "relative", borderRadius: 2, overflow: "hidden", border: "1px solid var(--nf-border)", background: "var(--nf-bg-deep)", aspectRatio: "1/1", cursor: "zoom-in" }}
               onClick={() => setViewerIdx(idx)} title={img.caption || "Click to view full size"}>
               <img loading="lazy" src={img.data} alt={img.caption || "Reference image"}
                 style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
@@ -5366,7 +5373,7 @@ const MultiImageGallery = memo(({ label, hint, images, onAdd, onRemove, onUpdate
             <input type="file" accept="image/*" multiple id={inputId} style={{ display: "none" }}
               onChange={e => { handleFiles(e.target.files); e.target.value = ""; }} />
             <button onClick={() => document.getElementById(inputId)?.click()}
-              style={{ aspectRatio: "1/1", border: "1px dashed var(--nf-border)", borderRadius: 3, background: "var(--nf-bg-deep)", color: "var(--nf-text-muted)", cursor: "pointer", fontSize: 22, display: "flex", alignItems: "center", justifyContent: "center", alignSelf: "start" }}
+              style={{ aspectRatio: "1/1", border: "1px dashed var(--nf-border)", borderRadius: 2, background: "var(--nf-bg-deep)", color: "var(--nf-text-muted)", cursor: "pointer", fontSize: 22, display: "flex", alignItems: "center", justifyContent: "center", alignSelf: "start" }}
               title={`Add images (max ${maxMB}MB each)`}>+</button>
           </>
         )}
@@ -5445,7 +5452,7 @@ const SentenceGardenModal = memo(({ project, onClose, onRemove, onUpdateNote }) 
               return (
                 <div key={entry.id} style={{
                   background: "var(--nf-bg-raised)", border: `1px solid ${color}44`, borderLeft: `3px solid ${color}`,
-                  borderRadius: 3, padding: "12px 14px", position: "relative",
+                  borderRadius: 2, padding: "12px 14px", position: "relative",
                   transition: "transform 0.2s, box-shadow 0.2s",
                 }}>
                   <div style={{ fontFamily: "var(--nf-font-prose)", fontSize: 14, lineHeight: 1.65, color: "var(--nf-text)", fontStyle: "italic" }}>
@@ -6104,12 +6111,12 @@ const DiffReviewModal = memo(({ original, proposed, onAccept, onReject, onInsert
         <div style={{ flex: 1, minHeight: 0, overflow: "auto", display: "flex", gap: 0, flexWrap: "wrap" }}>
           {original && (
             <div style={{ flex: "1 1 300px", minWidth: 250, padding: 22, borderRight: "1px solid var(--nf-diff-border)" }}>
-              <div style={{ fontSize: 11, fontWeight: 700, color: "var(--nf-accent)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 22 }}>Original</div>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "var(--nf-accent)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 24 }}>Original</div>
               <div style={{ fontFamily: "var(--nf-font-prose)", fontSize: 14, lineHeight: 1.9, color: "var(--nf-text-dim)", whiteSpace: "pre-wrap" }}>{original}</div>
             </div>
           )}
           <div style={{ flex: "1 1 300px", minWidth: 250, padding: 22 }}>
-            <div style={{ fontSize: 11, fontWeight: 700, color: "var(--nf-success)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 22 }}>{original ? "Proposed" : "Generated Content"}</div>
+            <div style={{ fontSize: 11, fontWeight: 700, color: "var(--nf-success)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 24 }}>{original ? "Proposed" : "Generated Content"}</div>
             <div style={{ fontFamily: "var(--nf-font-prose)", fontSize: 14, lineHeight: 1.9, color: "var(--nf-text)", whiteSpace: "pre-wrap" }}>{proposed}</div>
           </div>
         </div>
@@ -6165,7 +6172,7 @@ const CharacterSuggestionsModal = memo(({ suggestions, onAccept, onReject, onAcc
 
         <div style={{ flex: 1, minHeight: 0, overflow: "auto", padding: "16px 24px" }}>
           {pending.length > 0 && (
-            <div style={{ marginBottom: 26 }}>
+            <div style={{ marginBottom: 24 }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
                 <span style={{ fontSize: 11, fontWeight: 700, color: "var(--nf-text-dim)", textTransform: "uppercase", letterSpacing: "0.08em" }}>
                   Pending Review ({pending.length})
@@ -6222,7 +6229,7 @@ const CharacterSuggestionsModal = memo(({ suggestions, onAccept, onReject, onAcc
           )}
 
           {accepted.length > 0 && (
-            <div style={{ marginBottom: 22 }}>
+            <div style={{ marginBottom: 24 }}>
               <span style={{ fontSize: 11, fontWeight: 700, color: "var(--nf-success)", textTransform: "uppercase", letterSpacing: "0.08em" }}>Applied ({accepted.length})</span>
               {accepted.map(s => (
                 <div key={s.id} style={{ fontSize: 11, color: "var(--nf-text-dim)", padding: "6px 8px", marginTop: 4, background: "var(--nf-bg-raised)", borderRadius: 6 }}>
@@ -6251,7 +6258,7 @@ const CharacterSuggestionsModal = memo(({ suggestions, onAccept, onReject, onAcc
             const relAccepted = suggestions.relSuggestions.filter(s => s.suggestionStatus === "accepted");
             const relRejected = suggestions.relSuggestions.filter(s => s.suggestionStatus === "rejected");
             return (
-              <div style={{ marginTop: 20, paddingTop: 16, borderTop: "1px solid var(--nf-border)" }}>
+              <div style={{ marginTop: 24, paddingTop: 16, borderTop: "1px solid var(--nf-border)" }}>
                 <div style={{ fontSize: 11, fontWeight: 700, color: "var(--nf-accent-2)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 20 }}>
                   Relationship Updates ({suggestions.relSuggestions.length})
                 </div>
@@ -6305,7 +6312,7 @@ const CharacterSuggestionsModal = memo(({ suggestions, onAccept, onReject, onAcc
 
           {pending.length === 0 && (!suggestions.relSuggestions?.length || suggestions.relSuggestions.every(s => s.suggestionStatus !== "pending")) && (
             <div style={{ textAlign: "center", padding: "20px 0" }}>
-              <div style={{ fontSize: 13, color: "var(--nf-text-dim)", marginBottom: 22 }}>
+              <div style={{ fontSize: 13, color: "var(--nf-text-dim)", marginBottom: 24 }}>
                 All suggestions reviewed — {accepted.length} applied, {rejected.length} skipped.
               </div>
               <button onClick={onClose} className="nf-btn nf-btn-primary">Done</button>
@@ -6353,25 +6360,25 @@ const WhiteRoomModal = memo(({ char1, char2, tension, result, isGenerating, onGe
         </div>
 
         <div style={{ flex: 1, minHeight: 0, overflow: "auto", padding: "20px 24px" }}>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr auto 1fr", gap: 16, alignItems: "end", marginBottom: 26 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr auto 1fr", gap: 16, alignItems: "end", marginBottom: 24 }}>
             <SelectField label="Character 1" value={c1} onChange={setC1} options={charOptions} placeholder="Select..." />
             <div style={{ color: "var(--nf-accent)", fontSize: 20, paddingBottom: 12, fontWeight: 300, fontFamily: "var(--nf-font-display)" }}>×</div>
             <SelectField label="Character 2" value={c2} onChange={setC2} options={charOptions} placeholder="Select..." />
           </div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 26 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 24 }}>
             <SelectField label="Starting Tension" value={tens} onChange={setTens}
               options={tensionOpts.map(t => ({ value: t, label: t.charAt(0).toUpperCase() + t.slice(1) }))} />
             <Field label="Scenario (optional)" value={scenario} onChange={setScenario}
               placeholder="e.g. Trapped in an elevator, meeting at a funeral..." small />
           </div>
           <button onClick={() => onGenerate(c1, c2, tens, scenario)} disabled={!c1 || !c2 || c1 === c2 || isGenerating || !settings?.apiKey}
-            className="nf-btn nf-btn-primary" style={{ width: "100%", justifyContent: "center", marginBottom: 26 }}>
+            className="nf-btn nf-btn-primary" style={{ width: "100%", justifyContent: "center", marginBottom: 24 }}>
             {isGenerating ? <><Spinner /> Generating...</> : <><Icons.Wand /> Generate White Room Scene</>}
           </button>
 
           {result && (
             <div style={{
-              padding: 20, background: "var(--nf-bg-deep)", border: "1px solid var(--nf-border)", borderRadius: 3,
+              padding: 20, background: "var(--nf-bg-deep)", border: "1px solid var(--nf-border)", borderRadius: 2,
               fontFamily: "var(--nf-font-prose)", fontSize: 14, lineHeight: 1.9, color: "var(--nf-text)",
               whiteSpace: "pre-wrap", maxHeight: 400, overflowY: "auto",
             }}>
@@ -6472,7 +6479,7 @@ const TimelineView = memo(({ plotOutline, chapters, characters, onClose, restore
       animation: "nf-fadeIn 0.12s ease-out",
     }}>
       <div role="button" tabIndex={0} onClick={e => e.stopPropagation()} style={{
-        background: "var(--nf-dialog-bg)", border: "1px solid var(--nf-dialog-border)", borderRadius: 3,
+        background: "var(--nf-dialog-bg)", border: "1px solid var(--nf-dialog-border)", borderRadius: 2,
         padding: 0, maxWidth: 950, width: "95%", maxHeight: "85vh",
         boxShadow: "var(--nf-shadow-lg)", display: "flex", flexDirection: "column",
       }}>
@@ -6494,7 +6501,7 @@ const TimelineView = memo(({ plotOutline, chapters, characters, onClose, restore
                   {group.key !== "Undated" && (
                     <div key={gi} style={{
                       fontSize: 18, fontWeight: 400, color: "var(--nf-accent)", fontFamily: "var(--nf-font-display)",
-                      marginBottom: 22, paddingBottom: 6, borderBottom: "1px solid var(--nf-border)",
+                      marginBottom: 24, paddingBottom: 6, borderBottom: "1px solid var(--nf-border)",
                       letterSpacing: "0.02em",
                     }}>{group.key}</div>
                   )}
@@ -6544,7 +6551,7 @@ const TimelineView = memo(({ plotOutline, chapters, characters, onClose, restore
                             </div>
                           )}
                           <div className="nf-card" style={{
-                            marginBottom: 22, position: "relative",
+                            marginBottom: 24, position: "relative",
                             animation: "nf-slideUp 0.2s ease-out",
                             animationDelay: `${(gi * group.entries.length + i) * 0.03}s`, animationFillMode: "both",
                           }}>
@@ -6605,7 +6612,7 @@ const TimelineView = memo(({ plotOutline, chapters, characters, onClose, restore
           animation: "nf-fadeIn 0.15s ease-out", cursor: "pointer",
         }} onClick={() => setLightbox(null)}>
           <div role="button" tabIndex={0} onClick={e => e.stopPropagation()} style={{ position: "relative", maxWidth: "90vw", maxHeight: "90vh", display: "flex", alignItems: "center", justifyContent: "center" }}>
-            <img loading="lazy" src={lightbox.images[lightbox.index]} alt="" style={{ maxWidth: "90vw", maxHeight: "85vh", objectFit: "contain", borderRadius: 3, boxShadow: "0 0 60px rgba(0,0,0,0.5)" }} />
+            <img loading="lazy" src={lightbox.images[lightbox.index]} alt="" style={{ maxWidth: "90vw", maxHeight: "85vh", objectFit: "contain", borderRadius: 2, boxShadow: "0 0 60px rgba(0,0,0,0.5)" }} />
             {lightbox.images.length > 1 && (
               <>
                 <button onClick={() => setLightbox(prev => ({ ...prev, index: Math.max(prev.index - 1, 0) }))}
@@ -7146,11 +7153,11 @@ const RelationshipWebModal = memo(({ characters, relationships, onClose, povChar
     return counts;
   }, [rels]);
 
-  if (!chars.length) return (<div style={{ position: "fixed", inset: 0, zIndex: 9997, background: "rgba(0,0,0,0.6)", backdropFilter: "blur(8px)", display: "flex", alignItems: "center", justifyContent: "center" }} onClick={onClose}><div onClick={e => e.stopPropagation()} style={{ background: "var(--nf-dialog-bg)", border: "1px solid var(--nf-dialog-border)", borderRadius: 3, padding: 40, textAlign: "center", color: "var(--nf-text-muted)", fontFamily: "var(--nf-font-display)", fontStyle: "italic" }}>Add characters first to see their connections</div></div>);
+  if (!chars.length) return (<div style={{ position: "fixed", inset: 0, zIndex: 9997, background: "rgba(0,0,0,0.6)", backdropFilter: "blur(8px)", display: "flex", alignItems: "center", justifyContent: "center" }} onClick={onClose}><div onClick={e => e.stopPropagation()} style={{ background: "var(--nf-dialog-bg)", border: "1px solid var(--nf-dialog-border)", borderRadius: 2, padding: 40, textAlign: "center", color: "var(--nf-text-muted)", fontFamily: "var(--nf-font-display)", fontStyle: "italic" }}>Add characters first to see their connections</div></div>);
   return (
     <div style={{ position: "fixed", inset: 0, zIndex: 9997, background: "rgba(0,0,0,0.6)", backdropFilter: "blur(8px)", display: "flex", alignItems: "center", justifyContent: "center", animation: "nf-fadeIn 0.2s ease-out" }} onClick={onClose}>
       <style>{`.nf-rel-web-node{cursor:grab}.nf-rel-web-node:active{cursor:grabbing}.nf-rel-web-line{transition:opacity .15s}.nf-rel-web-hit{cursor:pointer}.nf-wl{position:absolute;bottom:14px;right:14px;background:var(--nf-bg-raised);border:1px solid var(--nf-border);border-radius:2px;padding:12px 16px;box-shadow:var(--nf-shadow);z-index:10;font-size:10px;color:var(--nf-text-muted);line-height:1.8;user-select:none;max-height:60vh;overflow-y:auto}.nf-wl-t{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px;padding-bottom:5px;border-bottom:1px solid var(--nf-border);color:var(--nf-text-dim)}.nf-wl-s{margin-bottom:8px}.nf-wl-s:last-child{margin-bottom:0}.nf-wl-i{display:flex;align-items:center;gap:8px;padding:1px 0}.nf-wl-sw{width:24px;height:2px;flex-shrink:0;border-radius:1px}.nf-wl-d{width:8px;height:8px;border-radius:50%;flex-shrink:0}.nf-rel-web-tip{position:fixed;z-index:10001;pointer-events:none;background:var(--nf-dialog-bg);border:1px solid var(--nf-border);border-radius:3px;padding:12px 16px;box-shadow:var(--nf-shadow-lg);max-width:300px;animation:nf-fadeIn .12s ease-out;font-size:12px;line-height:1.6;color:var(--nf-text)}`}</style>
-      <div role="button" tabIndex={0} onClick={e => e.stopPropagation()} style={{ background: "var(--nf-dialog-bg)", border: "1px solid var(--nf-dialog-border)", borderRadius: 3, width: "95vw", maxWidth: 1100, height: "88vh", maxHeight: 800, display: "flex", flexDirection: "column", boxShadow: "var(--nf-shadow-lg)", overflow: "hidden", textOverflow: "ellipsis", animation: "nf-pop 0.25s ease-out" }}>
+      <div role="button" tabIndex={0} onClick={e => e.stopPropagation()} style={{ background: "var(--nf-dialog-bg)", border: "1px solid var(--nf-dialog-border)", borderRadius: 2, width: "95vw", maxWidth: 1100, height: "88vh", maxHeight: 800, display: "flex", flexDirection: "column", boxShadow: "var(--nf-shadow-lg)", overflow: "hidden", textOverflow: "ellipsis", animation: "nf-pop 0.25s ease-out" }}>
         {/* Header */}
         <div style={{ padding: "16px 22px", borderBottom: "1px solid var(--nf-border)", display: "flex", justifyContent: "space-between", alignItems: "center", flexShrink: 0, background: "var(--nf-bg-raised)" }}>
           <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
@@ -7181,7 +7188,7 @@ const RelationshipWebModal = memo(({ characters, relationships, onClose, povChar
           <span style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", marginRight: 4 }}>Filter:</span>
           {["all","romantic","family","friendship","professional","mentor","rivalry"].map(cat => (
             <button key={cat} onClick={() => setFilterCategory(cat)} style={{
-              padding: "2px 8px", borderRadius: 3, fontSize: 11, border: "1px solid", cursor: "pointer",
+              padding: "2px 8px", borderRadius: 2, fontSize: 11, border: "1px solid", cursor: "pointer",
               background: filterCategory === cat ? "var(--nf-accent-glow)" : "transparent",
               borderColor: filterCategory === cat ? "var(--nf-accent)" : "var(--nf-border)",
               color: filterCategory === cat ? "var(--nf-accent)" : "var(--nf-text-muted)",
@@ -7371,7 +7378,7 @@ const RelationshipWebModal = memo(({ characters, relationships, onClose, povChar
           </div>
         </div>
         {/* Hover tooltip */}
-        {hoveredInfo?.type === 'rel' && (() => { const {data: r, c1, c2} = hoveredInfo; return (<div className="nf-rel-web-tip" style={{ bottom: 80, left: "50%", transform: "translateX(-50%)" }}><div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}><span style={{ fontWeight: 700, color: "var(--nf-text)", fontSize: 13 }}>{c1.name}</span><span style={{ color: tColor(r.tension), fontSize: 16 }}>↔</span><span style={{ fontWeight: 700, color: "var(--nf-text)", fontSize: 13 }}>{c2.name}</span></div>{r.dynamic && <div style={{ fontSize: 11, color: "var(--nf-text-dim)", lineHeight: 1.5, marginBottom: 6 }}>{r.dynamic}</div>}<div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>{r.status && <span style={{ fontSize: 11, padding: "2px 6px", background: "var(--nf-bg-surface)", border: "1px solid var(--nf-border)", borderRadius: 3, color: "var(--nf-text-muted)" }}>{r.status}</span>}{r.tension && r.tension !== "none" && <span style={{ fontSize: 11, padding: "2px 6px", background: "var(--nf-bg-surface)", border: `1px solid ${tColor(r.tension)}`, borderRadius: 3, color: tColor(r.tension), fontWeight: 700 }}>{r.tension}</span>}{r.category && <span style={{ fontSize: 11, padding: "2px 6px", background: "var(--nf-bg-surface)", border: "1px solid var(--nf-border)", borderRadius: 3, color: "var(--nf-text-muted)" }}>{r.category}</span>}</div>{r.sharedSecrets && <div style={{ marginTop: 6, color: "var(--nf-accent)", lineHeight: 1.4 }}>🤫 Shared secret: {r.sharedSecrets.slice(0, 80)}…</div>}</div>); })()}
+        {hoveredInfo?.type === 'rel' && (() => { const {data: r, c1, c2} = hoveredInfo; return (<div className="nf-rel-web-tip" style={{ bottom: 80, left: "50%", transform: "translateX(-50%)" }}><div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}><span style={{ fontWeight: 700, color: "var(--nf-text)", fontSize: 13 }}>{c1.name}</span><span style={{ color: tColor(r.tension), fontSize: 16 }}>↔</span><span style={{ fontWeight: 700, color: "var(--nf-text)", fontSize: 13 }}>{c2.name}</span></div>{r.dynamic && <div style={{ fontSize: 11, color: "var(--nf-text-dim)", lineHeight: 1.5, marginBottom: 6 }}>{r.dynamic}</div>}<div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>{r.status && <span style={{ fontSize: 11, padding: "2px 6px", background: "var(--nf-bg-surface)", border: "1px solid var(--nf-border)", borderRadius: 2, color: "var(--nf-text-muted)" }}>{r.status}</span>}{r.tension && r.tension !== "none" && <span style={{ fontSize: 11, padding: "2px 6px", background: "var(--nf-bg-surface)", border: `1px solid ${tColor(r.tension)}`, borderRadius: 2, color: tColor(r.tension), fontWeight: 700 }}>{r.tension}</span>}{r.category && <span style={{ fontSize: 11, padding: "2px 6px", background: "var(--nf-bg-surface)", border: "1px solid var(--nf-border)", borderRadius: 2, color: "var(--nf-text-muted)" }}>{r.category}</span>}</div>{r.sharedSecrets && <div style={{ marginTop: 6, color: "var(--nf-accent)", lineHeight: 1.4 }}>🤫 Shared secret: {r.sharedSecrets.slice(0, 80)}…</div>}</div>); })()}
         {/* Org hierarchy tooltip */}
         {hoveredInfo?.type === 'org' && (() => { const link = hoveredInfo.data; const sup = charMap[link.superiorId]; const sub = charMap[link.subordinateId]; if (!sup || !sub) return null; return (<div className="nf-rel-web-tip" style={{ bottom: 80, left: "50%", transform: "translateX(-50%)" }}><div style={{ fontSize: 11, color: "rgba(160,140,200,0.7)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 6 }}>⛨ {link.orgName}</div><div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}><span style={{ fontWeight: 700, color: "var(--nf-text)", fontSize: 13 }}>{sup.name}</span><span style={{ fontSize: 11, color: "rgba(160,140,200,0.7)" }}>{link.superiorRole}</span></div><div style={{ fontSize: 11, color: "rgba(160,140,200,0.5)", textAlign: "center", margin: "2px 0" }}>▼ reports to</div><div style={{ display: "flex", alignItems: "center", gap: 8 }}><span style={{ fontWeight: 700, color: "var(--nf-text)", fontSize: 13 }}>{sub.name}</span><span style={{ fontSize: 11, color: "rgba(160,140,200,0.7)" }}>{link.subordinateRole}</span></div></div>); })()}
         {/* Selected node panel */}
@@ -8958,14 +8965,14 @@ const LocationMap = memo(({ pin, onChange }) => {
 
   if (status === "error") {
     return (
-      <div style={{ padding: "10px 12px", fontSize: 11, color: "var(--nf-text-muted)", border: "1px solid var(--nf-border)", borderRadius: 3, background: "var(--nf-bg-deep)" }}>
+      <div style={{ padding: "10px 12px", fontSize: 11, color: "var(--nf-text-muted)", border: "1px solid var(--nf-border)", borderRadius: 2, background: "var(--nf-bg-deep)" }}>
         Map couldn't load (offline or blocked). You can still store coordinates manually if needed.
       </div>
     );
   }
 
   return (
-    <div style={{ border: "1px solid var(--nf-border)", borderRadius: 3, overflow: "hidden", background: "var(--nf-bg-deep)" }}>
+    <div style={{ border: "1px solid var(--nf-border)", borderRadius: 2, overflow: "hidden", background: "var(--nf-bg-deep)" }}>
       <div style={{ display: "flex", gap: 6, padding: 8, borderBottom: "1px solid var(--nf-border)" }}>
         <input
           value={query}
@@ -9064,7 +9071,7 @@ const TypesetPreview = memo(({ content, chapterTitle, onClose }) => {
       <div onClick={e => e.stopPropagation()} style={{ flex: 1, overflowY: "auto", display: "flex", flexWrap: "wrap", gap: 24, justifyContent: "center", padding: "8px 16px 32px", alignContent: "flex-start" }}>
         {pages.map((pg, i) => (
           <div key={i} style={{ width: 360, height: 540, background: "#fdfcf8", color: "#1a1a1a", boxShadow: "0 4px 18px rgba(0,0,0,0.4)", padding: "48px 40px 40px", fontFamily: "Georgia, 'Times New Roman', serif", fontSize: 13, lineHeight: 1.6, overflow: "hidden", position: "relative" }}>
-            {i === 0 && <div style={{ textAlign: "center", fontWeight: 700, fontSize: 15, marginBottom: 18, letterSpacing: "0.02em" }}>{chapterTitle}</div>}
+            {i === 0 && <div style={{ textAlign: "center", fontWeight: 700, fontSize: 15, marginBottom: 16, letterSpacing: "0.02em" }}>{chapterTitle}</div>}
             {pg.map((p, j) => <p key={j} style={{ margin: 0, textIndent: (i === 0 && j === 0) ? 0 : "1.4em", textAlign: "justify" }}>{p}</p>)}
             <div style={{ position: "absolute", bottom: 18, left: 0, right: 0, textAlign: "center", fontSize: 11, color: "#999" }}>{i + 1}</div>
           </div>
@@ -9117,11 +9124,99 @@ const ExportPreviewMatrix = memo(({ chapter, onClose }) => {
   );
 });
 
+// ─── UNIFIED PROJECT IMAGE LIBRARY ───
+// Aggregates every image scattered across the project (character portraits, mood boards, signature
+// items; world reference images, additional refs, logos/crests; project draft images) into one
+// browsable, filterable gallery with source attribution. Read-only viewer — click any image for a
+// lightbox; jumping to the source is handled by the parent via onJump.
+const collectProjectImages = (project) => {
+  if (!project) return [];
+  const out = [];
+  const push = (data, meta) => { if (typeof data === "string" && data.startsWith("data:")) out.push({ data, ...meta }); };
+  (project.characters || []).forEach(c => {
+    if (!c.name && !c.image) return;
+    push(c.image, { source: `Character · ${c.name || "unnamed"}`, kind: "Portrait", sourceType: "character", sourceId: c.id, caption: c.name });
+    (Array.isArray(c.moodBoard) ? c.moodBoard : []).forEach(m => push(m.data, { source: `Character · ${c.name || "unnamed"}`, kind: m.genKind ? `Mood · ${m.genKind}` : "Mood board", sourceType: "character", sourceId: c.id, caption: m.caption, genPrompt: m.genPrompt }));
+    (Array.isArray(c.signatureItemImages) ? c.signatureItemImages : []).forEach(s => push(s.data, { source: `Character · ${c.name || "unnamed"}`, kind: "Signature item", sourceType: "character", sourceId: c.id, caption: s.caption || s.itemName }));
+  });
+  (project.worldBuilding || []).forEach(w => {
+    if (!w.name) return;
+    push(w.logoImage, { source: `World · ${w.name}`, kind: "Logo / crest", sourceType: "world", sourceId: w.id, caption: w.name });
+    push(w.orgGroupPhoto, { source: `World · ${w.name}`, kind: "Group photo", sourceType: "world", sourceId: w.id, caption: w.name });
+    const refs = w.referenceImages;
+    if (refs && typeof refs === "object" && !Array.isArray(refs)) Object.entries(refs).forEach(([k, v]) => push(v, { source: `World · ${w.name}`, kind: `Reference · ${k}`, sourceType: "world", sourceId: w.id, caption: w.name }));
+    (Array.isArray(w.additionalRefs) ? w.additionalRefs : []).forEach(a => push(a.data, { source: `World · ${w.name}`, kind: "Reference", sourceType: "world", sourceId: w.id, caption: a.caption || w.name }));
+  });
+  (project.images || []).forEach(im => push(im.data || im.url, { source: "Project", kind: "Saved image", sourceType: "project", caption: im.caption }));
+  return out;
+};
+
+const ProjectImageLibrary = memo(({ project, onClose, onJump }) => {
+  const all = useMemo(() => collectProjectImages(project), [project]);
+  const [filter, setFilter] = useState("all"); // all | character | world | project
+  const [q, setQ] = useState("");
+  const [lightbox, setLightbox] = useState(null);
+  useEffect(() => { const h = (e) => { if (e.key === "Escape") { lightbox ? setLightbox(null) : onClose(); } }; window.addEventListener("keydown", h); return () => window.removeEventListener("keydown", h); }, [lightbox, onClose]);
+  const shown = all.filter(im => (filter === "all" || im.sourceType === filter) && (!q.trim() || `${im.source} ${im.kind} ${im.caption || ""}`.toLowerCase().includes(q.trim().toLowerCase())));
+  const counts = { all: all.length, character: all.filter(i => i.sourceType === "character").length, world: all.filter(i => i.sourceType === "world").length, project: all.filter(i => i.sourceType === "project").length };
+  return createPortal(
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 9100, background: "rgba(0,0,0,0.55)", backdropFilter: "blur(4px)", display: "flex", alignItems: "flex-start", justifyContent: "center", paddingTop: "6vh" }}>
+      <div onClick={e => e.stopPropagation()} style={{ width: "min(900px,95vw)", maxHeight: "88vh", display: "flex", flexDirection: "column", background: "var(--nf-dialog-bg)", border: "1px solid var(--nf-dialog-border)", borderRadius: 8, boxShadow: "var(--nf-shadow-lg)", overflow: "hidden" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "14px 18px", borderBottom: "1px solid var(--nf-border)" }}>
+          <span style={{ fontSize: 16 }}>▦</span>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontFamily: "var(--nf-font-display)", fontSize: 17, color: "var(--nf-text)" }}>Image Library</div>
+            <div style={{ fontSize: 11, color: "var(--nf-text-muted)" }}>Every image across this project, in one place.</div>
+          </div>
+          <button onClick={onClose} className="nf-btn-icon" aria-label="Close"><Icons.X /></button>
+        </div>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", padding: "10px 18px", borderBottom: "1px solid var(--nf-border)" }}>
+          <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search by source or caption…" className="nf-input" style={{ flex: 1, minWidth: 160, fontSize: 12, padding: "6px 10px" }} />
+          {[["all", "All"], ["character", "Characters"], ["world", "World"], ["project", "Project"]].map(([v, l]) => (
+            <button key={v} onClick={() => setFilter(v)} className="nf-btn-micro" style={{ fontSize: 11, background: filter === v ? "var(--nf-accent)" : undefined, color: filter === v ? "#fff" : undefined, borderColor: filter === v ? "var(--nf-accent)" : undefined }}>{l} ({counts[v]})</button>
+          ))}
+        </div>
+        <div style={{ overflowY: "auto", padding: 18 }}>
+          {shown.length === 0 ? (
+            <div style={{ fontSize: 13, color: "var(--nf-text-muted)", fontStyle: "italic", padding: "20px 0", textAlign: "center" }}>{all.length === 0 ? "No images in this project yet." : "No images match."}</div>
+          ) : (
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(130px, 1fr))", gap: 12 }}>
+              {shown.map((im, i) => (
+                <div key={i} style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                  <div onClick={() => setLightbox(im)} style={{ position: "relative", aspectRatio: "1/1", borderRadius: 2, overflow: "hidden", border: "1px solid var(--nf-border)", background: "var(--nf-bg-deep)", cursor: "zoom-in" }} title={im.caption || im.kind}>
+                    <img loading="lazy" src={im.data} alt={im.caption || ""} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                    <span style={{ position: "absolute", top: 3, left: 3, fontSize: 9, padding: "1px 5px", borderRadius: 2, background: "rgba(0,0,0,0.6)", color: "#fff", textTransform: "uppercase", letterSpacing: "0.04em" }}>{im.kind}</span>
+                  </div>
+                  <div style={{ fontSize: 10, color: "var(--nf-text-muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{im.source}</div>
+                  {onJump && im.sourceId && (
+                    <button onClick={() => { onJump(im); onClose(); }} className="nf-btn-micro" style={{ fontSize: 9, padding: "1px 5px" }}>Go to source</button>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+      {lightbox && (
+        <div onClick={() => setLightbox(null)} style={{ position: "fixed", inset: 0, zIndex: 9200, background: "rgba(0,0,0,0.85)", display: "flex", alignItems: "center", justifyContent: "center", padding: 24, flexDirection: "column", gap: 10 }}>
+          <img src={lightbox.data} alt={lightbox.caption || ""} style={{ maxWidth: "92vw", maxHeight: "78vh", objectFit: "contain", borderRadius: 4 }} />
+          <div style={{ color: "#ddd", fontSize: 12, textAlign: "center", maxWidth: "80vw" }}>
+            <div style={{ fontWeight: 600 }}>{lightbox.source} · {lightbox.kind}</div>
+            {lightbox.caption && <div style={{ color: "#aaa" }}>{lightbox.caption}</div>}
+            {lightbox.genPrompt && <div style={{ color: "#888", fontSize: 10, marginTop: 4, maxHeight: 80, overflow: "auto" }}>{lightbox.genPrompt}</div>}
+          </div>
+        </div>
+      )}
+    </div>,
+    document.body
+  );
+});
+
 // ─── NODE-BASED GENERATION LINEAGE ───
 // Renders a character's generated images as a branching tree by parentId, so you can see which
 // prompt adjustment produced which result and trace/revert a visual branch. Generations without
 // lineage metadata (uploads, older images) appear as roots.
-const GenerationLineage = memo(({ images, onClose }) => {
+const GenerationLineage = memo(({ images, onClose, onRegenerate, regenBusyId }) => {
   const byParent = useMemo(() => {
     const map = new Map();
     (images || []).forEach(img => {
@@ -9137,10 +9232,15 @@ const GenerationLineage = memo(({ images, onClose }) => {
       <div key={img.id} style={{ marginLeft: depth * 18, borderLeft: depth ? "1px solid var(--nf-border)" : "none", paddingLeft: depth ? 10 : 0, marginTop: 6 }}>
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
           <img src={img.data} alt={img.caption || ""} style={{ width: 40, height: 40, objectFit: "cover", borderRadius: 4, border: "1px solid var(--nf-border)" }} />
-          <div style={{ minWidth: 0 }}>
+          <div style={{ minWidth: 0, flex: 1 }}>
             <div style={{ fontSize: 11, color: "var(--nf-text)", fontWeight: 600 }}>{img.caption || img.genKind || "image"}</div>
-            {img.genPrompt && <div style={{ fontSize: 10, color: "var(--nf-text-muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 320 }}>{img.genPrompt}</div>}
+            {img.genPrompt && <div title={img.genPrompt} style={{ fontSize: 10, color: "var(--nf-text-muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 320 }}>{img.genPrompt}</div>}
           </div>
+          {img.genPrompt && onRegenerate && (
+            <button onClick={() => onRegenerate(img)} disabled={!!regenBusyId} className="nf-btn-micro" style={{ fontSize: 10, padding: "2px 6px", flexShrink: 0 }} title="Generate a new variation from this image's prompt">
+              {regenBusyId === img.id ? "…" : "↻ Vary"}
+            </button>
+          )}
         </div>
         {kids.map(k => renderNode(k, depth + 1))}
       </div>
@@ -9899,6 +9999,183 @@ const PacingWaveform = memo(({ content }) => {
   );
 });
 
+// ─── SETTINGS PRIMITIVES (consistent spacing/alignment for the long options lists) ───
+// Replaces dozens of hand-rolled checkbox+description blocks that had drifting margins and a fixed
+// marginLeft:22 indent that didn't reliably align under the label. Here the description is indented
+// to match the checkbox+gap via a shared grid, so every row lines up identically.
+const SettingToggle = memo(({ checked, onChange, label, desc, children }) => (
+  <div style={{ marginTop: 14 }}>
+    <label style={{ display: "grid", gridTemplateColumns: "16px 1fr", columnGap: 9, alignItems: "center", cursor: "pointer" }}>
+      <input type="checkbox" checked={!!checked} onChange={e => onChange(e.target.checked)} style={{ width: 16, height: 16, margin: 0, accentColor: "var(--nf-accent)" }} />
+      <span style={{ color: "var(--nf-text)", fontWeight: 500, fontSize: 12 }}>{label}</span>
+    </label>
+    {desc && <div style={{ fontSize: 11, color: "var(--nf-text-muted)", lineHeight: 1.5, marginTop: 4, paddingLeft: 25 }}>{desc}</div>}
+    {children && <div style={{ paddingLeft: 25, marginTop: 6 }}>{children}</div>}
+  </div>
+));
+
+const SettingChoice = memo(({ label, desc, value, options, onChange }) => (
+  <div style={{ marginTop: 14 }}>
+    <div style={{ color: "var(--nf-text)", fontWeight: 500, fontSize: 12 }}>{label}</div>
+    {desc && <div style={{ fontSize: 11, color: "var(--nf-text-muted)", lineHeight: 1.5, margin: "3px 0 8px" }}>{desc}</div>}
+    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+      {options.map(o => (
+        <button key={o.v} onClick={() => onChange(o.v)} className="nf-btn-micro"
+          style={{ fontSize: 11, padding: "4px 12px", background: value === o.v ? "var(--nf-accent)" : undefined, color: value === o.v ? "#fff" : undefined, borderColor: value === o.v ? "var(--nf-accent)" : undefined }}>
+          {o.l}
+        </button>
+      ))}
+    </div>
+  </div>
+));
+
+// ─── FEATURE GUIDE (single source of truth for the Help panel) ───
+// A curated catalog of what the app can do and where. The Help index renders this directly, and the
+// LLM "Ask" box answers grounded in it — so guidance stays accurate even as the app changes, and the
+// model can't invent features that don't exist. Keep entries short; `keywords` aids search.
+const FEATURE_GUIDE = [
+  // Write
+  { tab: "Write", name: "Continue / generate prose", what: "The AI writes the next passage in your style, using full story context.", how: "Open the Write tab, place your cursor where you want to continue, and use the AI panel (or the mobile ✨ button).", keywords: "write generate continue draft prose ai compose" },
+  { tab: "Write", name: "Focus / clean reading mode", what: "A distraction-free full-screen view of just your prose.", how: "Toggle clean view from the Write toolbar.", keywords: "focus distraction clean reading fullscreen zen" },
+  { tab: "Write", name: "Deletion recovery", what: "If you delete 100+ words at once, the previous text is silently snapshotted so it can be recovered later.", how: "Automatic. Recovered snapshots live with the project's recovery log.", keywords: "undo recover deleted lost text restore" },
+  { tab: "Write", name: "Sprint / typewriter pacing", what: "Optional writing-flow aids like a breathing caret and sprint lock.", how: "Enable from Settings or the Write toolbar.", keywords: "sprint timer typewriter pacing flow focus" },
+  // Characters
+  { tab: "Characters", name: "Roster search & filter", what: "Find any character by name, alias, role, or tag, or filter to incomplete ones.", how: "Use the search box and filter chips at the top of the Characters sidebar.", keywords: "find search filter character roster cast incomplete role" },
+  { tab: "Characters", name: "Section jump-bar & completeness", what: "Navigate a character's long form by section, with per-section fill dots and an overall %.", how: "Use the sticky chip bar at the top of an open character.", keywords: "navigate sections jump completeness progress fill dots" },
+  { tab: "Characters", name: "Permanent marks", what: "Tattoos, scars, birthmarks — the body features that carry into every Editorial Studio render (daily clothing does not).", how: "Characters → open a character → 'Permanent marks' field under appearance.", keywords: "tattoo scar birthmark mark body editorial permanent" },
+  { tab: "Characters", name: "Generate reference art", what: "Photorealistic portraits, model sheets, relights, aging, outfit and expression variants of a character.", how: "Characters → open a character → 'Generate Reference Art' (needs an API key).", keywords: "art portrait image reference model sheet photo generate face" },
+  { tab: "Characters", name: "Editorial Studio", what: "Full photographic styling of a character: pose, framing, camera angle, expression, clothing, lens/film, lighting, wind, water, particles, accessories, backdrop, color grade, and free-form director's notes. Identity (face + permanent marks) carries over; daily clothing and occupation do NOT.", how: "Characters → open a character → 'Editorial Studio…'. Every dropdown has a Custom option. The live preview shows the exact prompt.", keywords: "editorial studio pose clothing wardrobe lens lighting backdrop camera photo styling outfit wind water" },
+  { tab: "Characters", name: "Mood board + lightbox", what: "Collect reference images per character; click any to view full-size with prev/next.", how: "Characters → open a character → Mood Board section.", keywords: "mood board images reference gallery lightbox photos" },
+  { tab: "Characters", name: "Fill empty / AI fields", what: "Let the AI fill blank character fields (with a review step).", how: "Characters → open a character → 'Fill Empty'.", keywords: "autofill fill ai fields blank generate character" },
+  // Relationships
+  { tab: "Relationships", name: "Draft a relationship with AI", what: "Rewrites a whole relationship — dynamic, chemistry, conflict, both perspectives, arc, and structured fields — grounded in both characters. Applied instantly with one-click undo.", how: "Relationships → a pair → 'Draft (AI)'. Or 'Draft All with AI' in the header for every pair.", keywords: "relationship draft ai generate dynamic chemistry conflict perspective undo" },
+  { tab: "Relationships", name: "Fill empty (gentle)", what: "Fills only the blank relationship fields, with a review step — won't overwrite your writing.", how: "Relationships → a pair → 'Fill Empty'.", keywords: "relationship fill empty gentle autofill" },
+  { tab: "Relationships", name: "Relationship web", what: "A visual graph of who connects to whom.", how: "Relationships → '◈ Web' in the header.", keywords: "web graph map relationships network visual connections" },
+  { tab: "Relationships", name: "Auto-linking", what: "Setting a relationship, tagging characters in a scene, or building an org hierarchy auto-creates and keeps reverse links in sync across tabs.", how: "Automatic as you edit.", keywords: "auto link sync cross reference relationship automatic" },
+  // World
+  { tab: "World", name: "World entries by category", what: "Locations, organizations, rules, cultures, tech, religions, history, and more — each with category-specific fields.", how: "World tab → add an entry and pick a category.", keywords: "world building location organization lore setting place culture" },
+  { tab: "World", name: "Room / world image generation", what: "Generate a master establishing shot plus four wall views of a location from its description.", how: "World → open a location → generate images (needs an API key).", keywords: "world image room location render walls establishing shot" },
+  { tab: "World", name: "Frequent characters at a place", what: "Mark who regularly appears at a location; this stays in sync with scenes you tag.", how: "World → open a location → frequent characters. Also set automatically from plot scenes.", keywords: "frequent characters location regulars who appears place" },
+  // Plot
+  { tab: "Plot", name: "Plot outline & scenes", what: "Per-chapter plot entries with POV, characters, locations, date, and summary.", how: "Plot tab → add or edit entries.", keywords: "plot outline scene beat chapter summary structure" },
+  { tab: "Plot", name: "POV auto-includes the character", what: "Setting a scene's POV character automatically adds them to that scene's cast (and to the location's regulars).", how: "Automatic when you set POV on a plot entry.", keywords: "pov point of view character scene auto include cast" },
+  // Cross-cutting / project
+  { tab: "Settings", name: "Non-linear / parallel timelines", what: "For concurrent eras or retrocausal stories: turns off flashback detection and the death→relationship cascade, and tells the AI the eras run concurrently.", how: "Settings → 'Non-linear / parallel timelines'.", keywords: "timeline non-linear parallel flashback retrocausal era concurrent time travel" },
+  { tab: "Settings", name: "Liveliness", what: "Ambient drifting motes, a time-of-day tint, milestone sparks, and a clickable companion sprite that says a thought about your story. Honors reduced-motion.", how: "Settings → Liveliness → Full / Subtle / Off.", keywords: "liveliness sprite motes ambient animation companion fun mascot" },
+  { tab: "Settings", name: "Per-tab & per-agent AI models", what: "Choose which model each tab and each background agent uses, and their token budgets.", how: "Settings → model selectors and agent settings.", keywords: "model agent ai settings openrouter token budget per-tab" },
+  { tab: "Settings", name: "Genre & heat level", what: "Sets tone and defaults across the app (e.g. relationships default to romantic only for romance genres).", how: "Settings / project setup → Genre and Heat level.", keywords: "genre heat level romance tone sci-fi fantasy setting" },
+  { tab: "Global", name: "Command palette (jump to anything)", what: "Fuzzy-search and jump to any chapter, character, or place.", how: "Press Ctrl/Cmd+K.", keywords: "command palette jump search navigate ctrl k quick open goto" },
+  { tab: "Global", name: "Companion sprite", what: "Click the little drifting gem-sprite for a short, context-aware thought about your story.", how: "Click the sprite anywhere in the workspace (needs an API key).", keywords: "sprite companion mascot hearth help thought encouragement" },
+  { tab: "Global", name: "Export", what: "Export your manuscript (Markdown bundle, plain text, and more).", how: "Use the export options in the project menu.", keywords: "export download manuscript markdown txt save backup" },
+];
+
+// ─── HELP PANEL ───
+// Two modes in one panel: (1) an instant searchable index of every feature (from FEATURE_GUIDE,
+// no AI needed), and (2) an "Ask" box where the LLM answers "how do I…" grounded in that catalog.
+const HelpPanel = memo(({ open, onClose, onAsk, currentTab }) => {
+  const [q, setQ] = useState("");
+  const [askMode, setAskMode] = useState(false);
+  const [question, setQuestion] = useState("");
+  const [answer, setAnswer] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const inputRef = useRef(null);
+  useEffect(() => { if (open) { setQ(""); setAnswer(null); setQuestion(""); setAskMode(false); setTimeout(() => inputRef.current?.focus(), 40); } }, [open]);
+  useEffect(() => {
+    const h = (e) => { if (e.key === "Escape") onClose(); };
+    if (open) window.addEventListener("keydown", h);
+    return () => window.removeEventListener("keydown", h);
+  }, [open, onClose]);
+
+  const filtered = useMemo(() => {
+    const ql = q.trim().toLowerCase();
+    if (!ql) {
+      // Surface the current tab's features first when not searching.
+      const here = FEATURE_GUIDE.filter(f => f.tab.toLowerCase() === (currentTab || "").toLowerCase());
+      const rest = FEATURE_GUIDE.filter(f => f.tab.toLowerCase() !== (currentTab || "").toLowerCase());
+      return [...here, ...rest];
+    }
+    return FEATURE_GUIDE.filter(f => (f.name + " " + f.what + " " + f.keywords + " " + f.tab).toLowerCase().includes(ql));
+  }, [q, currentTab]);
+
+  const submitAsk = async () => {
+    const query = question.trim();
+    if (!query || busy) return;
+    setBusy(true); setAnswer(null);
+    try {
+      const a = await onAsk(query);
+      setAnswer(a || "I couldn't find that. Try the feature list, or rephrase.");
+    } catch {
+      setAnswer("Something went wrong. You can still browse the feature list below.");
+    } finally { setBusy(false); }
+  };
+
+  if (!open) return null;
+  return createPortal(
+    <div onClick={onClose} role="dialog" aria-modal="true" aria-label="Help"
+      style={{ position: "fixed", inset: 0, zIndex: 9999, background: "rgba(0,0,0,0.5)", backdropFilter: "blur(4px)", display: "flex", alignItems: "flex-start", justifyContent: "center", paddingTop: "8vh", animation: "nf-fadeIn 0.12s ease-out" }}>
+      <div onClick={e => e.stopPropagation()} style={{ width: "min(640px, 94vw)", maxHeight: "84vh", display: "flex", flexDirection: "column", background: "var(--nf-dialog-bg)", border: "1px solid var(--nf-dialog-border)", borderRadius: 8, boxShadow: "var(--nf-shadow-lg)", overflow: "hidden" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "14px 18px", borderBottom: "1px solid var(--nf-border)" }}>
+          <span style={{ fontSize: 18 }}>✦</span>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontFamily: "var(--nf-font-display)", fontSize: 17, color: "var(--nf-text)" }}>Help & Features</div>
+            <div style={{ fontSize: 11, color: "var(--nf-text-muted)" }}>Find what a feature does and where it lives — or just ask.</div>
+          </div>
+          <button onClick={onClose} className="nf-btn-icon" aria-label="Close"><Icons.X /></button>
+        </div>
+
+        {/* Mode toggle */}
+        <div style={{ display: "flex", gap: 6, padding: "10px 18px 0" }}>
+          <button onClick={() => setAskMode(false)} className="nf-btn-micro" style={{ fontSize: 11, padding: "4px 12px", background: !askMode ? "var(--nf-accent)" : undefined, color: !askMode ? "#fff" : undefined, borderColor: !askMode ? "var(--nf-accent)" : undefined }}>Browse features</button>
+          <button onClick={() => setAskMode(true)} className="nf-btn-micro" style={{ fontSize: 11, padding: "4px 12px", background: askMode ? "var(--nf-accent)" : undefined, color: askMode ? "#fff" : undefined, borderColor: askMode ? "var(--nf-accent)" : undefined }}>Ask a question</button>
+        </div>
+
+        {askMode ? (
+          <div style={{ padding: "12px 18px", overflowY: "auto" }}>
+            <div style={{ display: "flex", gap: 8 }}>
+              <input ref={inputRef} value={question} onChange={e => setQuestion(e.target.value)} onKeyDown={e => { if (e.key === "Enter") submitAsk(); }}
+                placeholder="e.g. How do I change a character's outfit in a photo?"
+                className="nf-input" style={{ flex: 1, fontSize: 13, padding: "8px 12px" }} />
+              <button onClick={submitAsk} disabled={busy || !question.trim()} className="nf-btn nf-btn-primary" style={{ fontSize: 12 }}>{busy ? "…" : "Ask"}</button>
+            </div>
+            {answer && (
+              <div className="nf-lively-motion" style={{ marginTop: 12, padding: "12px 14px", background: "var(--nf-bg-raised)", border: "1px solid var(--nf-border)", borderLeft: "3px solid var(--nf-accent)", borderRadius: "0 4px 4px 0", fontSize: 13, lineHeight: 1.6, color: "var(--nf-text)", whiteSpace: "pre-wrap" }}>
+                {answer}
+              </div>
+            )}
+            {!answer && !busy && (
+              <div style={{ marginTop: 12, fontSize: 12, color: "var(--nf-text-muted)", lineHeight: 1.6 }}>
+                Ask in plain language. Answers are grounded in this app's actual features — it'll tell you exactly which tab and button to use. Needs an API key.
+              </div>
+            )}
+          </div>
+        ) : (
+          <>
+            <div style={{ padding: "10px 18px" }}>
+              <input ref={inputRef} value={q} onChange={e => setQ(e.target.value)} placeholder="Search features… (e.g. tattoo, outfit, timeline, export)"
+                className="nf-input" style={{ width: "100%", boxSizing: "border-box", fontSize: 13, padding: "8px 12px" }} />
+            </div>
+            <div style={{ overflowY: "auto", padding: "0 18px 16px" }}>
+              {filtered.length === 0 ? (
+                <div style={{ padding: "16px 0", color: "var(--nf-text-muted)", fontSize: 13 }}>No features match. Try the "Ask a question" tab.</div>
+              ) : filtered.map((f, i) => (
+                <div key={i} style={{ padding: "10px 0", borderBottom: i < filtered.length - 1 ? "1px solid var(--nf-border)" : "none" }}>
+                  <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+                    <span style={{ fontSize: 13, fontWeight: 600, color: "var(--nf-text)" }}>{f.name}</span>
+                    <span style={{ fontSize: 10, color: "var(--nf-accent-2)", fontFamily: "var(--nf-font-mono)", textTransform: "uppercase", letterSpacing: "0.05em" }}>{f.tab}</span>
+                  </div>
+                  <div style={{ fontSize: 12, color: "var(--nf-text-dim)", lineHeight: 1.5, marginTop: 2 }}>{f.what}</div>
+                  <div style={{ fontSize: 11, color: "var(--nf-text-muted)", lineHeight: 1.5, marginTop: 4 }}><strong style={{ color: "var(--nf-accent-2)" }}>How:</strong> {f.how}</div>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+      </div>
+    </div>,
+    document.body
+  );
+});
+
 // ─── COMMAND PALETTE (Ctrl+K) ───
 // Global fuzzy search over chapters, characters, world entries, and relationships. Selecting a
 // result jumps straight there — keyboard-first navigation that bypasses the sidebar tree.
@@ -10003,21 +10280,21 @@ const SaveIndicator = memo(({ status, fileLinked }) => {
 
   if (status === "saving") return (
     <div style={{ display: "flex", alignItems: "center", gap: 5, padding: "0 8px" }} role="status" aria-live="polite">
-      <div style={{ width: 6, height: 6, borderRadius: 3, background: "var(--nf-accent-2)", animation: "nf-glyph-pulse-fast 0.7s ease-in-out infinite" }} />
+      <div style={{ width: 6, height: 6, borderRadius: 2, background: "var(--nf-accent-2)", animation: "nf-glyph-pulse-fast 0.7s ease-in-out infinite" }} />
       <span style={{ fontSize: 11, color: "var(--nf-accent-2)", fontWeight: 500 }}>Saving...</span>
     </div>
   );
 
   if (status === "error") return (
-    <div style={{ display: "flex", alignItems: "center", gap: 5, padding: "2px 8px", background: "var(--nf-error-bg)", borderRadius: 3 }} role="alert">
+    <div style={{ display: "flex", alignItems: "center", gap: 5, padding: "2px 8px", background: "var(--nf-error-bg)", borderRadius: 2 }} role="alert">
       <Icons.X />
       <span style={{ fontSize: 11, color: "var(--nf-accent)", fontWeight: 600 }}>Save failed</span>
     </div>
   );
 
   return (
-    <div role="button" tabIndex={0} onClick={() => setShowDetail(d => !d)} style={{ display: "flex", alignItems: "center", gap: 4, cursor: "pointer", padding: "0 6px", borderRadius: 3, transition: "background 0.15s" }} title={`Saved ${timeAgo || ""}${fileLinked ? " · Auto-saving to file" : " · Auto-saving to browser"}\nCtrl+S to save manually`}>
-      <div style={{ width: 5, height: 5, borderRadius: 3, background: "var(--nf-success)", opacity: 0.6, transition: "opacity 0.3s" }} />
+    <div role="button" tabIndex={0} onClick={() => setShowDetail(d => !d)} style={{ display: "flex", alignItems: "center", gap: 4, cursor: "pointer", padding: "0 6px", borderRadius: 2, transition: "background 0.15s" }} title={`Saved ${timeAgo || ""}${fileLinked ? " · Auto-saving to file" : " · Auto-saving to browser"}\nCtrl+S to save manually`}>
+      <div style={{ width: 5, height: 5, borderRadius: 2, background: "var(--nf-success)", opacity: 0.6, transition: "opacity 0.3s" }} />
       {(showDetail || status === "saved") && (
         <span style={{ fontSize: 11, color: "var(--nf-text-muted)", transition: "opacity 0.2s", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
           {status === "saved" ? "Saved" : timeAgo || "Saved"}
@@ -11331,7 +11608,7 @@ function WriteOrWhipPanel({ project, settings, chapterIdx, editorRef, onClose })
 
           {/* Beat description */}
           {typeof currentBeat === "object" && currentBeat.description && (
-            <div style={{ fontSize: 11, color: "var(--nf-text-dim)", lineHeight: 1.5, marginBottom: 6, padding: "4px 8px", background: "var(--nf-bg-surface)", borderRadius: 3, borderLeft: "2px solid var(--nf-accent)" }}>
+            <div style={{ fontSize: 11, color: "var(--nf-text-dim)", lineHeight: 1.5, marginBottom: 6, padding: "4px 8px", background: "var(--nf-bg-surface)", borderRadius: 2, borderLeft: "2px solid var(--nf-accent)" }}>
               {currentBeat.description}
             </div>
           )}
@@ -12509,6 +12786,18 @@ export default function NovelForge() {
   const [activeChapterIdx, setActiveChapterIdx] = useState(() => { try { return parseInt(sessionStorage.getItem("nf-activeChapterIdx"), 10) || 0; } catch { /* silent */ return 0; } });
   const [showProjectList, setShowProjectList] = useState(true);
   const [editingCharId, setEditingCharId] = useState(null);
+  const [charDetailLevel, setCharDetailLevel] = useState("full"); // full | essentials (collapse deep sections for minor characters)
+  // When opening a character, default minor/supporting ones to Essentials to reduce overwhelm; deeper
+  // roles default to Full. The user can still flip it per-session.
+  const _lastDetailCharRef = useRef(null);
+  useEffect(() => {
+    if (!editingCharId || _lastDetailCharRef.current === editingCharId) return;
+    _lastDetailCharRef.current = editingCharId;
+    const c = (project?.characters || []).find(x => x.id === editingCharId);
+    if (!c) return;
+    const minorRoles = ["minor", "supporting"];
+    setCharDetailLevel(minorRoles.includes(c.role) && !c.isBulk ? "essentials" : "full");
+  }, [editingCharId, project?.characters]);
   const [charRosterSearch, setCharRosterSearch] = useState(""); // sidebar live filter
   const [charRosterFilter, setCharRosterFilter] = useState("all"); // all | role:* | status:* | incomplete
   const [showGroupForm, setShowGroupForm] = useState(false);
@@ -12548,6 +12837,12 @@ export default function NovelForge() {
   const [showApiKey, setShowApiKey] = useState(false);
   const [dragOverIdx, setDragOverIdx] = useState(null); // C4: Chapter drag indicator
   const [expandedWorldIds, setExpandedWorldIds] = useState(new Set()); // D6: Collapsible world entries
+  const [worldSearch, setWorldSearch] = useState(""); // world list live filter
+  const [worldCatFilter, setWorldCatFilter] = useState("all"); // all | <category>
+  const [worldTreeView, setWorldTreeView] = useState(false); // group locations as a nested tree
+  const [plotSearch, setPlotSearch] = useState("");
+  const [plotPovFilter, setPlotPovFilter] = useState("all"); // all | <charId>
+  const [plotTypeFilter, setPlotTypeFilter] = useState("all"); // all | <sceneType>
   const [expandedHierIds, setExpandedHierIds] = useState(new Set()); // Collapsible hierarchy position cards
   const [expandedRelIds, setExpandedRelIds] = useState(new Set()); // D11: Collapsible relationships
   const [expandedPlotIds, setExpandedPlotIds] = useState(new Set()); // Collapsible plot entries
@@ -12567,6 +12862,8 @@ export default function NovelForge() {
   const [showClips, setShowClips] = useState(false);
   const [showSubtext, setShowSubtext] = useState(false); // subtext/agenda matrix panel
   const [lineageChar, setLineageChar] = useState(null); // character whose gen lineage is open
+  const [lineageRegenBusy, setLineageRegenBusy] = useState(null); // image id being re-varied
+  const [imageLibraryOpen, setImageLibraryOpen] = useState(false);
   const [editorialChar, setEditorialChar] = useState(null); // character whose Editorial Studio is open
   const [editorialBusy, setEditorialBusy] = useState(false);
   const [showExportPreview, setShowExportPreview] = useState(false);
@@ -12606,6 +12903,7 @@ export default function NovelForge() {
   const [imageGenAspect, setImageGenAspect] = useState(""); // Aspect ratio for single image
   const [showDrafts, setShowDrafts] = useState(false);
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
   const [draftsChapterFilter, setDraftsChapterFilter] = useState(false);
   const [viewingDraftId, setViewingDraftId] = useState(null);
   const [activeBeatId, setActiveBeatId] = useState(null); // Tracks which beat cursor is in
@@ -12991,9 +13289,16 @@ export default function NovelForge() {
         e.preventDefault();
         setCommandPaletteOpen(prev => !prev);
       }
+      // F1 or "?" (when not typing in a field): open Help
+      const typingTarget = /^(INPUT|TEXTAREA|SELECT)$/.test(e.target?.tagName) || e.target?.isContentEditable;
+      if ((e.key === "F1" || (e.key === "?" && !typingTarget && !mod)) ) {
+        e.preventDefault();
+        setHelpOpen(prev => !prev);
+      }
       // Escape: Close active modal/panel
       if (e.key === "Escape") {
-        if (commandPaletteOpen) { setCommandPaletteOpen(false); e.preventDefault(); }
+        if (helpOpen) { setHelpOpen(false); e.preventDefault(); }
+        else if (commandPaletteOpen) { setCommandPaletteOpen(false); e.preventDefault(); }
         else if (showRelWeb) { setShowRelWeb(false); e.preventDefault(); }
         else if (showAiMobile) { setShowAiMobile(false); e.preventDefault(); }
         else if (showTimeline) { setShowTimeline(false); e.preventDefault(); }
@@ -13520,8 +13825,15 @@ CRITICAL REQUIREMENTS:
       if (p.id !== activeProjectId) return p;
       const chapters = [...p.chapters];
       if (!chapters[idx]) return p;
-      chapters[idx] = { ...chapters[idx], ...updates };
-      return { ...p, chapters };
+      const prevCh = chapters[idx];
+      chapters[idx] = { ...prevCh, ...updates };
+      let next = { ...p, chapters };
+      // Two-way title sync: if the chapter's title changed and it's linked to a plot entry, keep the
+      // plot entry's title in step (plot→chapter sync already exists; this closes the reverse gap).
+      if (typeof updates.title === "string" && updates.title !== prevCh.title && prevCh.linkedPlotId) {
+        next = { ...next, plotOutline: (p.plotOutline || []).map(pl => pl.id === prevCh.linkedPlotId ? { ...pl, title: updates.title } : pl) };
+      }
+      return next;
     }));
   }, [activeProjectId]);
 
@@ -14060,6 +14372,23 @@ Be consistent with the characters' personalities and any context provided. No ma
     return (out || "").replace(/^["']|["']$/g, "").trim();
   }, [settings.apiKey, project?.title, project?.genre, activeChapter, sessionWords, project?.characters, callOpenRouter]);
 
+  // Help "Ask" — answers how-to questions grounded ONLY in the real feature catalog, so it points to
+  // actual tabs/buttons and never invents features. Defined after callOpenRouter (avoids TDZ).
+  const askHelp = useCallback(async (question) => {
+    if (!settings.apiKey) {
+      // Graceful offline fallback: keyword-match the catalog and summarize the best hit.
+      const ql = question.toLowerCase();
+      const hit = FEATURE_GUIDE.find(f => (f.name + " " + f.what + " " + f.keywords).toLowerCase().split(/\s+/).some(w => w.length > 3 && ql.includes(w)));
+      return hit ? `${hit.name} (${hit.tab}). ${hit.what}\n\nHow: ${hit.how}` : "Add an API key in Settings for full answers, or browse the feature list. ";
+    }
+    const catalog = FEATURE_GUIDE.map(f => `- [${f.tab}] ${f.name}: ${f.what} HOW: ${f.how}`).join("\n");
+    const out = await callOpenRouter([
+      { role: "system", content: `You are the in-app help for a novel-writing app. Answer the user's question using ONLY the feature list below. Be concise (2-5 sentences). Always name the exact tab and the button/field to use. If the feature genuinely isn't in the list, say it doesn't appear to exist yet rather than inventing it. No markdown headers.\n\nFEATURES:\n${catalog}` },
+      { role: "user", content: question },
+    ], { maxTokens: 12000, temperature: 0.3 });
+    return (out || "").trim();
+  }, [settings.apiKey, callOpenRouter]);
+
   // REWRITTEN: System prompt — F1-F5/F10/F11
   const buildSystemPrompt = useCallback((mode, selectedTextForCtx = null) => {
     const currentChapter = project?.chapters?.[activeChapterIdx];
@@ -14410,7 +14739,7 @@ Then 2-3 sentences describing the specific scene idea, character actions, and em
         // (the most recent moodBoard entry), so the gallery can show a branching tree.
         const prev = char.moodBoard || [];
         const parentId = prev.length ? prev[prev.length - 1].id : null;
-        updateCharById(char.id, "moodBoard", [...prev, { id: uid(), data: img, caption, addedAt: new Date().toISOString(), genKind: variant, genPrompt: prompt.slice(0, 240), parentId }]);
+        updateCharById(char.id, "moodBoard", [...prev, { id: uid(), data: img, caption, addedAt: new Date().toISOString(), genKind: variant, genPrompt: prompt, parentId }]);
         showToast("Image added to mood board", "success");
       }
     } catch (e) { showToast("Generation failed", "error"); }
@@ -14451,7 +14780,7 @@ Then 2-3 sentences describing the specific scene idea, character actions, and em
       if (img) {
         const prev = char.moodBoard || [];
         const parentId = prev.length ? prev[prev.length - 1].id : null;
-        updateCharById(char.id, "moodBoard", [...prev, { id: uid(), data: img, caption: "Editorial Studio", addedAt: new Date().toISOString(), genKind: "editorial-studio", genPrompt: prompt.slice(0, 400), parentId }]);
+        updateCharById(char.id, "moodBoard", [...prev, { id: uid(), data: img, caption: "Editorial Studio", addedAt: new Date().toISOString(), genKind: "editorial-studio", genPrompt: prompt, parentId }]);
         showToast("Editorial image added to mood board", "success");
         setEditorialChar(null);
       }
@@ -17403,7 +17732,7 @@ The FIRST attached image is the master photograph of this exact room. ${WALL_REF
             }}
               className={`nf-project-item ${p.id === activeProjectId ? "active" : ""}`}>
               {p.coverImage && (
-                <div style={{ width: "100%", height: 80, backgroundImage: `url(${p.coverImage})`, backgroundSize: "cover", backgroundPosition: "center", borderRadius: 3, marginBottom: 6, border: "1px solid var(--nf-border)" }} aria-hidden="true" />
+                <div style={{ width: "100%", height: 80, backgroundImage: `url(${p.coverImage})`, backgroundSize: "cover", backgroundPosition: "center", borderRadius: 2, marginBottom: 6, border: "1px solid var(--nf-border)" }} aria-hidden="true" />
               )}
               <div className="nf-project-title">{p.title}</div>
               <div className="nf-project-meta">
@@ -17481,7 +17810,7 @@ The FIRST attached image is the master photograph of this exact room. ${WALL_REF
           <div style={{ fontSize: 11, color: "var(--nf-text-muted)", lineHeight: 1.4, maxHeight: 36, overflow: "hidden", textOverflow: "ellipsis" }}>
             "{selectedText.slice(0, 100)}{selectedText.length > 100 ? "…" : ""}"
           </div>
-          <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginTop: 5 }}>
+          <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginTop: 4 }}>
               {genMode !== "rewrite" && (
               <button onClick={() => {
                 setGenMode("rewrite");
@@ -18393,7 +18722,7 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                             Currently Linked
                           </div>
                           <div style={{
-                            fontSize: 13, color: "var(--nf-text)", marginTop: 3,
+                            fontSize: 13, color: "var(--nf-text)", marginTop: 4,
                             fontWeight: 500, fontFamily: "var(--nf-font-display)",
                           }}>
                             Ch{linkedPlot.chapter || chNum}: {linkedPlot.title || "Untitled"}
@@ -18402,7 +18731,7 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                             <span style={{
                               fontSize: 11, padding: "2px 6px",
                               background: "var(--nf-bg-surface)", border: "1px solid var(--nf-border)",
-                              borderRadius: 3, color: "var(--nf-text-muted)", marginTop: 3, display: "inline-block",
+                              borderRadius: 2, color: "var(--nf-text-muted)", marginTop: 4, display: "inline-block",
                             }}>{linkedPlot.sceneType}</span>
                           )}
                         </div>
@@ -18456,7 +18785,7 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                               onMouseLeave={e => e.currentTarget.style.background = "transparent"}
                             >
                               <div style={{ fontWeight: 500 }}>{pl.title || "Untitled"}</div>
-                              <div style={{ fontSize: 11, color: "var(--nf-text-muted)", marginTop: 1 }}>
+                              <div style={{ fontSize: 11, color: "var(--nf-text-muted)", marginTop: 2 }}>
                                 {(pl.chapter || 0) > 0 ? `Ch${pl.chapter}` : "unlinked"}
                                 {pl.sceneType ? ` · ${pl.sceneType}` : ""}
                               </div>
@@ -18836,11 +19165,11 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
             )}
             {/* Chapter banner image — optional mood-setter */}
             {activeChapter?.bannerImage && !focusMode && (
-              <div style={{ position: "relative", marginBottom: 12, borderRadius: 3, overflow: "hidden", border: "1px solid var(--nf-border)" }}>
+              <div style={{ position: "relative", marginBottom: 12, borderRadius: 2, overflow: "hidden", border: "1px solid var(--nf-border)" }}>
                 <img loading="lazy" src={activeChapter.bannerImage} alt="" style={{ width: "100%", height: 140, objectFit: "cover", display: "block" }} />
                 <button onClick={() => updateChapter(activeChapterIdx, { bannerImage: "" })}
                   className="nf-btn-icon"
-                  style={{ position: "absolute", top: 6, right: 6, background: "rgba(0,0,0,0.5)", color: "#fff", padding: 4, borderRadius: 3 }}
+                  style={{ position: "absolute", top: 6, right: 6, background: "rgba(0,0,0,0.5)", color: "#fff", padding: 4, borderRadius: 2 }}
                   aria-label="Remove banner">
                   <Icons.X />
                 </button>
@@ -19085,7 +19414,7 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
                 <div>
                   <div style={{ fontSize: 12, fontWeight: 600, color: "var(--nf-text)", fontFamily: "var(--nf-font-display)" }}>Image Prompt</div>
-                  <div style={{ fontSize: 11, color: "var(--nf-text-muted)", marginTop: 1 }}>
+                  <div style={{ fontSize: 11, color: "var(--nf-text-muted)", marginTop: 2 }}>
                     {imagePromptData.mentionedChars?.length > 0
                       ? imagePromptData.mentionedChars.map(c => c.name).join(", ")
                       : "No characters detected"}
@@ -19108,7 +19437,7 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                 const activeImgs = imagePromptData.worldRefImages || [];
                 const useRefs = imagePromptData._useLocationRefs !== false && activeImgs.length > 0;
                 return (
-                  <div style={{ marginBottom: 12, padding: "8px 10px", background: "var(--nf-bg-deep)", border: "1px solid var(--nf-border)", borderRadius: 3 }}>
+                  <div style={{ marginBottom: 12, padding: "8px 10px", background: "var(--nf-bg-deep)", border: "1px solid var(--nf-border)", borderRadius: 2 }}>
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: activeImgs.length ? 8 : 0 }}>
                       <span style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--nf-text-muted)" }}>Render scene inside a location</span>
                       <select
@@ -19146,7 +19475,7 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
 
               {/* Warnings */}
               {imagePromptData.mentionedChars?.some(c => !c.lookAlike) && (
-                <div style={{ padding: "6px 10px", background: "var(--nf-error-bg)", border: "1px solid var(--nf-error-border)", borderRadius: 3, marginBottom: 8, color: "var(--nf-accent)" }}>
+                <div style={{ padding: "6px 10px", background: "var(--nf-error-bg)", border: "1px solid var(--nf-error-border)", borderRadius: 2, marginBottom: 8, color: "var(--nf-accent)" }}>
                   ⚠ Missing look-alike: {imagePromptData.mentionedChars.filter(c => !c.lookAlike).map(c => c.name).join(", ")}
                 </div>
               )}
@@ -19161,7 +19490,7 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
 
               {/* Prompt area */}
               {imagePromptData.isGenerating ? (
-                <div style={{ padding: "32px 16px", textAlign: "center", background: "var(--nf-bg-deep)", border: "1px solid var(--nf-border)", borderRadius: 3 }}>
+                <div style={{ padding: "32px 16px", textAlign: "center", background: "var(--nf-bg-deep)", border: "1px solid var(--nf-border)", borderRadius: 2 }}>
                   <Spinner />
                   <div style={{ marginTop: 8, fontSize: 11, color: "var(--nf-text-muted)" }}>Building image prompt...</div>
                 </div>
@@ -19178,7 +19507,7 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                   }}
                   style={{
                     width: "100%", minHeight: 140, maxHeight: 300, padding: "10px 12px",
-                    background: "var(--nf-bg-deep)", border: "1px solid var(--nf-border)", borderRadius: 3,
+                    background: "var(--nf-bg-deep)", border: "1px solid var(--nf-border)", borderRadius: 2,
                     color: "var(--nf-text)", fontSize: 11, lineHeight: 1.6, fontFamily: "var(--nf-font-mono)",
                     resize: "vertical", outline: "none",
                   }}
@@ -19228,7 +19557,7 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
 
               {/* Generation error */}
               {imageGenStatus?.status === "error" && (
-                <div style={{ marginTop: 8, padding: "8px 12px", background: "var(--nf-error-bg)", border: "1px solid var(--nf-error-border)", borderRadius: 3, fontSize: 11, color: "var(--nf-accent)" }}>
+                <div style={{ marginTop: 8, padding: "8px 12px", background: "var(--nf-error-bg)", border: "1px solid var(--nf-error-border)", borderRadius: 2, fontSize: 11, color: "var(--nf-accent)" }}>
                   {imageGenStatus.error || "Image generation failed. Adjust the prompt and try again."}
                 </div>
               )}
@@ -19236,7 +19565,7 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
               {/* Generated image result — SINGLE MODE */}
               {imageGenStatus?.status === "done" && imageGenStatus.imageUrl && !imageGenStatus.images && (
                 <div style={{ marginTop: 10 }}>
-                  <img loading="lazy" src={imageGenStatus.imageUrl} alt="Generated scene" style={{ width: "100%", maxHeight: 400, objectFit: "contain", borderRadius: 3, border: "1px solid var(--nf-border)", background: "var(--nf-bg-deep)" }} />
+                  <img loading="lazy" src={imageGenStatus.imageUrl} alt="Generated scene" style={{ width: "100%", maxHeight: 400, objectFit: "contain", borderRadius: 2, border: "1px solid var(--nf-border)", background: "var(--nf-bg-deep)" }} />
                   <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
                     <button onClick={() => {
                       const el = editorRef.current;
@@ -19272,7 +19601,7 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                 <div style={{ marginTop: 10 }}>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
                     {imageGenStatus.images.map((img, idx) => (
-                      <div key={idx} style={{ border: "1px solid var(--nf-border)", borderRadius: 3, overflow: "hidden", textOverflow: "ellipsis", background: "var(--nf-bg-deep)" }}>
+                      <div key={idx} style={{ border: "1px solid var(--nf-border)", borderRadius: 2, overflow: "hidden", textOverflow: "ellipsis", background: "var(--nf-bg-deep)" }}>
                         <div key={idx} style={{ padding: "4px 8px", background: "var(--nf-bg-surface)", borderBottom: "1px solid var(--nf-border)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                           <span key={idx} style={{ fontSize: 11, fontWeight: 700, color: "var(--nf-text-muted)", textTransform: "uppercase", letterSpacing: "0.06em" }}>{img.label}</span>
                           {img.status === "generating" && <Spinner />}
@@ -19406,7 +19735,7 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
             <div style={{ padding: "8px 10px", borderBottom: "1px solid var(--nf-border)", display: "flex", alignItems: "center", gap: 8 }}>
               {project?.styleLockImage ? (
                 <>
-                  <img src={project.styleLockImage} alt="Style lock" style={{ width: 28, height: 28, borderRadius: 3, objectFit: "cover", border: "1px solid var(--nf-accent)" }} />
+                  <img src={project.styleLockImage} alt="Style lock" style={{ width: 28, height: 28, borderRadius: 2, objectFit: "cover", border: "1px solid var(--nf-accent)" }} />
                   <span style={{ fontSize: 11, color: "var(--nf-text-muted)", flex: 1 }}>Style locked — new art matches this</span>
                   <button onClick={() => updateProject({ styleLockImage: "" })} className="nf-btn-micro" style={{ fontSize: 10, padding: "1px 5px" }}>Clear</button>
                 </>
@@ -19496,7 +19825,7 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                   }}>{c.name || <span style={{ opacity: 0.3, fontStyle: "italic" }}>unnamed</span>}</div>
                   <div style={{
                     fontSize: 11, color: "var(--nf-text-muted)", textTransform: "uppercase",
-                    letterSpacing: "0.1em", marginTop: 1,
+                    letterSpacing: "0.1em", marginTop: 2,
                   }}>{c.role}</div>
                 </div>
               </div>
@@ -19710,7 +20039,7 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
                   <DebouncedField label="Purpose in Story" value={editingChar.desires} onChange={v => updateCharById(editingCharId, "desires", v)} multiline placeholder="Why does this group exist in the narrative? What do they enable or obstruct?" />
                   <DebouncedField label="Strengths / Resources" value={editingChar.strengths} onChange={v => updateCharById(editingCharId, "strengths", v)} multiline placeholder="What makes this group dangerous, useful, or powerful?" />
                   <DebouncedField label="Weaknesses / Limitations" value={editingChar.flaws} onChange={v => updateCharById(editingCharId, "flaws", v)} multiline placeholder="What are their blind spots, divisions, or vulnerabilities?" />
-                  <DebouncedField label="Notable Members" value={editingChar.canonNotes} onChange={v => updateCharById(editingCharId, "canonNotes", v)} multiline placeholder="Name any standout individuals within the group — the captain, the rebel, the rookie..." />
+                  <DebouncedField label="Notable Members" value={editingChar.notableMembers || editingChar.canonNotes || ""} onChange={v => updateCharById(editingCharId, "notableMembers", v)} multiline placeholder="Name any standout individuals within the group — the captain, the rebel, the rookie..." />
                 </div>
                 <div className="nf-char-section">
                   <div className="nf-char-section-label">Author Notes</div>
@@ -19724,7 +20053,10 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
                 Each chip scrolls to its section; narrative sections show a fill dot, and the bar
                 shows overall completeness across all scored fields. */}
             {(() => {
-              const scored = CHAR_EDITOR_SECTIONS.filter(s => s.fields && s.fields.length);
+              // Essentials mode hides deep sections for minor characters; auto-default minors to essentials.
+              const showDeep = charDetailLevel === "full";
+              const visibleSections = CHAR_EDITOR_SECTIONS.filter(s => (showDeep || s.tier === "core") && (settings.apiKey || (s.id !== "visualtraits" && s.id !== "refart")));
+              const scored = visibleSections.filter(s => s.fields && s.fields.length);
               let filled = 0, total = 0;
               scored.forEach(s => { const c = charSectionCompleteness(s, editingChar); filled += c.filled; total += c.total; });
               const overall = total ? Math.round((filled / total) * 100) : 0;
@@ -19740,15 +20072,24 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
                       <div style={{ width: `${overall}%`, height: "100%", background: overall === 100 ? "var(--nf-success)" : "var(--nf-accent)", transition: "width 0.3s" }} />
                     </div>
                     <span style={{ fontSize: 10, fontFamily: "var(--nf-font-mono)", color: overall === 100 ? "var(--nf-success)" : "var(--nf-text-muted)" }}>{overall}%</span>
+                    {/* Detail-level toggle — Essentials collapses deep sections for minor characters */}
+                    <div style={{ display: "inline-flex", border: "1px solid var(--nf-border)", borderRadius: 4, overflow: "hidden", marginLeft: 4 }}>
+                      {[{ v: "essentials", l: "Essentials" }, { v: "full", l: "Full" }].map(o => (
+                        <button key={o.v} onClick={() => setCharDetailLevel(o.v)} title={o.v === "essentials" ? "Hide deep psychology/visual sections — good for minor characters" : "Show every section"}
+                          style={{ fontSize: 10, padding: "2px 8px", border: "none", cursor: "pointer", background: charDetailLevel === o.v ? "var(--nf-accent)" : "transparent", color: charDetailLevel === o.v ? "#fff" : "var(--nf-text-muted)", fontWeight: 600 }}>
+                          {o.l}
+                        </button>
+                      ))}
+                    </div>
                   </div>
                   <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
-                    {CHAR_EDITOR_SECTIONS.filter(s => settings.apiKey || (s.id !== "visualtraits" && s.id !== "refart")).map(s => {
+                    {visibleSections.map(s => {
                       const c = charSectionCompleteness(s, editingChar);
                       const hasScore = s.fields && s.fields.length > 0;
-                      const dot = !hasScore ? "var(--nf-text-muted)" : c.ratio === 1 ? "var(--nf-success)" : c.ratio > 0 ? "var(--nf-accent)" : "var(--nf-border)";
+                      const dot = s.aiMaintained ? "var(--nf-accent-2)" : !hasScore ? "var(--nf-text-muted)" : c.ratio === 1 ? "var(--nf-success)" : c.ratio > 0 ? "var(--nf-accent)" : "var(--nf-border)";
                       return (
                         <button key={s.id} onClick={() => jumpTo(s.id)} className="nf-btn-micro"
-                          title={hasScore ? `${s.label} — ${c.filled}/${c.total} filled` : s.label}
+                          title={hasScore ? `${s.label} — ${c.filled}/${c.total} filled${s.aiMaintained ? " (AI-maintained)" : ""}` : s.label}
                           style={{ fontSize: 10, padding: "2px 8px", display: "inline-flex", alignItems: "center", gap: 5 }}>
                           <span style={{ width: 6, height: 6, borderRadius: "50%", background: dot, flexShrink: 0 }} />
                           {s.label}
@@ -19864,7 +20205,7 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
             {/* D4: Section — Character */}
             <div className="nf-char-section" id="charsec-appearance" style={{ scrollMarginTop: 110 }}>
               <div className="nf-char-section-label" style={{ display: "flex", alignItems: "center" }}><span style={{ flex: 1 }}>Character & Appearance</span>{(() => { const c = charSectionCompleteness(CHAR_EDITOR_SECTIONS[1], editingChar); return <CharSecDot c={c} />; })()}</div>
-              <DebouncedField label="Appearance" value={editingChar.appearance} onChange={v => updateCharById(editingCharId, "appearance", v)} multiline placeholder="Physical description — height, build, coloring, distinguishing features..." />
+              <DebouncedField label="Appearance" value={editingChar.appearance} onChange={v => updateCharById(editingCharId, "appearance", v)} multiline placeholder="Coloring, hair, face, clothing style, overall impression — anything not already in Identity (height, build, and permanent marks live there)..." />
               <DebouncedField label="Personality" value={editingChar.personality} onChange={v => updateCharById(editingCharId, "personality", v)} multiline placeholder="Core traits, temperament, quirks, contradictions..." />
               <DebouncedField label="Speech & Voice" value={editingChar.speechPattern} onChange={v => updateCharById(editingCharId, "speechPattern", v)} multiline placeholder="Vocabulary, accent, verbal tics, how they sound under stress..." small />
               <div className="nf-field" style={{ marginTop: 6 }}>
@@ -19875,7 +20216,7 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
                   <option value="formal">Formal / educated (flags slang & contractions)</option>
                   <option value="modern_casual">Modern casual (flags archaic words)</option>
                 </select>
-                <div style={{ fontSize: 10, color: "var(--nf-text-muted)", marginTop: 3 }}>Flags voice violations in chapters this character narrates — see Memory tab.</div>
+                <div style={{ fontSize: 10, color: "var(--nf-text-muted)", marginTop: 4 }}>Flags voice violations in chapters this character narrates — see Memory tab.</div>
               </div>
               {/* Physical state continuity — injuries/conditions active over a chapter range */}
               <div className="nf-field" style={{ marginTop: 8 }}>
@@ -19884,14 +20225,14 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
                   <div key={sf.id} style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 4, flexWrap: "wrap" }}>
                     <input value={sf.state} placeholder="e.g. broken left arm" onChange={e => updateCharById(editingCharId, "stateFlags", (editingChar.stateFlags || []).map(x => x.id === sf.id ? { ...x, state: e.target.value } : x))} className="nf-input" style={{ flex: 1, minWidth: 130, fontSize: 11 }} />
                     <span style={{ fontSize: 10, color: "var(--nf-text-muted)" }}>Ch
-                      <input type="number" min="1" value={(sf.fromChapter ?? 0) + 1} onChange={e => updateCharById(editingCharId, "stateFlags", (editingChar.stateFlags || []).map(x => x.id === sf.id ? { ...x, fromChapter: Math.max(0, (parseInt(e.target.value) || 1) - 1) } : x))} style={{ width: 40, margin: "0 4px", fontSize: 11, padding: "2px 4px", background: "var(--nf-bg-surface)", border: "1px solid var(--nf-border)", borderRadius: 3, color: "var(--nf-text)" }} />–
-                      <input type="number" min="1" placeholder="∞" value={sf.untilChapter != null && sf.untilChapter !== "" ? sf.untilChapter + 1 : ""} onChange={e => updateCharById(editingCharId, "stateFlags", (editingChar.stateFlags || []).map(x => x.id === sf.id ? { ...x, untilChapter: e.target.value === "" ? "" : Math.max(0, (parseInt(e.target.value) || 1) - 1) } : x))} style={{ width: 40, marginLeft: 4, fontSize: 11, padding: "2px 4px", background: "var(--nf-bg-surface)", border: "1px solid var(--nf-border)", borderRadius: 3, color: "var(--nf-text)" }} />
+                      <input type="number" min="1" value={(sf.fromChapter ?? 0) + 1} onChange={e => updateCharById(editingCharId, "stateFlags", (editingChar.stateFlags || []).map(x => x.id === sf.id ? { ...x, fromChapter: Math.max(0, (parseInt(e.target.value) || 1) - 1) } : x))} style={{ width: 40, margin: "0 4px", fontSize: 11, padding: "2px 4px", background: "var(--nf-bg-surface)", border: "1px solid var(--nf-border)", borderRadius: 2, color: "var(--nf-text)" }} />–
+                      <input type="number" min="1" placeholder="∞" value={sf.untilChapter != null && sf.untilChapter !== "" ? sf.untilChapter + 1 : ""} onChange={e => updateCharById(editingCharId, "stateFlags", (editingChar.stateFlags || []).map(x => x.id === sf.id ? { ...x, untilChapter: e.target.value === "" ? "" : Math.max(0, (parseInt(e.target.value) || 1) - 1) } : x))} style={{ width: 40, marginLeft: 4, fontSize: 11, padding: "2px 4px", background: "var(--nf-bg-surface)", border: "1px solid var(--nf-border)", borderRadius: 2, color: "var(--nf-text)" }} />
                     </span>
                     <button onClick={() => updateCharById(editingCharId, "stateFlags", (editingChar.stateFlags || []).filter(x => x.id !== sf.id))} className="nf-btn-micro" style={{ fontSize: 10, padding: "1px 5px" }}>✕</button>
                   </div>
                 ))}
                 <button onClick={() => updateCharById(editingCharId, "stateFlags", [...(editingChar.stateFlags || []), { id: uid(), state: "", fromChapter: activeChapterIdx, untilChapter: "" }])} className="nf-btn-micro" style={{ fontSize: 10, padding: "2px 6px" }}><Icons.Plus /> Add state</button>
-                <div style={{ fontSize: 10, color: "var(--nf-text-muted)", marginTop: 3 }}>Fed into AI context for those chapters; physically-limiting states are continuity-checked (Memory tab). Leave the second box blank for "ongoing".</div>
+                <div style={{ fontSize: 10, color: "var(--nf-text-muted)", marginTop: 4 }}>Fed into AI context for those chapters; physically-limiting states are continuity-checked (Memory tab). Leave the second box blank for "ongoing".</div>
               </div>
               {/* Auto-derived: how others address this character (from relationship terms) */}
               {(() => {
@@ -19917,6 +20258,7 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
             </div>
 
             {/* Section — Psychology & Conflict */}
+            {charDetailLevel === "full" && (
             <div className="nf-char-section" id="charsec-psychology" style={{ scrollMarginTop: 110 }}>
               <div className="nf-char-section-label" style={{ display: "flex", alignItems: "center" }}><span style={{ flex: 1 }}>Psychology & Conflict</span>{(() => { const c = charSectionCompleteness(CHAR_EDITOR_SECTIONS[2], editingChar); return <CharSecDot c={c} />; })()}</div>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px 12px" }}>
@@ -19930,8 +20272,10 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
               <DebouncedField label="Internal Conflict" value={editingChar.internalConflict || ""} onChange={v => updateCharById(editingCharId, "internalConflict", v)} multiline placeholder="The war inside them — duty vs. desire, forgiveness vs. revenge, identity crisis..." small />
               <DebouncedField label="External Conflict" value={editingChar.externalConflict || ""} onChange={v => updateCharById(editingCharId, "externalConflict", v)} multiline placeholder="What opposes them from outside — enemies, society, nature, time..." small />
             </div>
+            )}
 
             {/* Section — Goals */}
+            {charDetailLevel === "full" && (
             <div className="nf-char-section" id="charsec-goals" style={{ scrollMarginTop: 110 }}>
               <div className="nf-char-section-label" style={{ display: "flex", alignItems: "center" }}><span style={{ flex: 1 }}>Goals & Desires</span>{(() => { const c = charSectionCompleteness(CHAR_EDITOR_SECTIONS[3], editingChar); return <CharSecDot c={c} />; })()}</div>
               <DebouncedField label="Desires & Motivations" value={editingChar.desires} onChange={v => updateCharById(editingCharId, "desires", v)} multiline placeholder="What drives them? Want vs. need? (Note: describe initial desires — they evolve)" />
@@ -19940,6 +20284,7 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
                 <DebouncedField label="Long-Term Goals" value={editingChar.longTermGoals || ""} onChange={v => updateCharById(editingCharId, "longTermGoals", v)} multiline placeholder="Ultimate aim — overthrow the king, find true love, prove innocence..." small />
               </div>
             </div>
+            )}
 
             {/* D4: Section — Story */}
             <div className="nf-char-section" id="charsec-story" style={{ scrollMarginTop: 110 }}>
@@ -19953,17 +20298,28 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
               </label>
               <DebouncedField label="Character Arc" value={editingChar.arc} onChange={v => updateCharById(editingCharId, "arc", v)} multiline placeholder="Full trajectory: who they start as → who they become..." small />
               <DebouncedField label="Signature Items / Possessions" value={editingChar.signatureItems || ""} onChange={v => updateCharById(editingCharId, "signatureItems", v)} multiline placeholder="A locket with a photo, enchanted blade, battered notebook, vintage motorcycle..." small />
-              {/* Secrets — two tiers */}
+              {/* Secrets — two tiers, visually distinct: open (AI sees) vs spoiler-locked (gated) */}
               <div style={{ padding: "10px 12px", background: "var(--nf-bg-deep)", border: "1px solid var(--nf-border)", borderRadius: 2, marginTop: 8 }}>
                 <div style={{ fontSize: 11, fontWeight: 500, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--nf-text-muted)", marginBottom: 8 }}>Secrets</div>
-                <DebouncedField label="Known Secrets (reader knows, sent to AI)" value={editingChar.secrets || ""} onChange={v => updateCharById(editingCharId, "secrets", v)} multiline placeholder="Secrets the reader/AI should know — hidden heritage, double identity, forbidden power..." small />
-                <DebouncedField label="Hidden Secrets (NOT sent to AI until reveal)" value={editingChar.hiddenSecrets || ""} onChange={v => updateCharById(editingCharId, "hiddenSecrets", v)} multiline placeholder="Plot twists — keep hidden from AI context until the reveal chapter..." small />
-                <label style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 0", fontSize: 11, color: "var(--nf-text-muted)", cursor: "pointer" }}>
-                  <input type="checkbox" checked={!!editingChar.secretRevealed}
-                    onChange={e => updateCharById(editingCharId, "secretRevealed", e.target.checked)} />
-                  <span>Secrets have been revealed {editingChar.secretRevealed ? "✓ (AI now knows)" : "(AI doesn't see hiddenSecrets)"}</span>
-                  <span style={{ fontSize: 11, color: "var(--nf-text-muted)", marginLeft: "auto" }}>AI auto-flips this</span>
-                </label>
+                {/* Tier 1 — open: the AI always knows these */}
+                <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: "var(--nf-text-dim)", marginBottom: 4 }}>
+                  <span aria-hidden="true">👁</span><span>Open — the AI knows these and can weave them in now</span>
+                </div>
+                <DebouncedField value={editingChar.secrets || ""} onChange={v => updateCharById(editingCharId, "secrets", v)} multiline placeholder="Secrets the reader/AI should know — hidden heritage, double identity, forbidden power..." small />
+                {/* Tier 2 — spoiler-locked: withheld from the AI until the reveal toggle is on */}
+                <div style={{ marginTop: 10, padding: "8px 10px", borderRadius: 2, border: `1px solid ${editingChar.secretRevealed ? "var(--nf-accent-2)" : "var(--nf-border)"}`, background: editingChar.secretRevealed ? "var(--nf-accent-glow-2)" : "var(--nf-bg-surface)" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: editingChar.secretRevealed ? "var(--nf-accent-2)" : "var(--nf-text-dim)", marginBottom: 4 }}>
+                    <span aria-hidden="true">{editingChar.secretRevealed ? "🔓" : "🔒"}</span>
+                    <span>{editingChar.secretRevealed ? "Revealed — now visible to the AI" : "Spoiler-locked — hidden from the AI until you reveal it"}</span>
+                  </div>
+                  <DebouncedField value={editingChar.hiddenSecrets || ""} onChange={v => updateCharById(editingCharId, "hiddenSecrets", v)} multiline placeholder="Plot twists — kept out of AI context until the reveal chapter..." small />
+                  <label style={{ display: "flex", alignItems: "center", gap: 8, paddingTop: 6, fontSize: 11, color: "var(--nf-text-muted)", cursor: "pointer" }}>
+                    <input type="checkbox" checked={!!editingChar.secretRevealed}
+                      onChange={e => updateCharById(editingCharId, "secretRevealed", e.target.checked)} />
+                    <span>Reveal to the AI now</span>
+                    <span style={{ fontSize: 11, color: "var(--nf-text-muted)", marginLeft: "auto" }}>AI auto-flips on reveal</span>
+                  </label>
+                </div>
                 {/* Auto-derived: shared secrets from relationships */}
                 {(() => {
                   const relSecrets = [];
@@ -20015,10 +20371,12 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
             </div>
 
             {/* AI-Maintained Living State Panel */}
-            <div className="nf-char-section">
+            {charDetailLevel === "full" && (
+            <div className="nf-char-section" id="charsec-livingstate" style={{ scrollMarginTop: 110 }}>
               <div className="nf-char-section-label" style={{ display: "flex", alignItems: "center", gap: 6 }}>
                 <span>Living State</span>
                 <span style={{ fontSize: 11, fontWeight: 500, color: "var(--nf-accent-2)", background: "var(--nf-bg-deep)", padding: "2px 6px", borderRadius: 2, letterSpacing: "0.05em" }}>AI-MAINTAINED</span>
+                {(() => { const c = charSectionCompleteness(CHAR_EDITOR_SECTIONS.find(s => s.id === "livingstate"), editingChar); return <CharSecDot c={c} />; })()}
                 {editingChar.lastUpdatedChapter > 0 && (
                   <span style={{ fontSize: 11, color: "var(--nf-text-muted)", marginLeft: "auto", fontFamily: "var(--nf-font-mono)" }}>Last updated Ch{editingChar.lastUpdatedChapter + 1}</span>
                 )}
@@ -20032,6 +20390,7 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
                 <DebouncedField label="Knowledge State" value={editingChar.knowledgeState || ""} onChange={v => updateCharById(editingCharId, "knowledgeState", v)} multiline placeholder="e.g. 'Knows the letter is forged. Doesn't know Marcus's secret. Suspects the affair.'" small />
               </div>
             </div>
+            )}
 
             {/* Spatial trait pins — bind exact descriptors (eye color hex, etc.) to all future gens */}
             {(() => {
@@ -20055,14 +20414,14 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
                 <div style={{ fontSize: 11, color: "var(--nf-text-muted)", marginBottom: 8 }}>Pin exact descriptors so they're injected into every generation — prevents drift (e.g. "emerald eyes #2E8B57").</div>
                 {(editingChar.traitPins || []).map(pin => (
                   <div key={pin.id} style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 4 }}>
-                    {pin.hex && <span style={{ width: 14, height: 14, borderRadius: 3, background: pin.hex, border: "1px solid var(--nf-border)", flexShrink: 0 }} />}
+                    {pin.hex && <span style={{ width: 14, height: 14, borderRadius: 2, background: pin.hex, border: "1px solid var(--nf-border)", flexShrink: 0 }} />}
                     <span style={{ fontSize: 12, color: "var(--nf-text)", flex: 1 }}>{pin.prompt}</span>
                     <button onClick={() => updateCharById(editingCharId, "traitPins", (editingChar.traitPins || []).filter(p => p.id !== pin.id))} className="nf-btn-micro" style={{ fontSize: 10, padding: "1px 5px" }}>✕</button>
                   </div>
                 ))}
                 <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
                   <input id={`traitprompt-${editingCharId}`} placeholder='e.g. "emerald green eyes"' className="nf-input" style={{ flex: 1, fontSize: 11, padding: "3px 8px" }} />
-                  <input id={`traithex-${editingCharId}`} type="color" defaultValue="#2E8B57" style={{ width: 32, height: 26, padding: 0, border: "1px solid var(--nf-border)", borderRadius: 3, background: "none" }} />
+                  <input id={`traithex-${editingCharId}`} type="color" defaultValue="#2E8B57" style={{ width: 32, height: 26, padding: 0, border: "1px solid var(--nf-border)", borderRadius: 2, background: "none" }} />
                   <button onClick={() => {
                     const pEl = document.getElementById(`traitprompt-${editingCharId}`);
                     const hEl = document.getElementById(`traithex-${editingCharId}`);
@@ -20129,6 +20488,7 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
             )}
 
             {/* Mood Board — multiple reference images for character */}
+            {charDetailLevel === "full" && (<>
             <div className="nf-char-section" id="charsec-moodboard" style={{ scrollMarginTop: 110 }}>
               <div className="nf-char-section-label">Mood Board</div>
               <MultiImageGallery
@@ -20162,6 +20522,7 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
               <div className="nf-char-section-label">Intimate Details</div>
               <DebouncedField label="Intimate Preferences" value={editingChar.kinks} onChange={v => updateCharById(editingCharId, "kinks", v)} multiline placeholder="Preferences, boundaries, what they respond to..." small />
             </div>
+            </>)}
 
             {/* D4: Section — Notes */}
             <div className="nf-char-section" id="charsec-notes" style={{ scrollMarginTop: 110 }}>
@@ -20173,7 +20534,7 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
               <div className="nf-char-section-label" style={{ marginTop: 16 }}>Connections</div>
               <div style={{ padding: "10px 12px", background: "var(--nf-bg-deep)", border: "1px solid var(--nf-border)", borderRadius: 2 }}>
                 {/* LOCATIONS — toggle directly from character tab */}
-                <div style={{ marginBottom: 22 }}>
+                <div style={{ marginBottom: 24 }}>
                   <div style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--nf-text-muted)", marginBottom: 6 }}>
                     📍 Locations — toggle where {editingChar.name || "this character"} is found
                   </div>
@@ -20206,7 +20567,7 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
                 </div>
 
                 {/* RELATIONSHIPS — view + quick-add from character tab */}
-                <div style={{ marginBottom: 22 }}>
+                <div style={{ marginBottom: 24 }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
                     <div style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--nf-text-muted)" }}>
                       ↔ Relationships
@@ -20229,7 +20590,7 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
                             trustLevel: "medium", isPublic: true, taboos: "", terms: "",
                           }] });
                           e.target.value = "";
-                        }} style={{ fontSize: 11, padding: "2px 6px", background: "var(--nf-bg-surface)", border: "1px solid var(--nf-border)", borderRadius: 3, color: "var(--nf-text-muted)", cursor: "pointer" }}>
+                        }} style={{ fontSize: 11, padding: "2px 6px", background: "var(--nf-bg-surface)", border: "1px solid var(--nf-border)", borderRadius: 2, color: "var(--nf-text-muted)", cursor: "pointer" }}>
                           <option value="">+ Add relationship...</option>
                           {(project?.characters || []).filter(c => c.id !== editingCharId && c.name).filter(c => {
                             // Hide characters that already have a relationship with this one
@@ -20394,6 +20755,29 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
   });
   const renderWorld = () => {
     const items = project?.worldBuilding || [];
+    // ─── World list filtering + optional location-tree ordering ───
+    const _wq = worldSearch.trim().toLowerCase();
+    const worldCategories = [...new Set(items.map(i => i.category).filter(Boolean))];
+    const matchesWorld = (it) => {
+      if (worldCatFilter !== "all" && (it.category || "Location") !== worldCatFilter) return false;
+      if (!_wq) return true;
+      return [it.name, it.category, it.description, it.keywords].filter(Boolean).some(s => String(s).toLowerCase().includes(_wq));
+    };
+    const baseFiltered = items.filter(matchesWorld);
+    // Tree mode: order Location entries parent→children with a depth marker; non-locations appended.
+    let displayItems;
+    if (worldTreeView && !_wq && worldCatFilter === "all") {
+      const locs = items.filter(i => (i.category === "Location" || !i.category));
+      const nonLocs = items.filter(i => i.category && i.category !== "Location");
+      const byParent = {};
+      locs.forEach(l => { const p = l.parentLocation && locs.some(x => x.id === l.parentLocation) ? l.parentLocation : "_root"; (byParent[p] = byParent[p] || []).push(l); });
+      const ordered = [];
+      const walk = (pid, depth) => { (byParent[pid] || []).forEach(l => { ordered.push({ ...l, _depth: depth }); walk(l.id, depth + 1); }); };
+      walk("_root", 0);
+      displayItems = [...ordered, ...nonLocs.map(n => ({ ...n, _depth: 0 }))];
+    } else {
+      displayItems = baseFiltered.map(i => ({ ...i, _depth: 0 }));
+    }
     const charOptions = (project?.characters || []).filter(c => c.name && !c.isBulk).map(c => ({
       value: c.id,
       label: `${c.name}${c.role ? ` (${c.role})` : ""}`,
@@ -20439,6 +20823,22 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
           </div>
           <p className="nf-hint">Locations, rules, norms, tech, magic — everything that defines your world.</p>
 
+          {/* World list search + category filter + tree toggle */}
+          {items.length > 2 && (
+            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 12 }}>
+              <input value={worldSearch} onChange={e => setWorldSearch(e.target.value)} placeholder="Search world entries…"
+                className="nf-input" style={{ flex: 1, minWidth: 160, fontSize: 12, padding: "6px 10px" }} />
+              <select value={worldCatFilter} onChange={e => setWorldCatFilter(e.target.value)} className="nf-select" style={{ fontSize: 12, width: "auto" }}>
+                <option value="all">All types ({items.length})</option>
+                {worldCategories.map(c => <option key={c} value={c}>{c} ({items.filter(i => (i.category || "Location") === c).length})</option>)}
+              </select>
+              <button onClick={() => setWorldTreeView(v => !v)} className="nf-btn-micro" title="Group locations as a nested tree (parent → children)"
+                style={{ fontSize: 11, background: worldTreeView ? "var(--nf-accent)" : undefined, color: worldTreeView ? "#fff" : undefined, borderColor: worldTreeView ? "var(--nf-accent)" : undefined }}>
+                ⌶ Tree
+              </button>
+            </div>
+          )}
+
           {/* ─── DYNAMIC WORLD-STATE LEDGER ─── */}
           <div className="nf-card" style={{ marginBottom: 16 }}>
             <h3 className="nf-card-title">World-State Ledger</h3>
@@ -20450,7 +20850,7 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
                 <span style={{ fontSize: 11, color: "var(--nf-text-muted)", fontFamily: "var(--nf-font-mono)", minWidth: 70 }}>from Ch
                   <input type="number" min="1" value={(e.fromChapter ?? 0) + 1}
                     onChange={ev => { const v = Math.max(1, parseInt(ev.target.value) || 1) - 1; updateProject({ worldStateLedger: project.worldStateLedger.map(x => x.id === e.id ? { ...x, fromChapter: v } : x) }); }}
-                    style={{ width: 44, marginLeft: 4, fontSize: 11, padding: "2px 4px", background: "var(--nf-bg-surface)", border: "1px solid var(--nf-border)", borderRadius: 3, color: "var(--nf-text)" }} />
+                    style={{ width: 44, marginLeft: 4, fontSize: 11, padding: "2px 4px", background: "var(--nf-bg-surface)", border: "1px solid var(--nf-border)", borderRadius: 2, color: "var(--nf-text)" }} />
                 </span>
                 <input value={e.condition} placeholder="Condition (e.g. The kingdom is at war)"
                   onChange={ev => updateProject({ worldStateLedger: project.worldStateLedger.map(x => x.id === e.id ? { ...x, condition: ev.target.value } : x) })}
@@ -20465,10 +20865,14 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
               className="nf-btn-micro" style={{ fontSize: 11, marginTop: 4 }}><Icons.Plus /> Add condition</button>
           </div>
 
-          {items.map(item => {
+          {displayItems.length === 0 && (worldSearch || worldCatFilter !== "all") && (
+            <div style={{ fontSize: 12, color: "var(--nf-text-muted)", fontStyle: "italic", padding: "12px 0" }}>No world entries match.</div>
+          )}
+          {displayItems.map(item => {
             const isExpanded = expandedWorldIds.has(item.id);
+            const depth = item._depth || 0;
             return (
-              <div key={item.id} className="nf-card" style={{ cursor: isExpanded ? undefined : "pointer" }}>
+              <div key={item.id} className="nf-card" style={{ cursor: isExpanded ? undefined : "pointer", marginLeft: depth * 18, borderLeft: depth > 0 ? "2px solid var(--nf-accent-2)" : undefined }}>
                 {/* D6: Collapsed summary view */}
                 <div role="button" tabIndex={0} onClick={() => !isExpanded && toggleWorldExpand(item.id)} style={{ display: "flex", alignItems: "center", gap: 10 }}>
                   <button onClick={(e) => { e.stopPropagation(); toggleWorldExpand(item.id); }} className="nf-btn-icon" style={{ padding: 2, flexShrink: 0 }} aria-label={isExpanded ? "Collapse" : "Expand"}>
@@ -20552,7 +20956,7 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
                           });
                           if (staleCats.length === 0) return null;
                           return (
-                            <div style={{ marginTop: 8, marginBottom: 8, padding: "8px 12px", background: "var(--nf-accent-glow-2)", border: "1px dashed var(--nf-accent-2)", borderRadius: 3, fontSize: 11, color: "var(--nf-text-dim)", lineHeight: 1.5 }}>
+                            <div style={{ marginTop: 8, marginBottom: 8, padding: "8px 12px", background: "var(--nf-accent-glow-2)", border: "1px dashed var(--nf-accent-2)", borderRadius: 2, fontSize: 11, color: "var(--nf-text-dim)", lineHeight: 1.5 }}>
                               <span style={{ color: "var(--nf-accent-2)", fontWeight: 600 }}>⚠ Stale data from: {staleCats.join(", ")}.</span> These fields are no longer visible on this entry but still stored.
                               <button onClick={() => {
                                 const fieldsToClear = staleCats.flatMap(c => catFieldMap[c]).filter(f => !currentFields.has(f));
@@ -20596,7 +21000,7 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
                           const secS = { marginTop: 12, padding: "10px 12px", background: "var(--nf-bg-deep)", border: "1px solid var(--nf-border)", borderRadius: 2 };
                           const secL = (t) => <div style={{ fontSize: 11, fontWeight: 500, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--nf-text-muted)", marginBottom: 8 }}>{t}</div>;
                           const G = (...ch) => <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>{ch}</div>;
-                          if (cat === "Location") return (<div style={secS}>{secL("Location Details")}{F("Atmosphere / Mood","atmosphere","Eerie, warm and inviting, claustrophobic, sacred...",true)}{F("Sensory Details","sensoryDetails","Sights, sounds, smells, textures...",true)}{F("Sub-Locations / Rooms","subLocations","The Great Hall, Secret Passage, Dungeon...",true)}{G(F("Dangers / Threats","dangers","Hidden traps, rival gangs, magical wards...",true),F("Rules / Restrictions","rules","No magic allowed, curfew at midnight...",true))}{F("Population / Demographics","population","~2000 residents, mostly elves and half-bloods")}{F("Resources / Economy","resources","Trade goods, currency, local wealth...")}</div>);
+                          if (cat === "Location") return (<div style={secS}>{secL("Location Details")}{F("Atmosphere / Mood","atmosphere","Eerie, warm and inviting, claustrophobic, sacred...",true)}{F("Sensory Details","sensoryDetails","Sights, sounds, smells, textures...",true)}{F("Notable Areas / Rooms (descriptive)","subLocations","The Great Hall, Secret Passage, Dungeon — areas worth describing in prose. For places that are their own full entries, use 'Nested Within' below instead.",true)}{G(F("Dangers / Threats","dangers","Hidden traps, rival gangs, magical wards...",true),F("Rules / Restrictions","rules","No magic allowed, curfew at midnight...",true))}{F("Population / Demographics","population","~2000 residents, mostly elves and half-bloods")}{F("Resources / Economy","resources","Trade goods, currency, local wealth...")}</div>);
                           if (cat === "Rule / Law") return (<div style={secS}>{secL("Rule / Law Details")}{F("Enforcement","enforcement","Who enforces this? What are the penalties?",true)}{G(F("Scope / Jurisdiction","scope","All citizens, only mages, specific regions...",true),F("Exceptions / Loopholes","loopholes","Nobles exempt, emergency override...",true))}{F("Public Opinion","publicOpinion","Widely hated, grudgingly accepted, fiercely defended...",true)}{F("Origin / Enacted By","enactedBy","Ancient king, council vote, divine decree...")}</div>);
                           if (cat === "Culture") return (<div style={secS}>{secL("Cultural Details")}{F("Values & Beliefs","values","Honor above all, knowledge is sacred...",true)}{F("Customs & Rituals","customs","Coming-of-age trials, harvest festivals, death rites...",true)}{G(F("Social Hierarchy","socialHierarchy","Caste system, meritocracy, elders council...",true),F("Taboos / Forbidden","taboos","Speaking the dead's name, mixed-blood marriage...",true))}{F("Art / Music / Literature","artForms","Oral storytelling, bone carving, war drums...",true)}{F("Language / Dialect","dialect","Formal court speech, street slang, trade pidgin...")}{F("Population","population","Widespread among northern clans, dying culture...")}</div>);
                           if (cat === "Magic System") return (<div style={secS}>{secL("Magic System Details")}{F("Source of Power","magicSource","Mana from ley lines, blood sacrifice, divine gift...",true)}{F("Rules / Limitations","magicRules","Cannot create life, requires incantation, drains life...",true)}{G(F("Cost / Price","magicCost","Physical exhaustion, shortened lifespan, sanity...",true),F("Rarity / Accessibility","magicRarity","1 in 1000 born with it, learnable by anyone...",true))}{F("Types / Schools","magicTypes","Elemental, necromancy, illusion, healing...",true)}{F("Social Perception","magicPerception","Feared and outlawed, revered, commonplace tool...")}{F("Known Practitioners","magicPractitioners","The Arcane Guild, wild hedge-witches...")}</div>);
@@ -20607,11 +21011,21 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
                           if (cat === "Religion") return (<div style={secS}>{secL("Religion Details")}{F("Deities / Powers","deities","Monotheistic sun god, pantheon, ancestor worship...",true)}{F("Core Beliefs","coreBeliefs","Reincarnation, divine judgment, nature is sacred...",true)}{G(F("Rituals / Practices","rituals","Daily prayer, blood offerings, fasting...",true),F("Sacred Places","sacredPlaces","The Crystal Temple, holy mountain...",true))}{F("Clergy / Organization","clergy","High priests, wandering monks, oracle caste...")}{F("Conflicts / Heresies","heresies","Reform movement, banned sect, competing religion...")}{F("Followers / Influence","followers","State religion, underground cult, widespread...")}</div>);
                           return (<div style={secS}>{secL("Details")}{F("Additional Notes","additionalNotes","Any specific details...",true)}</div>);
                         })()}
-                        {/* ─── Common fields ─── */}
-                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 8 }}>
-                          <DebouncedField label="History / Origin" value={item.history || ""} onChange={v => updateProject({ worldBuilding: items.map(it => it.id === item.id ? { ...it, history: v } : it) })} multiline placeholder="How did this come to be?" small />
-                          <DebouncedField label="Connections / Influences" value={item.culturalNorms || ""} onChange={v => updateProject({ worldBuilding: items.map(it => it.id === item.id ? { ...it, culturalNorms: v } : it) })} multiline placeholder="How does this connect to other elements?" small />
-                        </div>
+                        {/* ─── Common fields ─── (hidden where the category already has its own equivalents) */}
+                        {(() => {
+                          const cat = item.category || "Location";
+                          // History category has historyCauses/Date/etc.; Culture has customs/values — generic
+                          // "History / Origin" and "Connections" would duplicate those, so suppress per-category.
+                          const showHistory = cat !== "History";
+                          const showConnections = cat !== "Culture";
+                          if (!showHistory && !showConnections) return null;
+                          return (
+                            <div style={{ display: "grid", gridTemplateColumns: showHistory && showConnections ? "1fr 1fr" : "1fr", gap: 12, marginTop: 8 }}>
+                              {showHistory && <DebouncedField label="History / Origin" value={item.history || ""} onChange={v => updateProject({ worldBuilding: items.map(it => it.id === item.id ? { ...it, history: v } : it) })} multiline placeholder="How did this come to be?" small />}
+                              {showConnections && <DebouncedField label="Connections / Influences" value={item.culturalNorms || ""} onChange={v => updateProject({ worldBuilding: items.map(it => it.id === item.id ? { ...it, culturalNorms: v } : it) })} multiline placeholder="How does this connect to other elements?" small />}
+                            </div>
+                          );
+                        })()}
 
                         {/* ─── NEW: Real-world location pin (Location entries only) ─── */}
                         {(item.category === "Location" || !item.category) && (
@@ -20641,6 +21055,37 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
                             )}
                           </div>
                         )}
+
+                        {/* ─── Nested location: parent selector + derived children (Location entries only) ─── */}
+                        {(item.category === "Location" || !item.category) && (() => {
+                          const otherLocs = (project?.worldBuilding || []).filter(w => (w.category === "Location" || !w.category) && w.id !== item.id && w.name);
+                          const children = (project?.worldBuilding || []).filter(w => w.parentLocation === item.id && w.name);
+                          return (
+                            <div style={{ marginTop: 12 }}>
+                              <div style={{ fontSize: 11, fontWeight: 500, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--nf-text-muted)", marginBottom: 6, fontFamily: "var(--nf-font-body)" }}>
+                                Nested Within
+                              </div>
+                              <select value={item.parentLocation || ""} className="nf-select" style={{ fontSize: 12 }}
+                                onChange={e => updateProject({ worldBuilding: items.map(it => it.id === item.id ? { ...it, parentLocation: e.target.value } : it) })}>
+                                <option value="">— Not nested (top-level place) —</option>
+                                {otherLocs.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
+                              </select>
+                              <div style={{ fontSize: 10, color: "var(--nf-text-muted)", marginTop: 4 }}>The larger place this sits inside (e.g. a tavern within a city). Fed to the AI as geographic context.</div>
+                              {children.length > 0 && (
+                                <div style={{ marginTop: 8, padding: "6px 10px", background: "var(--nf-bg-deep)", borderRadius: 2 }}>
+                                  <span style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--nf-accent-2)" }}>Contains: </span>
+                                  {children.map((c, i) => (
+                                    <span key={c.id}>
+                                      {i > 0 ? " · " : ""}
+                                      <span role="button" tabIndex={0} onClick={() => setExpandedWorldIds(prev => new Set([...prev, c.id]))}
+                                        style={{ fontSize: 11, color: "var(--nf-accent-2)", cursor: "pointer", textDecoration: "underline" }}>{c.name}</span>
+                                    </span>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })()}
 
                         {/* ─── NEW: Characters who frequent this location (Location entries only) ─── */}
                         {(item.category === "Location" || !item.category) && (
@@ -20748,8 +21193,8 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
                                 <div style={{ flex: 1 }}>
                                   {item.orgGroupPhoto ? (
                                     <div>
-                                      <div style={{ position: "relative", borderRadius: 3, overflow: "hidden" }}>
-                                        <img loading="lazy" src={item.orgGroupPhoto} alt={`${item?.name || "unnamed"} group`} style={{ width: "100%", maxHeight: 240, objectFit: "contain", background: "var(--nf-bg-deep)", borderRadius: 3, border: "1px solid var(--nf-border)", display: "block" }} />
+                                      <div style={{ position: "relative", borderRadius: 2, overflow: "hidden" }}>
+                                        <img loading="lazy" src={item.orgGroupPhoto} alt={`${item?.name || "unnamed"} group`} style={{ width: "100%", maxHeight: 240, objectFit: "contain", background: "var(--nf-bg-deep)", borderRadius: 2, border: "1px solid var(--nf-border)", display: "block" }} />
                                         <button onClick={() => updateProject({ worldBuilding: items.map(it => it.id === item.id ? { ...it, orgGroupPhoto: "" } : it) })} style={{ position: "absolute", top: 6, right: 6, background: "rgba(0,0,0,0.7)", border: "none", color: "#fff", borderRadius: 2, padding: "3px 7px", fontSize: 12, cursor: "pointer" }}>×</button>
                                       </div>
                                       {item.orgGroupPhotoPrompt && (
@@ -20968,7 +21413,7 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
                                               const posIdx = hier.indexOf(pos);
                                               const linkedChar = pos.charId ? (project?.characters || []).find(c => c.id === pos.charId) : null;
                                               return (
-                                                <div key={pid} style={{ padding: "12px", background: "var(--nf-bg-surface)", border: "1px solid var(--nf-border)", borderRadius: 3, display: "flex", flexDirection: "column", gap: 12 }}>
+                                                <div key={pid} style={{ padding: "12px", background: "var(--nf-bg-surface)", border: "1px solid var(--nf-border)", borderRadius: 2, display: "flex", flexDirection: "column", gap: 12 }}>
                                                   <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                                                     {linkedChar?.image ? (
                                                       <img loading="lazy" src={linkedChar.image} alt="" style={{ width: 44, height: 44, borderRadius: "50%", objectFit: "cover", flexShrink: 0 }} />
@@ -21109,8 +21554,8 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
                                 <button onClick={() => setProjects(prev => prev.map(p => p.id !== activeProjectId ? p : { ...p, worldBuilding: (p.worldBuilding || []).map(w => w.id === item.id ? { ...w, roomMasterImage: "" } : w) }))} className="nf-btn-micro" style={{ fontSize: 11 }} title="Clear master — next render will create a new one"><Icons.X /></button>
                               </div>
                               <img loading="lazy" src={item.roomMasterImage} alt="Master room"
-                                style={{ width: "100%", maxHeight: 220, objectFit: "contain", background: "var(--nf-bg-deep)", border: "1px solid var(--nf-accent-2)", borderRadius: 3, display: "block" }} />
-                              <div style={{ fontSize: 11, color: "var(--nf-text-muted)", marginTop: 3, lineHeight: 1.4 }}>Every wall below is rendered as a reframe of this image, so they stay the same room.</div>
+                                style={{ width: "100%", maxHeight: 220, objectFit: "contain", background: "var(--nf-bg-deep)", border: "1px solid var(--nf-accent-2)", borderRadius: 2, display: "block" }} />
+                              <div style={{ fontSize: 11, color: "var(--nf-text-muted)", marginTop: 4, lineHeight: 1.4 }}>Every wall below is rendered as a reframe of this image, so they stay the same room.</div>
                             </div>
                           )}
                           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
@@ -21306,7 +21751,7 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
                       )}
                       </div>
                       {settings.apiKey && item.name && (
-                        <button onClick={() => handleUniversalFill("world", item.id)} className="nf-btn-icon" style={{ marginTop: 20, color: "var(--nf-accent-2)" }} aria-label="Fill empty fields"><Icons.Wand /></button>
+                        <button onClick={() => handleUniversalFill("world", item.id)} className="nf-btn-icon" style={{ marginTop: 24, color: "var(--nf-accent-2)" }} aria-label="Fill empty fields"><Icons.Wand /></button>
                       )}
                       <button onClick={() => setConfirmDialog({
                         message: `Delete "${item.name || "this entry"}"? This will also remove it from all plot entry locations.`,
@@ -21323,7 +21768,7 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
                           setConfirmDialog(null);
                           showToast("Deleted + cleaned references", "success");
                         },
-                      })} className="nf-btn-icon" style={{ marginTop: 20 }} aria-label="Delete entry"><Icons.Trash /></button>
+                      })} className="nf-btn-icon" style={{ marginTop: 24 }} aria-label="Delete entry"><Icons.Trash /></button>
                     </div>
                   </div>
                 )}
@@ -21370,10 +21815,52 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
     next.has(id) ? next.delete(id) : next.add(id);
     return next;
   });
+  // Move a plot entry up/down by one slot. Swaps the two entries' chapter numbers AND swaps the
+  // positions of their linked prose chapters, so the plot order and the manuscript order stay aligned
+  // (the old version only swapped numbers, leaving prose linked to the wrong slot after a reorder).
+  const reorderPlotEntry = (entryId, direction) => {
+    const ol = project?.plotOutline || [];
+    const sorted = [...ol].sort((a, b) => (a.chapter || 0) - (b.chapter || 0));
+    const idx = sorted.findIndex(p => p.id === entryId);
+    if (idx < 0) return;
+    const swapIdx = direction === "up" ? idx - 1 : idx + 1;
+    if (swapIdx < 0 || swapIdx >= sorted.length) return;
+    const a = sorted[idx], b = sorted[swapIdx];
+    const aNum = a.chapter || idx + 1, bNum = b.chapter || swapIdx + 1;
+    // Swap chapter numbers on the plot entries.
+    const newOutline = ol.map(pl => pl.id === a.id ? { ...pl, chapter: bNum } : pl.id === b.id ? { ...pl, chapter: aNum } : pl);
+    // Swap the linked prose chapters' array positions, if both are linked, so prose order matches.
+    const chs = [...(project?.chapters || [])];
+    const aChIdx = chs.findIndex(ch => ch.linkedPlotId === a.id);
+    const bChIdx = chs.findIndex(ch => ch.linkedPlotId === b.id);
+    let chapterUpdate = {};
+    if (aChIdx >= 0 && bChIdx >= 0) {
+      [chs[aChIdx], chs[bChIdx]] = [chs[bChIdx], chs[aChIdx]];
+      chapterUpdate = { chapters: chs };
+    }
+    updateProject({ plotOutline: newOutline, ...chapterUpdate });
+  };
   const renderPlot = () => {
     const outline = project?.plotOutline || [];
     // D8: Sort by chapter number for display
     const sortedOutline = [...outline].sort((a, b) => (a.chapter || 0) - (b.chapter || 0));
+    // Plot list filtering — search text, POV character, scene type. We keep each entry's index within
+    // the FULL sorted list (fullIdx) so move up/down stays correct even while a filter is applied.
+    const _pq = plotSearch.trim().toLowerCase();
+    const charName = (id) => (project?.characters || []).find(c => c.id === id)?.name || "";
+    const plotMatches = (p) => {
+      if (plotPovFilter !== "all") {
+        const inCast = Array.isArray(p.characters) && p.characters.includes(plotPovFilter);
+        if (p.povCharacterId !== plotPovFilter && !inCast) return false;
+      }
+      if (plotTypeFilter !== "all" && (p.sceneType || "narrative") !== plotTypeFilter) return false;
+      if (!_pq) return true;
+      const hay = [p.title, p.summary, p.date, ...(Array.isArray(p.beats) ? p.beats.map(b => `${b.title} ${b.description}`) : []), ...(Array.isArray(p.characters) ? p.characters.map(charName) : [])].filter(Boolean).join(" ").toLowerCase();
+      return hay.includes(_pq);
+    };
+    const filterActive = _pq || plotPovFilter !== "all" || plotTypeFilter !== "all";
+    const visibleOutline = sortedOutline.map((p, fullIdx) => ({ p, fullIdx })).filter(({ p }) => plotMatches(p));
+    const sceneTypesPresent = [...new Set(outline.map(p => p.sceneType || "narrative"))];
     return (
       <div className="nf-write-layout">
         <div className="nf-content-scroll" style={{ flex: 1, minWidth: 0 }}>
@@ -21401,7 +21888,64 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
               }} className="nf-btn-icon-sm"><Icons.Plus /> Add</button>
             </div>
           </div>
-          {sortedOutline.map((p, i) => {
+          {outline.length > 2 && (
+            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 12 }}>
+              <input value={plotSearch} onChange={e => setPlotSearch(e.target.value)} placeholder="Search chapters, beats, summaries…"
+                className="nf-input" style={{ flex: 1, minWidth: 160, fontSize: 12, padding: "6px 10px" }} />
+              <select value={plotPovFilter} onChange={e => setPlotPovFilter(e.target.value)} className="nf-select" style={{ fontSize: 12, width: "auto" }} title="Filter by POV or any character in the chapter">
+                <option value="all">Any character</option>
+                {(project?.characters || []).filter(c => c.name).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+              <select value={plotTypeFilter} onChange={e => setPlotTypeFilter(e.target.value)} className="nf-select" style={{ fontSize: 12, width: "auto" }}>
+                <option value="all">All scene types</option>
+                {sceneTypesPresent.map(t => <option key={t} value={t}>{t}</option>)}
+              </select>
+            </div>
+          )}
+          {filterActive && visibleOutline.length === 0 && (
+            <div style={{ fontSize: 12, color: "var(--nf-text-muted)", fontStyle: "italic", padding: "12px 0" }}>No chapters match.</div>
+          )}
+          {/* Tension curve across chapters — uses per-chapter tensionLevel the app already tracks */}
+          {(() => {
+            const pts = sortedOutline.map(p => {
+              const ch = (project?.chapters || []).find(c => c.linkedPlotId === p.id);
+              const t = ch && typeof ch.tensionLevel === "number" ? ch.tensionLevel : null;
+              return { num: p.chapter, title: p.title, t };
+            });
+            const withT = pts.filter(p => p.t != null);
+            if (withT.length < 2) return null;
+            const W = 600, H = 64, pad = 6;
+            const n = pts.length;
+            const x = (i) => pad + (n === 1 ? 0 : (i * (W - 2 * pad)) / (n - 1));
+            const y = (t) => H - pad - ((t / 10) * (H - 2 * pad));
+            const line = pts.map((p, i) => p.t == null ? null : `${x(i)},${y(p.t)}`).filter(Boolean).join(" ");
+            return (
+              <div className="nf-card" style={{ marginBottom: 16, padding: "12px 14px" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 6 }}>
+                  <h3 className="nf-card-title" style={{ margin: 0 }}>Tension Curve</h3>
+                  <span style={{ fontSize: 10, color: "var(--nf-text-muted)" }}>per-chapter tension (0–10)</span>
+                </div>
+                <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" style={{ width: "100%", height: 64, display: "block", overflow: "visible" }}>
+                  <line x1={pad} y1={y(5)} x2={W - pad} y2={y(5)} stroke="var(--nf-border)" strokeWidth="1" strokeDasharray="3 3" />
+                  <polyline points={line} fill="none" stroke="var(--nf-accent)" strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
+                  {pts.map((p, i) => p.t == null ? null : (
+                    <circle key={i} cx={x(i)} cy={y(p.t)} r="3" fill="var(--nf-accent)">
+                      <title>{`Ch ${p.num}${p.title ? ` — ${p.title}` : ""}: tension ${p.t}/10`}</title>
+                    </circle>
+                  ))}
+                </svg>
+                <div style={{ fontSize: 10, color: "var(--nf-text-muted)", marginTop: 4 }}>
+                  Set each chapter's tension in the Write tab. A healthy arc usually rises toward climaxes and dips for breathers — flat lines often mean pacing problems.
+                </div>
+              </div>
+            );
+          })()}
+          {visibleOutline.map(({ p, fullIdx }, visIdx) => {
+            const i = fullIdx;
+            // Act group header: show when this entry's act differs from the previous visible entry's.
+            const prevAct = visIdx > 0 ? (visibleOutline[visIdx - 1].p.act || "") : null;
+            const curAct = p.act || "";
+            const showActHeader = curAct && curAct !== prevAct;
             // D9: Resolve the matching chapter by its explicit link first (robust to reordering),
             // then fall back to chapter-number → index. Prevents "go to chapter" / title-sync from
             // hitting the wrong chapter after reorders or deletions.
@@ -21411,8 +21955,15 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
             const isPlotExpanded = expandedPlotIds.has(p.id);
             const beatsCount = Array.isArray(p.beats) ? p.beats.length : 0;
             const charCount = Array.isArray(p.characters) ? p.characters.length : 0;
+            const linkedCh = hasMatchingChapter ? project.chapters[chIdx] : null;
+            const writtenWords = linkedCh ? wordCount(linkedCh.content || "") : 0;
+            const target = p.wordTarget || 0;
             return (
-            <div key={p.id} className="nf-card" style={{ cursor: isPlotExpanded ? undefined : "pointer" }}>
+            <Fragment key={p.id}>
+            {showActHeader && (
+              <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", color: "var(--nf-accent-2)", margin: "18px 0 6px", paddingBottom: 4, borderBottom: "1px solid var(--nf-accent-2)" }}>{curAct}</div>
+            )}
+            <div className="nf-card" style={{ cursor: isPlotExpanded ? undefined : "pointer" }}>
               {/* Collapsed header */}
               <div role="button" tabIndex={0} onClick={() => !isPlotExpanded && togglePlotExpand(p.id)} style={{ display: "flex", alignItems: "center", gap: 10 }}>
                 <button onClick={(e) => { e.stopPropagation(); togglePlotExpand(p.id); }} className="nf-btn-icon" style={{ padding: 2, flexShrink: 0 }} aria-label={isPlotExpanded ? "Collapse" : "Expand"}>
@@ -21427,16 +21978,31 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
                   <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                     <span style={{ fontWeight: 600, fontSize: 13, color: "var(--nf-text)" }}>{p.title || <span style={{ opacity: 0.4, fontStyle: "italic" }}>Untitled</span>}</span>
                     {p.sceneType && p.sceneType !== "narrative" && <span style={{ fontSize: 11, padding: "2px 6px", borderRadius: 4, background: "var(--nf-bg-surface)", border: "1px solid var(--nf-border)", color: "var(--nf-text-muted)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em" }}>{p.sceneType}</span>}
-                    {beatsCount > 0 && <span style={{ fontSize: 11, color: "var(--nf-text-muted)" }}>{beatsCount} beat{beatsCount !== 1 ? "s" : ""}</span>}
+                    {beatsCount > 0 && (() => {
+                      const doneBeats = (p.beats || []).filter(b => b.done).length;
+                      return <span style={{ fontSize: 11, color: doneBeats === beatsCount ? "var(--nf-success)" : "var(--nf-text-muted)" }}>{doneBeats > 0 ? `${doneBeats}/${beatsCount}` : beatsCount} beat{beatsCount !== 1 ? "s" : ""}{doneBeats === beatsCount ? " ✓" : ""}</span>;
+                    })()}
                     {charCount > 0 && <span style={{ fontSize: 11, color: "var(--nf-text-muted)" }}>{charCount} char{charCount !== 1 ? "s" : ""}</span>}
                     {p.date && <span style={{ fontSize: 11, color: "var(--nf-accent-2)" }}>{p.date}</span>}
+                    {target > 0 && (
+                      <span style={{ fontSize: 11, color: writtenWords >= target ? "var(--nf-success)" : "var(--nf-text-muted)", fontFamily: "var(--nf-font-mono)" }}
+                        title={`${writtenWords} of ${target} target words written`}>
+                        {writtenWords}/{target}w{writtenWords >= target ? " ✓" : ""}
+                      </span>
+                    )}
+                    {target === 0 && writtenWords > 0 && (
+                      <span style={{ fontSize: 11, color: "var(--nf-text-muted)", fontFamily: "var(--nf-font-mono)" }} title="Words written in the linked chapter">{writtenWords}w</span>
+                    )}
                   </div>
                   {!isPlotExpanded && p.summary && <div style={{ fontSize: 11, color: "var(--nf-text-muted)", marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.summary.slice(0, 120)}</div>}
                 </div>
                 {!isPlotExpanded && (
                   <div style={{ display: "flex", gap: 2, flexShrink: 0 }}>
-                    <button onClick={(e) => { e.stopPropagation(); if (i > 0) { const prev = sortedOutline[i - 1]; updateProject({ plotOutline: outline.map(pl => { if (pl.id === p.id) return { ...pl, chapter: prev.chapter || i }; if (pl.id === prev.id) return { ...pl, chapter: p.chapter || i + 1 }; return pl; }) }); } }} disabled={i === 0} className="nf-btn-icon" style={{ padding: 4, opacity: i === 0 ? 0.2 : 1 }} aria-label="Move up">
+                    <button onClick={(e) => { e.stopPropagation(); reorderPlotEntry(p.id, "up"); }} disabled={i === 0} className="nf-btn-icon" style={{ padding: 4, opacity: i === 0 ? 0.2 : 1 }} aria-label="Move up">
                       <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="18 15 12 9 6 15"/></svg>
+                    </button>
+                    <button onClick={(e) => { e.stopPropagation(); reorderPlotEntry(p.id, "down"); }} disabled={i === sortedOutline.length - 1} className="nf-btn-icon" style={{ padding: 4, opacity: i === sortedOutline.length - 1 ? 0.2 : 1 }} aria-label="Move down">
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="6 9 12 15 18 9"/></svg>
                     </button>
                     <button onClick={(e) => { e.stopPropagation(); updateProject({ plotOutline: outline.filter(pl => pl.id !== p.id) }); }} className="nf-btn-icon" style={{ padding: 4 }} aria-label="Delete plot entry"><Icons.Trash /></button>
                   </div>
@@ -21468,6 +22034,13 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px 12px", marginBottom: 8 }}>
                     <SelectField label="POV Style" value={p.pov || ""} onChange={v => updateProject({ plotOutline: outline.map(pl => pl.id === p.id ? { ...pl, pov: v } : pl) })} options={POV_OPTIONS} placeholder="Default" />
                     <DebouncedField label="Story Date" value={p.date || ""} onChange={v => updateProject({ plotOutline: outline.map(pl => pl.id === p.id ? { ...pl, date: v } : pl) })} placeholder="e.g. March 15, 1847" small />
+                  </div>
+                  {/* Freeform act / part grouping — entries sharing an act name group under a header in the list */}
+                  <div className="nf-field" style={{ marginBottom: 8 }}>
+                    <label className="nf-label" style={{ fontSize: 11 }}>Act / Part (optional)</label>
+                    <input list="nf-act-names" value={p.act || ""} onChange={e => updateProject({ plotOutline: outline.map(pl => pl.id === p.id ? { ...pl, act: e.target.value } : pl) })}
+                      placeholder="e.g. Act I, Setup, Part Two — type your own; reused names group together" className="nf-input" style={{ fontSize: 12 }} />
+                    <datalist id="nf-act-names">{[...new Set(outline.map(pl => pl.act).filter(Boolean))].map(a => <option key={a} value={a} />)}</datalist>
                   </div>
                   {/* POV Character selector — only shown for POV styles that need a specific viewpoint character */}
                   {(() => {
@@ -21509,9 +22082,10 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
 					  </div>
 				    )}
 				    {(Array.isArray(p.beats) ? p.beats : []).map((beat, bi) => (
-					  <div key={beat.id || bi} style={{ display: "flex", gap: 6, alignItems: "start", marginBottom: 4, padding: "6px 8px", background: "var(--nf-bg-deep)", border: "1px solid var(--nf-border)", borderRadius: 3 }}>
+					  <div key={beat.id || bi} style={{ display: "flex", gap: 6, alignItems: "start", marginBottom: 4, padding: "6px 8px", background: "var(--nf-bg-deep)", border: "1px solid var(--nf-border)", borderRadius: 2 }}>
 					    <div key={bi} style={{ flexShrink: 0, display: "flex", flexDirection: "column", alignItems: "center", gap: 1, paddingTop: 4 }}>
-						  <span key={bi} style={{ fontSize: 11, fontWeight: 700, color: "var(--nf-accent)", background: "var(--nf-bg-surface)", padding: "2px 6px", borderRadius: 2, border: "1px solid var(--nf-border)", fontFamily: "var(--nf-font-mono)", letterSpacing: "0.08em" }}>B{bi + 1}</span>
+						  <input type="checkbox" checked={!!beat.done} title={beat.done ? "Written — uncheck to reopen" : "Mark this beat as written"} onChange={() => { const cb = Array.isArray(p.beats) ? [...p.beats] : []; cb[bi] = { ...cb[bi], done: !cb[bi].done }; updateProject({ plotOutline: outline.map(pl => pl.id === p.id ? { ...pl, beats: cb } : pl) }); }} style={{ width: 13, height: 13, margin: "0 0 2px", accentColor: "var(--nf-success)", cursor: "pointer" }} />
+						  <span key={bi} style={{ fontSize: 11, fontWeight: 700, color: beat.done ? "var(--nf-success)" : "var(--nf-accent)", background: "var(--nf-bg-surface)", padding: "2px 6px", borderRadius: 2, border: "1px solid var(--nf-border)", fontFamily: "var(--nf-font-mono)", letterSpacing: "0.08em" }}>B{bi + 1}</span>
 						  <button key={bi} onClick={() => { if (bi === 0) return; const b2 = [...(Array.isArray(p.beats) ? p.beats : [])]; [b2[bi-1], b2[bi]] = [b2[bi], b2[bi-1]]; updateProject({ plotOutline: outline.map(pl => pl.id === p.id ? { ...pl, beats: b2 } : pl) }); }} disabled={bi === 0} className="nf-btn-icon" style={{ padding: 0, opacity: bi === 0 ? 0.15 : 0.4 }}><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="18 15 12 9 6 15"/></svg></button>
 						  <button key={bi} onClick={() => { const b2 = [...(Array.isArray(p.beats) ? p.beats : [])]; if (bi >= b2.length - 1) return; [b2[bi], b2[bi+1]] = [b2[bi+1], b2[bi]]; updateProject({ plotOutline: outline.map(pl => pl.id === p.id ? { ...pl, beats: b2 } : pl) }); }} disabled={bi >= (Array.isArray(p.beats) ? p.beats.length : 0) - 1} className="nf-btn-icon" style={{ padding: 0, opacity: bi >= (Array.isArray(p.beats) ? p.beats.length : 0) - 1 ? 0.15 : 0.4 }}><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="6 9 12 15 18 9"/></svg></button>
 					    </div>
@@ -21635,31 +22209,11 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
                   })()}
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: 2, marginTop: 4 }}>
-                  {/* FIX 5: Move up/down buttons — swap chapter numbers */}
-                  <button onClick={() => {
-                    if (i === 0) return;
-                    const prev = sortedOutline[i - 1];
-                    const prevChNum = prev.chapter || i;
-                    const curChNum = p.chapter || i + 1;
-                    updateProject({ plotOutline: outline.map(pl => {
-                      if (pl.id === p.id) return { ...pl, chapter: prevChNum };
-                      if (pl.id === prev.id) return { ...pl, chapter: curChNum };
-                      return pl;
-                    }) });
-                  }} disabled={i === 0} className="nf-btn-icon" style={{ padding: 4, opacity: i === 0 ? 0.2 : 1 }} aria-label="Move up">
+                  {/* Move up/down — uses the shared helper that also moves the linked prose chapter */}
+                  <button onClick={() => reorderPlotEntry(p.id, "up")} disabled={i === 0} className="nf-btn-icon" style={{ padding: 4, opacity: i === 0 ? 0.2 : 1 }} aria-label="Move up">
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="18 15 12 9 6 15"/></svg>
                   </button>
-                  <button onClick={() => {
-                    if (i === sortedOutline.length - 1) return;
-                    const next = sortedOutline[i + 1];
-                    const nextChNum = next.chapter || i + 2;
-                    const curChNum = p.chapter || i + 1;
-                    updateProject({ plotOutline: outline.map(pl => {
-                      if (pl.id === p.id) return { ...pl, chapter: nextChNum };
-                      if (pl.id === next.id) return { ...pl, chapter: curChNum };
-                      return pl;
-                    }) });
-                  }} disabled={i === sortedOutline.length - 1} className="nf-btn-icon" style={{ padding: 4, opacity: i === sortedOutline.length - 1 ? 0.2 : 1 }} aria-label="Move down">
+                  <button onClick={() => reorderPlotEntry(p.id, "down")} disabled={i === sortedOutline.length - 1} className="nf-btn-icon" style={{ padding: 4, opacity: i === sortedOutline.length - 1 ? 0.2 : 1 }} aria-label="Move down">
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="6 9 12 15 18 9"/></svg>
                   </button>
                   <button onClick={() => updateProject({ plotOutline: outline.filter(pl => pl.id !== p.id) })} className="nf-btn-icon" style={{ padding: 4 }} aria-label="Delete plot entry"><Icons.Trash /></button>
@@ -21668,6 +22222,7 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
               </div>
               )}
             </div>
+            </Fragment>
             );
           })}
           {outline.length === 0 && <div className="nf-empty-state">Plan your story structure</div>}
@@ -22147,7 +22702,7 @@ Speech pattern: ${char.speechPattern || ""}` },
               <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                 {liveFirstLines.map(fl => (
                   <div key={fl.chapterIdx} style={{ padding: "8px 12px", borderLeft: "2px solid var(--nf-accent-2)", background: "var(--nf-bg-deep)", borderRadius: "0 3px 3px 0" }}>
-                    <div style={{ fontSize: 11, color: "var(--nf-text-muted)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 3 }}>Ch{fl.chapterIdx + 1} · {fl.title}</div>
+                    <div style={{ fontSize: 11, color: "var(--nf-text-muted)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 4 }}>Ch{fl.chapterIdx + 1} · {fl.title}</div>
                     <div style={{ fontFamily: "var(--nf-font-prose)", fontSize: 14, fontStyle: "italic", lineHeight: 1.6, color: "var(--nf-text)" }}>"{fl.line}"</div>
                   </div>
                 ))}
@@ -22316,14 +22871,14 @@ Speech pattern: ${char.speechPattern || ""}` },
         <p className="nf-hint" style={{ marginBottom: 24 }}>Smart context payload — only relevant characters, world entries, and relationships are sent to the AI based on what appears in your current chapter.</p>
         
         {/* H1: Mode selector for preview */}
-        <div style={{ marginBottom: 26, display: "flex", alignItems: "center", gap: 8 }}>
+        <div style={{ marginBottom: 24, display: "flex", alignItems: "center", gap: 8 }}>
           <span style={{ fontSize: 11, color: "var(--nf-text-muted)", fontWeight: 600 }}>Previewing mode:</span>
           <span style={{ fontSize: 12, color: "var(--nf-accent-2)", fontWeight: 700, textTransform: "capitalize" }}>{selectedMode}</span>
           <span style={{ fontSize: 11, color: "var(--nf-text-muted)" }}>(switch modes in the Write tab to preview different contexts)</span>
         </div>
 
         {/* F1: Prominent total payload with usage bar */}
-        <div className="nf-card" style={{ marginBottom: 26, padding: 20 }}>
+        <div className="nf-card" style={{ marginBottom: 24, padding: 20 }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 8 }}>
             <span style={{ fontSize: 11, fontWeight: 700, color: "var(--nf-text-dim)", textTransform: "uppercase", letterSpacing: "0.08em" }}>Context Usage</span>
             <span style={{ fontSize: 24, fontWeight: 500, color: usagePct > 80 ? "var(--nf-accent)" : usagePct > 50 ? "var(--nf-accent-2)" : "var(--nf-success)", fontFamily: "var(--nf-font-display)" }}>
@@ -22338,21 +22893,21 @@ Speech pattern: ${char.speechPattern || ""}` },
 
         {/* F2: Dynamic threshold warning */}
         {tokenEstimate > warningThreshold && (
-          <div style={{ padding: "10px 14px", marginBottom: 26, background: "var(--nf-error-bg)", border: "1px solid var(--nf-error-border)", borderRadius: 8, fontSize: 12, color: "var(--nf-text-dim)", lineHeight: 1.6 }}>
+          <div style={{ padding: "10px 14px", marginBottom: 24, background: "var(--nf-error-bg)", border: "1px solid var(--nf-error-border)", borderRadius: 8, fontSize: 12, color: "var(--nf-text-dim)", lineHeight: 1.6 }}>
             ⚠ Context payload ({tokenEstimate.toLocaleString()} tokens) exceeds {Math.round(warningThreshold / 1000)}k — {usagePct}% of your model's {(modelCtx / 1000).toFixed(0)}k context window. Summarize older chapters to reduce usage.
           </div>
         )}
 
         {/* F3: Unsummarized chapter urgency */}
         {unsummarizedCount > 0 && (
-          <div style={{ padding: "10px 14px", marginBottom: 26, background: "var(--nf-accent-glow)", border: "1px solid var(--nf-accent)", borderRadius: 8, fontSize: 12, color: "var(--nf-text)", lineHeight: 1.6 }}>
+          <div style={{ padding: "10px 14px", marginBottom: 24, background: "var(--nf-accent-glow)", border: "1px solid var(--nf-accent)", borderRadius: 8, fontSize: 12, color: "var(--nf-text)", lineHeight: 1.6 }}>
             <strong>{unsummarizedCount} chapter{unsummarizedCount > 1 ? "s" : ""} unsummarized</strong> — the AI reads raw chapter text for these, using significantly more tokens. Summarize them below to improve both performance and continuity.
           </div>
         )}
 
         {/* F6: Detected entities for current chapter */}
         {(detectedCharIds.size > 0 || detectedWorldIds.size > 0) && (
-          <div className="nf-card" style={{ marginBottom: 26 }}>
+          <div className="nf-card" style={{ marginBottom: 24 }}>
             <div className="nf-card-title" style={{ fontSize: 12, marginBottom: 8 }}>Detected in Current Chapter</div>
             {detectedCharIds.size > 0 && (() => {
               // Mirror what buildFullContext does: split detected chars into present vs referenced-absent.
@@ -22468,9 +23023,9 @@ Speech pattern: ${char.speechPattern || ""}` },
         <Field label="Continuity Notes (always injected into AI context)" value={project?.continuityNotes} onChange={v => updateProject({ continuityNotes: v })} multiline
           placeholder="Track details — one per line:&#10;• Elena has a scar from Ch3&#10;• Marcus doesn't know about the letter&#10;• The locket was left at the hotel in Ch7" />
 
-        <div style={{ marginTop: 20 }}>
+        <div style={{ marginTop: 24 }}>
           <span className="nf-section-label" style={{ display: "block", marginBottom: 8 }}>Chapter Summaries</span>
-          <p className="nf-hint" style={{ marginBottom: 22 }}>Summaries improve continuity. The AI reads these instead of raw text for prior chapters.</p>
+          <p className="nf-hint" style={{ marginBottom: 24 }}>Summaries improve continuity. The AI reads these instead of raw text for prior chapters.</p>
           {project?.chapters?.map((ch, i) => {
             // E1: Detect potentially stale summaries
             const isStale = ch.summary && ch.summaryGeneratedAt && ch.content && new Date(ch.summaryGeneratedAt) < new Date(Date.now() - 86400000);
@@ -22537,7 +23092,7 @@ Speech pattern: ${char.speechPattern || ""}` },
                         style={{ flex: "0 0 120px", textAlign: "left", fontSize: 11, color: "var(--nf-text-muted)", background: "none", border: "none", cursor: "pointer", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                         {r.i + 1}. {r.title}
                       </button>
-                      <div style={{ flex: 1, height: 18, display: "flex", borderRadius: 3, overflow: "hidden", background: "var(--nf-bg-deep)", width: `${Math.max(widthPct, 2)}%`, minWidth: 40 }} title={`${r.total} words · ${Math.round(pct(r.dialogue))}% dialogue, ${Math.round(pct(r.action))}% action, ${Math.round(pct(r.exposition))}% exposition`}>
+                      <div style={{ flex: 1, height: 18, display: "flex", borderRadius: 2, overflow: "hidden", background: "var(--nf-bg-deep)", width: `${Math.max(widthPct, 2)}%`, minWidth: 40 }} title={`${r.total} words · ${Math.round(pct(r.dialogue))}% dialogue, ${Math.round(pct(r.action))}% action, ${Math.round(pct(r.exposition))}% exposition`}>
                         {r.total > 0 ? (
                           <>
                             <div style={{ width: `${pct(r.dialogue)}%`, background: COLORS.dialogue }} />
@@ -22709,22 +23264,12 @@ Speech pattern: ${char.speechPattern || ""}` },
           </div>
         )}
         <div style={{ marginTop: 14, paddingTop: 14, borderTop: "1px solid var(--nf-border)" }}>
-          <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 12 }}>
-            <input type="checkbox" checked={!!settings.zenTypography}
-              onChange={e => setSettings(prev => ({ ...prev, zenTypography: e.target.checked }))} />
-            <span style={{ color: "var(--nf-text)", fontWeight: 500 }}>Zen typography</span>
-          </label>
-          <div style={{ fontSize: 11, color: "var(--nf-text-muted)", marginTop: 4, marginLeft: 22 }}>
-            Center editor at 65-character width with serif body font (Lora). Optimal for focused reading.
-          </div>
-          <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 12, marginTop: 10 }}>
-            <input type="checkbox" checked={settings.sentenceFade !== false}
-              onChange={e => setSettings(prev => ({ ...prev, sentenceFade: e.target.checked }))} />
-            <span style={{ color: "var(--nf-text)", fontWeight: 500 }}>Sentence-fade AI streaming</span>
-          </label>
-          <div style={{ fontSize: 11, color: "var(--nf-text-muted)", marginTop: 4, marginLeft: 22 }}>
-            AI responses appear a sentence at a time with gentle fade-in. Disabled: character-by-character typewriter.
-          </div>
+          <SettingToggle checked={settings.zenTypography} onChange={v => setSettings(prev => ({ ...prev, zenTypography: v }))}
+            label="Zen typography"
+            desc="Center editor at 65-character width with serif body font (Lora). Optimal for focused reading." />
+          <SettingToggle checked={settings.sentenceFade !== false} onChange={v => setSettings(prev => ({ ...prev, sentenceFade: v }))}
+            label="Sentence-fade AI streaming"
+            desc="AI responses appear a sentence at a time with gentle fade-in. Disabled: character-by-character typewriter." />
         </div>
       </div>
 
@@ -22766,195 +23311,88 @@ Speech pattern: ${char.speechPattern || ""}` },
           </div>
         </div>
 
-        {/* Silent writing mode */}
-        <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 12, marginTop: 14 }}>
-          <input type="checkbox" checked={!!settings.silentWritingMode}
-            onChange={e => setSettings(prev => ({ ...prev, silentWritingMode: e.target.checked }))} />
-          <span style={{ color: "var(--nf-text)", fontWeight: 500 }}>Silent writing mode</span>
-        </label>
-        <div style={{ fontSize: 11, color: "var(--nf-text-muted)", marginTop: 4, marginLeft: 22 }}>
-          Hides word count, hook scores, and other stats while writing. For when the numbers make you anxious.
-        </div>
+        <SettingToggle checked={settings.silentWritingMode} onChange={v => setSettings(prev => ({ ...prev, silentWritingMode: v }))}
+          label="Silent writing mode"
+          desc="Hides word count, hook scores, and other stats while writing. For when the numbers make you anxious." />
 
-        {/* Line focus */}
-        <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 12, marginTop: 10 }}>
-          <input type="checkbox" checked={!!settings.lineFocusMode}
-            onChange={e => setSettings(prev => ({ ...prev, lineFocusMode: e.target.checked }))} />
-          <span style={{ color: "var(--nf-text)", fontWeight: 500 }}>Line focus mode</span>
-        </label>
-        <div style={{ fontSize: 11, color: "var(--nf-text-muted)", marginTop: 4, marginLeft: 22 }}>
-          Fade non-current paragraphs. Like looking through a soft lens at your current thought.
-        </div>
+        <SettingToggle checked={settings.lineFocusMode} onChange={v => setSettings(prev => ({ ...prev, lineFocusMode: v }))}
+          label="Line focus mode"
+          desc="Fade non-current paragraphs. Like looking through a soft lens at your current thought." />
 
-        {/* Strict forward-drafting */}
-        <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 12, marginTop: 10 }}>
-          <input type="checkbox" checked={!!settings.strictDraftMode}
-            onChange={e => setSettings(prev => ({ ...prev, strictDraftMode: e.target.checked }))} />
-          <span style={{ color: "var(--nf-text)", fontWeight: 500 }}>Strict forward-drafting</span>
-        </label>
-        <div style={{ fontSize: 11, color: "var(--nf-text-muted)", marginTop: 4, marginLeft: 22 }}>
-          Dims everything except the block you're writing in — forces momentum and stops you compulsively re-editing earlier prose during a first draft.
-        </div>
+        <SettingToggle checked={settings.strictDraftMode} onChange={v => setSettings(prev => ({ ...prev, strictDraftMode: v }))}
+          label="Strict forward-drafting"
+          desc="Dims everything except the block you're writing in — forces momentum and stops you compulsively re-editing earlier prose during a first draft." />
 
-        {/* No-click distraction fade */}
-        <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 12, marginTop: 10 }}>
-          <input type="checkbox" checked={!!settings.hoverPeek}
-            onChange={e => setSettings(prev => ({ ...prev, hoverPeek: e.target.checked }))} />
-          <span style={{ color: "var(--nf-text)", fontWeight: 500 }}>Hover-peek entity cards</span>
-        </label>
-        <div style={{ fontSize: 11, color: "var(--nf-text-muted)", marginTop: 4, marginLeft: 22 }}>
-          Hover a character or location name in the editor to see a quick 3-point summary without leaving the page.
-        </div>
+        <SettingToggle checked={settings.hoverPeek} onChange={v => setSettings(prev => ({ ...prev, hoverPeek: v }))}
+          label="Hover-peek entity cards"
+          desc="Hover a character or location name in the editor to see a quick 3-point summary without leaving the page." />
 
-        {/* Sidebar hover-expand */}
-        <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 12, marginTop: 10 }}>
-          <input type="checkbox" checked={!!settings.sidebarHoverExpand}
-            onChange={e => setSettings(prev => ({ ...prev, sidebarHoverExpand: e.target.checked }))} />
-          <span style={{ color: "var(--nf-text)", fontWeight: 500 }}>Collapse sidebar (hover to expand)</span>
-        </label>
-        <div style={{ fontSize: 11, color: "var(--nf-text-muted)", marginTop: 4, marginLeft: 22 }}>
-          Shrinks the chapter sidebar to a thin strip for maximum writing space; hover it to slide it back out.
-        </div>
+        <SettingToggle checked={settings.sidebarHoverExpand} onChange={v => setSettings(prev => ({ ...prev, sidebarHoverExpand: v }))}
+          label="Collapse sidebar (hover to expand)"
+          desc="Shrinks the chapter sidebar to a thin strip for maximum writing space; hover it to slide it back out." />
 
-        {/* Micro-outline dock */}
-        <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 12, marginTop: 10 }}>
-          <input type="checkbox" checked={!!settings.microOutlineDock}
-            onChange={e => setSettings(prev => ({ ...prev, microOutlineDock: e.target.checked }))} />
-          <span style={{ color: "var(--nf-text)", fontWeight: 500 }}>Scene micro-goal dock</span>
-        </label>
-        <div style={{ fontSize: 11, color: "var(--nf-text-muted)", marginTop: 4, marginLeft: 22 }}>
-          A small floating card showing the active scene's setup, current beat, and intended payoff — keeps the scene's goal in your peripheral vision.
-        </div>
+        <SettingToggle checked={settings.microOutlineDock} onChange={v => setSettings(prev => ({ ...prev, microOutlineDock: v }))}
+          label="Scene micro-goal dock"
+          desc="A small floating card showing the active scene's setup, current beat, and intended payoff — keeps the scene's goal in your peripheral vision." />
 
-        {/* No-click distraction fade */}
-        <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 12, marginTop: 10 }}>
-          <input type="checkbox" checked={!!settings.autoFadeChrome}
-            onChange={e => setSettings(prev => ({ ...prev, autoFadeChrome: e.target.checked }))} />
-          <span style={{ color: "var(--nf-text)", fontWeight: 500 }}>Auto-fade interface while writing</span>
-        </label>
-        <div style={{ fontSize: 11, color: "var(--nf-text-muted)", marginTop: 4, marginLeft: 22 }}>
-          Fades the sidebar and status bar after you type a few words. Move the mouse or hit Esc to bring them back.
-        </div>
+        <SettingToggle checked={settings.autoFadeChrome} onChange={v => setSettings(prev => ({ ...prev, autoFadeChrome: v }))}
+          label="Auto-fade interface while writing"
+          desc="Fades the sidebar and status bar after you type a few words. Move the mouse or hit Esc to bring them back." />
 
-        {/* Typewriter centering */}
-        <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 12, marginTop: 10 }}>
-          <input type="checkbox" checked={!!settings.typewriterCentering}
-            onChange={e => setSettings(prev => ({ ...prev, typewriterCentering: e.target.checked }))} />
-          <span style={{ color: "var(--nf-text)", fontWeight: 500 }}>Typewriter centering</span>
-        </label>
-        <div style={{ fontSize: 11, color: "var(--nf-text-muted)", marginTop: 4, marginLeft: 22 }}>
-          Keeps the line you're writing locked at the vertical center of the editor, so your eyes stay at a comfortable level.
-        </div>
+        <SettingToggle checked={settings.typewriterCentering} onChange={v => setSettings(prev => ({ ...prev, typewriterCentering: v }))}
+          label="Typewriter centering"
+          desc="Keeps the line you're writing locked at the vertical center of the editor, so your eyes stay at a comfortable level." />
 
-        {/* Micro-pacing waveform */}
-        <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 12, marginTop: 10 }}>
-          <input type="checkbox" checked={!!settings.pacingWaveform}
-            onChange={e => setSettings(prev => ({ ...prev, pacingWaveform: e.target.checked }))} />
-          <span style={{ color: "var(--nf-text)", fontWeight: 500 }}>Micro-pacing waveform</span>
-        </label>
-        <div style={{ fontSize: 11, color: "var(--nf-text-muted)", marginTop: 4, marginLeft: 22 }}>
-          Shows a sentence-length waveform below the editor. Spiky = choppy; long flat runs = dense, over-written passages.
-        </div>
+        <SettingToggle checked={settings.pacingWaveform} onChange={v => setSettings(prev => ({ ...prev, pacingWaveform: v }))}
+          label="Micro-pacing waveform"
+          desc="Shows a sentence-length waveform below the editor. Spiky = choppy; long flat runs = dense, over-written passages." />
 
-        {/* Circadian dimming */}
-        <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 12, marginTop: 10 }}>
-          <input type="checkbox" checked={!!settings.circadianDimming}
-            onChange={e => setSettings(prev => ({ ...prev, circadianDimming: e.target.checked }))} />
-          <span style={{ color: "var(--nf-text)", fontWeight: 500 }}>Circadian dimming</span>
-        </label>
-        <div style={{ fontSize: 11, color: "var(--nf-text-muted)", marginTop: 4, marginLeft: 22 }}>
-          Warmer tones after 8pm. Respects your eye rest.
-        </div>
+        <SettingToggle checked={settings.circadianDimming} onChange={v => setSettings(prev => ({ ...prev, circadianDimming: v }))}
+          label="Circadian dimming"
+          desc="Warmer tones after 8pm. Respects your eye rest." />
 
-        {/* Typewriter pacing */}
-        <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 12, marginTop: 10 }}>
-          <input type="checkbox" checked={!!settings.typewriterPacing}
-            onChange={e => setSettings(prev => ({ ...prev, typewriterPacing: e.target.checked }))} />
-          <span style={{ color: "var(--nf-text)", fontWeight: 500 }}>Typewriter pacing</span>
-        </label>
-        <div style={{ fontSize: 11, color: "var(--nf-text-muted)", marginTop: 4, marginLeft: 22 }}>
-          Softly breathing caret and widened letter spacing — encourages a meditative, deliberate pace.
-        </div>
+        <SettingToggle checked={settings.typewriterPacing} onChange={v => setSettings(prev => ({ ...prev, typewriterPacing: v }))}
+          label="Typewriter pacing"
+          desc="Softly breathing caret and widened letter spacing — encourages a meditative, deliberate pace." />
 
-        {/* Breathing pauser */}
-        <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 12, marginTop: 10 }}>
-          <input type="checkbox" checked={!!settings.breathingPauser}
-            onChange={e => setSettings(prev => ({ ...prev, breathingPauser: e.target.checked }))} />
-          <span style={{ color: "var(--nf-text)", fontWeight: 500 }}>Breathing pauser</span>
-        </label>
-        {settings.breathingPauser && (
-          <div style={{ marginLeft: 22, marginTop: 6, display: "flex", alignItems: "center", gap: 8 }}>
-            <span style={{ fontSize: 11, color: "var(--nf-text-muted)" }}>Every</span>
-            <input type="number" min="15" max="180" value={settings.breathingPauserInterval || 45}
-              onChange={e => setSettings(prev => ({ ...prev, breathingPauserInterval: Math.max(15, Math.min(180, parseInt(e.target.value, 10) || 45)) }))}
-              style={{ width: 54, padding: "2px 6px", fontSize: 11 }} className="nf-input nf-input-compact" />
-            <span style={{ fontSize: 11, color: "var(--nf-text-muted)" }}>minutes</span>
-          </div>
-        )}
-        <div style={{ fontSize: 11, color: "var(--nf-text-muted)", marginTop: 4, marginLeft: 22 }}>
-          Gentle 4-4-6 breath animation after continuous writing. Dismissable.
-        </div>
+        <SettingToggle checked={settings.breathingPauser} onChange={v => setSettings(prev => ({ ...prev, breathingPauser: v }))}
+          label="Breathing pauser"
+          desc="Gentle 4-4-6 breath animation after continuous writing. Dismissable.">
+          {settings.breathingPauser && (
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{ fontSize: 11, color: "var(--nf-text-muted)" }}>Every</span>
+              <input type="number" min="15" max="180" value={settings.breathingPauserInterval || 45}
+                onChange={e => setSettings(prev => ({ ...prev, breathingPauserInterval: Math.max(15, Math.min(180, parseInt(e.target.value, 10) || 45)) }))}
+                style={{ width: 54, padding: "2px 6px", fontSize: 11 }} className="nf-input nf-input-compact" />
+              <span style={{ fontSize: 11, color: "var(--nf-text-muted)" }}>minutes</span>
+            </div>
+          )}
+        </SettingToggle>
 
-        {/* Chapter celebration */}
-        <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 12, marginTop: 10 }}>
-          <input type="checkbox" checked={!!settings.chapterCelebration}
-            onChange={e => setSettings(prev => ({ ...prev, chapterCelebration: e.target.checked }))} />
-          <span style={{ color: "var(--nf-text)", fontWeight: 500 }}>Chapter milestone bloom</span>
-        </label>
-        <div style={{ fontSize: 11, color: "var(--nf-text-muted)", marginTop: 4, marginLeft: 22 }}>
-          Muted radial bloom when a chapter crosses 1000 words. Not confetti.
-        </div>
+        <SettingToggle checked={settings.chapterCelebration} onChange={v => setSettings(prev => ({ ...prev, chapterCelebration: v }))}
+          label="Chapter milestone bloom"
+          desc="Muted radial bloom when a chapter crosses 1000 words. Not confetti." />
 
-        {/* Liveliness */}
-        <div style={{ marginTop: 14 }}>
-          <span style={{ color: "var(--nf-text)", fontWeight: 500, fontSize: 12 }}>Liveliness</span>
-          <div style={{ fontSize: 11, color: "var(--nf-text-muted)", margin: "4px 0 8px" }}>
-            Ambient drifting motes, a gentle time-of-day tint, soft milestone sparks, and a small companion sprite you can click for a thought about your story. Honors your system's reduced-motion preference.
-          </div>
-          <div style={{ display: "flex", gap: 6 }}>
-            {[{ v: "full", l: "Full" }, { v: "subtle", l: "Subtle" }, { v: "off", l: "Off" }].map(o => (
-              <button key={o.v} onClick={() => setSettings(prev => ({ ...prev, liveliness: o.v }))}
-                className="nf-btn-micro"
-                style={{ fontSize: 11, padding: "3px 12px", background: (settings.liveliness || "full") === o.v ? "var(--nf-accent)" : undefined, color: (settings.liveliness || "full") === o.v ? "#fff" : undefined, borderColor: (settings.liveliness || "full") === o.v ? "var(--nf-accent)" : undefined }}>
-                {o.l}
-              </button>
-            ))}
-          </div>
-        </div>
+        <SettingChoice label="Liveliness"
+          desc="Ambient drifting motes, a gentle time-of-day tint, soft milestone sparks, and a small companion sprite you can click for a thought about your story. Honors your system's reduced-motion preference."
+          value={settings.liveliness || "full"} onChange={v => setSettings(prev => ({ ...prev, liveliness: v }))}
+          options={[{ v: "full", l: "Full" }, { v: "subtle", l: "Subtle" }, { v: "off", l: "Off" }]} />
 
-        {/* Session decompression */}
-        <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 12, marginTop: 10 }}>
-          <input type="checkbox" checked={!!settings.sessionDecompression}
-            onChange={e => setSettings(prev => ({ ...prev, sessionDecompression: e.target.checked }))} />
-          <span style={{ color: "var(--nf-text)", fontWeight: 500 }}>End-of-session reflection</span>
-        </label>
-        <div style={{ fontSize: 11, color: "var(--nf-text-muted)", marginTop: 4, marginLeft: 22 }}>
-          Optional quiet summary screen when you close a session. No streaks.
-        </div>
+        <SettingToggle checked={settings.sessionDecompression} onChange={v => setSettings(prev => ({ ...prev, sessionDecompression: v }))}
+          label="End-of-session reflection"
+          desc="Optional quiet summary screen when you close a session. No streaks." />
 
-        {/* Question of the day */}
-        <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 12, marginTop: 10 }}>
-          <input type="checkbox" checked={!!settings.questionOfTheDay}
-            onChange={e => setSettings(prev => ({ ...prev, questionOfTheDay: e.target.checked }))} />
-          <span style={{ color: "var(--nf-text)", fontWeight: 500 }}>Question of the day</span>
-        </label>
-        <div style={{ fontSize: 11, color: "var(--nf-text-muted)", marginTop: 4, marginLeft: 22 }}>
-          A thoughtful daily prompt about your novel. Skip freely.
-        </div>
+        <SettingToggle checked={settings.questionOfTheDay} onChange={v => setSettings(prev => ({ ...prev, questionOfTheDay: v }))}
+          label="Question of the day"
+          desc="A thoughtful daily prompt about your novel. Skip freely." />
 
-        {/* Forge-chan good night */}
-        <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 12, marginTop: 10 }}>
-          <input type="checkbox" checked={!!settings.forgeChanGoodNight}
-            onChange={e => setSettings(prev => ({ ...prev, forgeChanGoodNight: e.target.checked }))} />
-          <span style={{ color: "var(--nf-text)", fontWeight: 500 }}>Forge-chan evening greetings</span>
-        </label>
-        <div style={{ fontSize: 11, color: "var(--nf-text-muted)", marginTop: 4, marginLeft: 22 }}>
-          Forge-chan says goodnight when you close the app late. (◕‿◕✿)
-        </div>
+        <SettingToggle checked={settings.forgeChanGoodNight} onChange={v => setSettings(prev => ({ ...prev, forgeChanGoodNight: v }))}
+          label="Forge-chan evening greetings"
+          desc="Forge-chan says goodnight when you close the app late. (◕‿◕✿)" />
       </div>
 
       {/* E4: Clearly separated API section with scope label */}
-      <div style={{ fontSize: 11, fontWeight: 700, color: "var(--nf-text-muted)", textTransform: "uppercase", letterSpacing: "0.1em", marginTop: 20, marginBottom: 6 }}>Global Settings (all projects)</div>
+      <div style={{ fontSize: 11, fontWeight: 700, color: "var(--nf-text-muted)", textTransform: "uppercase", letterSpacing: "0.1em", marginTop: 24, marginBottom: 6 }}>Global Settings (all projects)</div>
       <div className="nf-card">
         <h3 className="nf-card-title">API Configuration</h3>
         <div className="nf-field">
@@ -22988,7 +23426,7 @@ Speech pattern: ${char.speechPattern || ""}` },
                   <ModelSelector apiKey={settings.apiKey} value={settings.tabModels?.[tab.key] || ""} onChange={(v) => setSettings(prev => ({ ...prev, tabModels: { ...(prev.tabModels || {}), [tab.key]: v } }))} label={tab.label} />
                 </div>
                 {settings.tabModels?.[tab.key] && (
-                  <button onClick={() => setSettings(prev => { const tm = { ...(prev.tabModels || {}) }; delete tm[tab.key]; return { ...prev, tabModels: tm }; })} className="nf-btn-icon" style={{ marginBottom: 1 }} title="Reset to main model"><Icons.X /></button>
+                  <button onClick={() => setSettings(prev => { const tm = { ...(prev.tabModels || {}) }; delete tm[tab.key]; return { ...prev, tabModels: tm }; })} className="nf-btn-icon" style={{ marginBottom: 2 }} title="Reset to main model"><Icons.X /></button>
                 )}
               </div>
             ))}
@@ -23064,16 +23502,9 @@ Speech pattern: ${char.speechPattern || ""}` },
           Each role below can use a different model — default is <code style={{ fontSize: 11, background: "var(--nf-bg-deep)", padding: "1px 4px", borderRadius: 2 }}>x-ai/grok-4.1-fast</code>.
           Typically produces higher-quality output at lower cost by focusing the writing agent's attention.
         </p>
-        <div className="nf-field">
-          <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
-            <input type="checkbox" checked={!!settings.agentsEnabled}
-              onChange={e => setSettings(prev => ({ ...prev, agentsEnabled: e.target.checked }))} />
-            <span style={{ fontSize: 13, color: "var(--nf-text)", fontWeight: 500 }}>Enable multi-agent mode</span>
-          </label>
-          <div style={{ fontSize: 11, color: "var(--nf-text-muted)", marginTop: 4, marginLeft: 24 }}>
-            When enabled, AI operations use the orchestrator + specialist pipeline instead of the monolithic context engine.
-          </div>
-        </div>
+        <SettingToggle checked={settings.agentsEnabled} onChange={v => setSettings(prev => ({ ...prev, agentsEnabled: v }))}
+          label="Enable multi-agent mode"
+          desc="When enabled, AI operations use the orchestrator + specialist pipeline instead of the monolithic context engine." />
         {settings.agentsEnabled && (
           <>
             <details style={{ marginTop: 12 }}>
@@ -23121,7 +23552,7 @@ Speech pattern: ${char.speechPattern || ""}` },
                   { key: "motifAuditor", label: "Motif Weaving Auditor", desc: "Tracks how well motifs are integrated" },
                   { key: "stateUpdater", label: "State Updater", desc: "Updates character emotional state + relationship evolution + reveal flags after chapter save" },
                 ].map(pp => (
-                  <label key={pp.key} style={{ display: "flex", alignItems: "start", gap: 8, cursor: "pointer", padding: "6px 0", borderBottom: "1px solid var(--nf-border)" }}>
+                  <label key={pp.key} style={{ display: "grid", gridTemplateColumns: "16px 1fr", columnGap: 9, alignItems: "start", cursor: "pointer", padding: "8px 0", borderBottom: "1px solid var(--nf-border)" }}>
                     <input type="checkbox"
                       checked={!!settings.agentPostProcessors?.[pp.key]}
                       onChange={e => setSettings(prev => ({
@@ -23130,8 +23561,8 @@ Speech pattern: ${char.speechPattern || ""}` },
                       }))}
                       style={{ marginTop: 2 }} />
                     <div>
-                      <div style={{ fontSize: 11, fontWeight: 600, color: "var(--nf-text)" }}>{pp.label}</div>
-                      <div style={{ fontSize: 11, color: "var(--nf-text-muted)", marginTop: 2 }}>{pp.desc}</div>
+                      <div style={{ fontSize: 12, fontWeight: 500, color: "var(--nf-text)" }}>{pp.label}</div>
+                      <div style={{ fontSize: 11, color: "var(--nf-text-muted)", lineHeight: 1.5, marginTop: 4 }}>{pp.desc}</div>
                     </div>
                   </label>
                 ))}
@@ -23149,7 +23580,7 @@ Speech pattern: ${char.speechPattern || ""}` },
         <div className="nf-field">
           <label className="nf-label">Cover Image</label>
           <div style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>
-            <div style={{ width: 96, height: 144, border: "1px solid var(--nf-border)", borderRadius: 3, overflow: "hidden", background: "var(--nf-bg-deep)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+            <div style={{ width: 96, height: 144, border: "1px solid var(--nf-border)", borderRadius: 2, overflow: "hidden", background: "var(--nf-bg-deep)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
               {project?.coverImage ? (
                 <img loading="lazy" src={project.coverImage} alt="Cover" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
               ) : (
@@ -23196,17 +23627,9 @@ Speech pattern: ${char.speechPattern || ""}` },
             <span>Fade to black</span><span>Suggestive</span><span>Moderate</span><span>Explicit</span><span>Graphic</span>
           </div>
         </div>
-        <div className="nf-field">
-          <label style={{ display: "flex", alignItems: "flex-start", gap: 8, cursor: "pointer" }}>
-            <input type="checkbox" checked={!!project?.nonLinearTime} onChange={e => updateProject({ nonLinearTime: e.target.checked })} style={{ accentColor: "var(--nf-accent)", marginTop: 2 }} />
-            <span>
-              <span className="nf-label" style={{ margin: 0 }}>Non-linear / parallel timelines</span>
-              <span style={{ display: "block", fontSize: 11, color: "var(--nf-text-muted)", lineHeight: 1.5, marginTop: 2 }}>
-                For stories with concurrent eras or retrocausality. Turns off flashback detection (an earlier story-date won't be flagged as a flashback, and the AI won't be told to suppress "future" references), and stops a character's death from globally ending their relationships — since they may be alive in another era. Tells the AI the eras run concurrently instead.
-              </span>
-            </span>
-          </label>
-        </div>
+        <SettingToggle checked={project?.nonLinearTime} onChange={v => updateProject({ nonLinearTime: v })}
+          label="Non-linear / parallel timelines"
+          desc={`For stories with concurrent eras or retrocausality. Turns off flashback detection (an earlier story-date won't be flagged as a flashback, and the AI won't be told to suppress "future" references), and stops a character's death from globally ending their relationships — since they may be alive in another era. Tells the AI the eras run concurrently instead.`} />
         <Field label="Writing Style" value={project?.writingStyle} onChange={v => updateProject({ writingStyle: v })} multiline placeholder="Your voice, pacing, sentence style..." small />
         <Field label="Content Preferences" value={project?.contentPrefs} onChange={v => updateProject({ contentPrefs: v })} multiline placeholder="What to lean into..." small />
         <Field label="Hard Limits" value={project?.avoidList} onChange={v => updateProject({ avoidList: v })} multiline placeholder="Never include..." small />
@@ -23274,11 +23697,11 @@ Speech pattern: ${char.speechPattern || ""}` },
             {/* Google Drive Sync */}
       <div className="nf-card">
         <h3 className="nf-card-title">☁ Google Drive Sync</h3>
-        <p style={{ fontSize: 12, color: "var(--nf-text-muted)", marginBottom: 22, lineHeight: 1.6 }}>
+        <p style={{ fontSize: 12, color: "var(--nf-text-muted)", marginBottom: 24, lineHeight: 1.6 }}>
           Auto-sync projects AND images to Google Drive for full cloud backup and cross-device access.
           Images are compressed before upload to keep syncs fast.
         </p>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 22 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 24 }}>
           <div style={{ width: 8, height: 8, borderRadius: 4, background: gdriveConnected ? "var(--nf-success)" : "var(--nf-text-muted)" }} />
           <span style={{ fontSize: 11, color: "var(--nf-text-dim)", fontWeight: 500 }}>
             {gdriveConnected ? "Connected" : "Not connected"}
@@ -23342,7 +23765,7 @@ Speech pattern: ${char.speechPattern || ""}` },
       </div>
 	  <div className="nf-card">
         <h3 className="nf-card-title">Backup & Save</h3>
-        <p style={{ fontSize: 12, color: "var(--nf-text-muted)", marginBottom: 18, lineHeight: 1.6 }}>
+        <p style={{ fontSize: 12, color: "var(--nf-text-muted)", marginBottom: 16, lineHeight: 1.6 }}>
           Your work auto-saves to this browser continuously. For safekeeping, download a backup file you can store anywhere or move between devices — this works on phones and computers alike.
         </p>
 
@@ -23417,7 +23840,7 @@ Speech pattern: ${char.speechPattern || ""}` },
       {project && (
         <div className="nf-card" style={{ borderColor: "var(--nf-error-border)" }}>
           <h3 className="nf-card-title" style={{ color: "var(--nf-accent)" }}>Danger Zone</h3>
-          <p style={{ fontSize: 12, color: "var(--nf-text-muted)", marginBottom: 22, lineHeight: 1.5 }}>
+          <p style={{ fontSize: 12, color: "var(--nf-text-muted)", marginBottom: 24, lineHeight: 1.5 }}>
             Type <strong style={{ color: "var(--nf-text)" }}>{project.title}</strong> to confirm deletion:
           </p>
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
@@ -23440,7 +23863,7 @@ Speech pattern: ${char.speechPattern || ""}` },
               showToast("Project deleted", "success");
             }} className="nf-btn nf-btn-danger"><Icons.Trash /> Delete Project</button>
           </div>
-		  <div style={{ marginTop: 18, paddingTop: 14, borderTop: "1px solid var(--nf-border)" }}>
+		  <div style={{ marginTop: 16, paddingTop: 14, borderTop: "1px solid var(--nf-border)" }}>
             <p style={{ fontSize: 12, color: "var(--nf-text-muted)", marginBottom: 20, lineHeight: 1.5 }}>
               Clear <strong>all app data</strong> — projects, settings, Google Drive connection, cached images. Use when sharing this device or starting fresh. This cannot be undone.
             </p>
@@ -23460,7 +23883,7 @@ Speech pattern: ${char.speechPattern || ""}` },
         <div style={{ fontSize: 11, color: "var(--nf-text-muted)", textAlign: "center", lineHeight: 1.7, opacity: 0.7 }}>
           <div>Developed by <span style={{ color: "var(--nf-accent-2)", fontWeight: 600 }}>@arvtk</span></div>
           <div style={{ fontStyle: "italic", marginTop: 2 }}>with an unreasonable amount of help from Claude</div>
-          <div style={{ fontStyle: "italic", opacity: 0.6, marginTop: 1 }}>(who mass-produced 16,000+ lines and mass-forgot what half of them do)</div>
+          <div style={{ fontStyle: "italic", opacity: 0.6, marginTop: 2 }}>(who mass-produced 16,000+ lines and mass-forgot what half of them do)</div>
         </div>
         <div style={{ fontSize: 11, color: "var(--nf-text-muted)", textAlign: "center", lineHeight: 1.6, marginTop: 10, opacity: 0.5, letterSpacing: "0.02em" }}>
           © {new Date().getFullYear()} @arvtk. All rights reserved. This software and its source code, design, architecture, and all associated intellectual property are the exclusive property of the developer. Unauthorized reproduction, distribution, modification, reverse engineering, or commercial use — in whole or in part — is strictly prohibited without prior written consent. All AI-generated code contributions were produced under the direction and creative control of the developer and are incorporated as works made for hire. Novel content, characters, and creative works produced using this tool remain the sole property of their respective authors. This software is provided "as is" without warranty of any kind, express or implied.
@@ -23488,7 +23911,7 @@ Speech pattern: ${char.speechPattern || ""}` },
             --nf-font-prose: 'Cormorant Garamond', Georgia, serif;
             --nf-font-mono: 'IBM Plex Mono', monospace;
             --nf-font-reading: 'Lora', 'Source Serif Pro', Georgia, serif;
-            --nf-radius: 4px; --nf-radius-sm: 3px; --nf-radius-lg: 8px; --nf-radius-dialog: 6px; --nf-radius-pill: 20px;
+            --nf-radius: 4px; --nf-radius-sm: 2px; --nf-radius-lg: 8px; --nf-radius-dialog: 6px; --nf-radius-pill: 20px;
             --nf-ls-label: 0.08em; --nf-ls-wide: 0.1em;
           }
           /* ═══ READING MODE OVERRIDES — lower-stimulation writing environment ═══ */
@@ -23772,7 +24195,7 @@ Speech pattern: ${char.speechPattern || ""}` },
           .nf-card { word-break: break-word; margin-bottom: 14px; padding: 16px; background: var(--nf-bg-raised); border-radius: 2px; border: 1px solid var(--nf-border); transition: transform 0.25s cubic-bezier(0.34,1.56,0.64,1), box-shadow 0.25s ease, border-color 0.2s; position: relative; min-width: 0; max-width: 100%; }
           .nf-card:hover { transform: rotate(-0.2deg) translateY(-1px); box-shadow: var(--nf-shadow); }
           .nf-card:active { transform: scale(0.995); transition-duration: 0.1s; }
-          .nf-card-title { font-size: 14px; word-break: break-word; font-family: var(--nf-font-display); font-weight: 500; color: var(--nf-text); margin-bottom: 12px; letter-spacing: 0.01em; }
+          .nf-card-title { font-size: 14px; word-break: break-word; font-family: var(--nf-font-display); font-weight: 500; color: var(--nf-text); margin: 0 0 14px; letter-spacing: 0.01em; }
           .nf-polaroid { background: var(--nf-bg-raised); border: 1px solid var(--nf-border); border-radius: 2px; padding: 8px 8px 16px; transition: transform 0.3s cubic-bezier(0.34,1.56,0.64,1), box-shadow 0.3s, border-color 0.2s; cursor: pointer; content-visibility: auto; contain-intrinsic-size: auto 200px; }
           .nf-polaroid { will-change: transform; }
           .nf-polaroid:hover { transform: rotate(-1deg) translateY(-2px); box-shadow: var(--nf-shadow-lg); }
@@ -23793,8 +24216,8 @@ Speech pattern: ${char.speechPattern || ""}` },
           .nf-select:hover { border-color: var(--nf-text-muted); }
           .nf-select:focus { border-color: var(--nf-border-focus); }
           .nf-range { width: 100%; accent-color: var(--nf-accent); }
-          .nf-hint { color: var(--nf-text-muted); font-size: 12px; margin-bottom: 20px; line-height: 1.65; }
-          .nf-char-section { margin-bottom: 20px; word-break: break-word; padding: 16px; background: var(--nf-bg-raised); border: 1px solid var(--nf-border); border-radius: var(--nf-radius); transition: border-color 0.3s; }
+          .nf-hint { color: var(--nf-text-muted); font-size: 12px; margin-bottom: 16px; line-height: 1.65; }
+          .nf-char-section { margin-bottom: 16px; word-break: break-word; padding: 16px; background: var(--nf-bg-raised); border: 1px solid var(--nf-border); border-radius: var(--nf-radius); transition: border-color 0.3s; }
           .nf-char-section:focus-within { border-color: var(--nf-border-focus); }
           .nf-char-section-label { font-size: 12px; font-weight: 700; color: var(--nf-accent); text-transform: uppercase; letter-spacing: 0.1em; margin-bottom: 14px; padding-bottom: 10px; border-bottom: 1px solid var(--nf-border); font-family: var(--nf-font-body); }
           
@@ -24018,7 +24441,6 @@ Speech pattern: ${char.speechPattern || ""}` },
           
           .nf-content-scroll { flex: 1; min-height: 0; min-width: 0; overflow-y: auto; overflow-x: hidden; padding: 28px 36px; scroll-behavior: smooth; }
           .nf-page-title { font-family: var(--nf-font-display); font-size: 28px; font-weight: 400; color: var(--nf-text); margin: 0 0 20px; letter-spacing: 0.01em; }
-          .nf-card-title { font-size: 14px; word-break: break-word; color: var(--nf-text); margin: 0 0 14px; font-weight: 500; font-family: var(--nf-font-display); }
           .nf-empty-state { display: flex; align-items: center; justify-content: center; height: 200px; color: var(--nf-text-muted); font-size: 15px; font-family: var(--nf-font-display); font-style: italic; animation: nf-float 3s ease-in-out infinite; }
           .nf-plot-number { width: 46px; height: 46px; border-radius: 2px; background: var(--nf-bg-surface); display: flex; align-items: center; justify-content: center; color: var(--nf-accent); font-weight: 400; font-size: 18px; font-family: var(--nf-font-display); flex-shrink: 0; transition: color 0.2s, border-color 0.2s, background 0.2s, transform 0.2s cubic-bezier(0.34,1.56,0.64,1); cursor: pointer; }
           .nf-plot-number:hover { transform: scale(1.06); }
@@ -24608,6 +25030,24 @@ Speech pattern: ${char.speechPattern || ""}` },
             <HearthSprite level={liveliness} appState={livelyAppState} onAsk={askSprite} />
           </>
         )}
+        {/* Persistent Help button — discoverable entry to the feature guide (also F1 / ?) */}
+        {!cleanView && (
+          <button onClick={() => setHelpOpen(true)} title="Help & features (F1)" aria-label="Help and features"
+            style={{ position: "fixed", left: "max(16px, env(safe-area-inset-left, 16px))", bottom: "max(16px, env(safe-area-inset-bottom, 16px))", zIndex: 70, width: 34, height: 34, borderRadius: "50%", background: "var(--nf-bg-raised)", border: "1px solid var(--nf-border)", color: "var(--nf-text-muted)", cursor: "pointer", fontSize: 15, fontWeight: 600, display: "flex", alignItems: "center", justifyContent: "center", boxShadow: "var(--nf-shadow)", transition: "color 0.2s, border-color 0.2s, transform 0.15s" }}
+            onMouseEnter={e => { e.currentTarget.style.color = "var(--nf-accent)"; e.currentTarget.style.borderColor = "var(--nf-accent)"; e.currentTarget.style.transform = "translateY(-1px)"; }}
+            onMouseLeave={e => { e.currentTarget.style.color = "var(--nf-text-muted)"; e.currentTarget.style.borderColor = "var(--nf-border)"; e.currentTarget.style.transform = "none"; }}>
+            ?
+          </button>
+        )}
+        {/* Image library button — sits just above the help button */}
+        {!cleanView && project && (
+          <button onClick={() => setImageLibraryOpen(true)} title="Image library — every image in this project" aria-label="Image library"
+            style={{ position: "fixed", left: "max(16px, env(safe-area-inset-left, 16px))", bottom: "calc(max(16px, env(safe-area-inset-bottom, 16px)) + 42px)", zIndex: 70, width: 34, height: 34, borderRadius: "50%", background: "var(--nf-bg-raised)", border: "1px solid var(--nf-border)", color: "var(--nf-text-muted)", cursor: "pointer", fontSize: 14, display: "flex", alignItems: "center", justifyContent: "center", boxShadow: "var(--nf-shadow)", transition: "color 0.2s, border-color 0.2s, transform 0.15s" }}
+            onMouseEnter={e => { e.currentTarget.style.color = "var(--nf-accent)"; e.currentTarget.style.borderColor = "var(--nf-accent)"; e.currentTarget.style.transform = "translateY(-1px)"; }}
+            onMouseLeave={e => { e.currentTarget.style.color = "var(--nf-text-muted)"; e.currentTarget.style.borderColor = "var(--nf-border)"; e.currentTarget.style.transform = "none"; }}>
+            ▦
+          </button>
+        )}
         {confirmDialog && <ConfirmDialog message={confirmDialog.message} onConfirm={confirmDialog.onConfirm} onCancel={() => setConfirmDialog(null)} confirmLabel={confirmDialog.confirmLabel} />}
         {findReplaceOpen && project && (
           <FindReplaceModal
@@ -24652,7 +25092,7 @@ Speech pattern: ${char.speechPattern || ""}` },
             {(activeChapter.subtextLines || []).map(sl => (
               <div key={sl.id} style={{ marginBottom: 8, padding: 8, background: "var(--nf-bg-surface)", border: "1px solid var(--nf-border)", borderRadius: 4 }}>
                 <div style={{ fontSize: 11, color: "var(--nf-text)", fontStyle: "italic" }}>“{sl.line}”</div>
-                <div style={{ fontSize: 11, color: "var(--nf-accent-2)", marginTop: 3 }}>↳ {sl.subtext}</div>
+                <div style={{ fontSize: 11, color: "var(--nf-accent-2)", marginTop: 4 }}>↳ {sl.subtext}</div>
                 <button onClick={() => updateChapter(activeChapterIdx, { subtextLines: (activeChapter.subtextLines || []).filter(x => x.id !== sl.id) })} className="nf-btn-micro" style={{ fontSize: 10, padding: "1px 5px", marginTop: 4 }}>✕</button>
               </div>
             ))}
@@ -24695,13 +25135,34 @@ Speech pattern: ${char.speechPattern || ""}` },
               {hoverPeek.name}<span style={{ fontSize: 9, color: "var(--nf-text-muted)", textTransform: "lowercase", fontWeight: 400 }}>{hoverPeek.kind}</span>
             </div>
             {hoverPeek.bullets.map((b, i) => (
-              <div key={i} style={{ fontSize: 11, color: "var(--nf-text-muted)", marginTop: 3, lineHeight: 1.4 }}>• {b}</div>
+              <div key={i} style={{ fontSize: 11, color: "var(--nf-text-muted)", marginTop: 4, lineHeight: 1.4 }}>• {b}</div>
             ))}
           </div>
         )}
         {showTypeset && <TypesetPreview content={activeChapter?.content} chapterTitle={activeChapter?.title || "Chapter"} onClose={() => setShowTypeset(false)} />}
         {showExportPreview && <ExportPreviewMatrix chapter={activeChapter} onClose={() => setShowExportPreview(false)} />}
-        {lineageChar && <GenerationLineage images={lineageChar.moodBoard} onClose={() => setLineageChar(null)} />}
+        {imageLibraryOpen && <ProjectImageLibrary project={project} onClose={() => setImageLibraryOpen(false)}
+          onJump={(im) => {
+            if (im.sourceType === "character" && im.sourceId) { setActiveTab("characters"); setEditingCharId(im.sourceId); }
+            else if (im.sourceType === "world" && im.sourceId) { setActiveTab("world"); setExpandedWorldIds(prev => new Set([...prev, im.sourceId])); }
+          }} />}
+        {lineageChar && <GenerationLineage images={(project?.characters || []).find(x => x.id === lineageChar.id)?.moodBoard || lineageChar.moodBoard} regenBusyId={lineageRegenBusy} onClose={() => setLineageChar(null)}
+          onRegenerate={async (srcImg) => {
+            if (!settings.apiKey) { showToast("Add an API key in Settings first", "error"); return; }
+            if (!srcImg.genPrompt) return;
+            setLineageRegenBusy(srcImg.id);
+            showToast("Generating variation…", "info");
+            try {
+              const img = await _genSingleImageRef.current(srcImg.genPrompt, "3:4", null);
+              if (img) {
+                const c = (project?.characters || []).find(x => x.id === lineageChar.id);
+                const prev = c?.moodBoard || [];
+                updateCharById(lineageChar.id, "moodBoard", [...prev, { id: uid(), data: img, caption: (srcImg.caption || srcImg.genKind || "image") + " (variation)", addedAt: new Date().toISOString(), genKind: srcImg.genKind, genPrompt: srcImg.genPrompt, parentId: srcImg.id }]);
+                showToast("Variation added", "success");
+              } else showToast("Generation failed", "error");
+            } catch { showToast("Generation failed", "error"); }
+            finally { setLineageRegenBusy(null); }
+          }} />}
         {editorialChar && <EditorialStudioModal char={editorialChar} isGenerating={editorialBusy} onGenerate={handleEditorialGenerate} onClose={() => setEditorialChar(null)} />}
         {showLineup && <ScaleLineup characters={project?.characters} onClose={() => setShowLineup(false)} />}
         {renameDialog && (
@@ -24848,12 +25309,12 @@ Speech pattern: ${char.speechPattern || ""}` },
         )}
 		{flushConfirm && (
           <div style={{ position: "fixed", inset: 0, zIndex: 9999, background: "rgba(0,0,0,0.55)", backdropFilter: "blur(4px)", display: "flex", alignItems: "center", justifyContent: "center", animation: "nf-fadeIn 0.12s ease-out" }} onClick={() => setFlushConfirm(false)}>
-            <div role="button" tabIndex={0} onClick={e => e.stopPropagation()} style={{ background: "var(--nf-dialog-bg)", border: "1px solid var(--nf-error-border)", borderRadius: 3, padding: "28px 32px", maxWidth: 420, width: "90%", boxShadow: "var(--nf-shadow-lg)" }}>
+            <div role="button" tabIndex={0} onClick={e => e.stopPropagation()} style={{ background: "var(--nf-dialog-bg)", border: "1px solid var(--nf-error-border)", borderRadius: 2, padding: "28px 32px", maxWidth: 420, width: "90%", boxShadow: "var(--nf-shadow-lg)" }}>
               <h3 style={{ fontSize: 18, fontFamily: "var(--nf-font-display)", color: "var(--nf-accent)", marginBottom: 24, fontWeight: 500 }}>Flush All App Data</h3>
               <p style={{ fontSize: 13, color: "var(--nf-text-dim)", lineHeight: 1.7, marginBottom: 20 }}>
                 This will permanently delete:
               </p>
-              <ul style={{ fontSize: 12, color: "var(--nf-text-muted)", lineHeight: 1.8, paddingLeft: 20, marginBottom: 26 }}>
+              <ul style={{ fontSize: 12, color: "var(--nf-text-muted)", lineHeight: 1.8, paddingLeft: 20, marginBottom: 24 }}>
                 <li>All projects and chapters</li>
                 <li>All characters, world entries, plot outlines, relationships</li>
                 <li>API key and all settings</li>
@@ -24875,8 +25336,8 @@ Speech pattern: ${char.speechPattern || ""}` },
         {/* Universal Fill Review Modal */}
         {fillReview && (
           <div style={{ position: "fixed", inset: 0, zIndex: 9999, background: "rgba(0,0,0,0.55)", backdropFilter: "blur(4px)", display: "flex", alignItems: "center", justifyContent: "center", animation: "nf-fadeIn 0.12s ease-out" }} onClick={() => setFillReview(null)}>
-            <div role="button" tabIndex={0} onClick={e => e.stopPropagation()} style={{ background: "var(--nf-dialog-bg)", border: "1px solid var(--nf-dialog-border)", borderRadius: 3, padding: "20px 24px", maxWidth: 640, width: "95%", maxHeight: "80vh", overflow: "auto", boxShadow: "var(--nf-shadow-lg)" }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 26 }}>
+            <div role="button" tabIndex={0} onClick={e => e.stopPropagation()} style={{ background: "var(--nf-dialog-bg)", border: "1px solid var(--nf-dialog-border)", borderRadius: 2, padding: "20px 24px", maxWidth: 640, width: "95%", maxHeight: "80vh", overflow: "auto", boxShadow: "var(--nf-shadow-lg)" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 24 }}>
                 <span style={{ fontFamily: "var(--nf-font-display)", fontSize: 18, fontWeight: 400, color: "var(--nf-text)" }}>Review AI Suggestions</span>
                 <button onClick={() => setFillReview(null)} className="nf-btn-icon"><Icons.X /></button>
               </div>
@@ -24968,6 +25429,7 @@ Speech pattern: ${char.speechPattern || ""}` },
               if (go.tab === "characters") setEditingCharId(go.entityId);
             }
           }} />
+        <HelpPanel open={helpOpen} onClose={() => setHelpOpen(false)} onAsk={askHelp} currentTab={activeTab === "write" ? "Write" : activeTab === "characters" ? "Characters" : activeTab === "world" ? "World" : activeTab === "plot" ? "Plot" : activeTab === "relationships" ? "Relationships" : activeTab === "settings" ? "Settings" : "Global"} />
         {cleanView && <CleanViewModal project={project} startChapter={activeChapterIdx} onClose={() => setCleanView(false)} />}
         {showRelWeb && (
           <RelationshipWebModal
@@ -24989,7 +25451,7 @@ Speech pattern: ${char.speechPattern || ""}` },
         )}
 		{pdfExportMode === "menu" && (
           <div style={{ position: "fixed", inset: 0, zIndex: 9998, background: "rgba(0,0,0,0.5)", backdropFilter: "blur(4px)", display: "flex", alignItems: "center", justifyContent: "center", animation: "nf-fadeIn 0.12s ease-out" }} onClick={() => setPdfExportMode(null)}>
-            <div role="button" tabIndex={0} onClick={e => e.stopPropagation()} style={{ background: "var(--nf-dialog-bg)", border: "1px solid var(--nf-dialog-border)", borderRadius: 3, padding: 28, maxWidth: 420, width: "90%", boxShadow: "var(--nf-shadow-lg)", animation: "nf-pop 0.2s ease-out" }}>
+            <div role="button" tabIndex={0} onClick={e => e.stopPropagation()} style={{ background: "var(--nf-dialog-bg)", border: "1px solid var(--nf-dialog-border)", borderRadius: 2, padding: 28, maxWidth: 420, width: "90%", boxShadow: "var(--nf-shadow-lg)", animation: "nf-pop 0.2s ease-out" }}>
               <div style={{ fontFamily: "var(--nf-font-display)", fontSize: 20, fontWeight: 400, marginBottom: 6, color: "var(--nf-text)", letterSpacing: "0.02em" }}>Export PDF</div>
               <div style={{ fontSize: 11, color: "var(--nf-text-muted)", marginBottom: 28, lineHeight: 1.5 }}>
                 <strong style={{ color: "var(--nf-accent)" }}>Draft</strong> — includes characters, world, plot, relationships alongside chapters<br/>
