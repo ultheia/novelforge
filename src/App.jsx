@@ -12924,17 +12924,7 @@ export default function NovelForge() {
   const [showProjectList, setShowProjectList] = useState(true);
   const [editingCharId, setEditingCharId] = useState(null);
   const [charDetailLevel, setCharDetailLevel] = useState("full"); // full | essentials (collapse deep sections for minor characters)
-  // When opening a character, default minor/supporting ones to Essentials to reduce overwhelm; deeper
-  // roles default to Full. The user can still flip it per-session.
   const _lastDetailCharRef = useRef(null);
-  useEffect(() => {
-    if (!editingCharId || _lastDetailCharRef.current === editingCharId) return;
-    _lastDetailCharRef.current = editingCharId;
-    const c = (project?.characters || []).find(x => x.id === editingCharId);
-    if (!c) return;
-    const minorRoles = ["minor", "supporting"];
-    setCharDetailLevel(minorRoles.includes(c.role) && !c.isBulk ? "essentials" : "full");
-  }, [editingCharId, project?.characters]);
   const [charRosterSearch, setCharRosterSearch] = useState(""); // sidebar live filter
   const [charRosterFilter, setCharRosterFilter] = useState("all"); // all | role:* | status:* | incomplete
   const [showGroupForm, setShowGroupForm] = useState(false);
@@ -13507,6 +13497,16 @@ export default function NovelForge() {
 
   // ─── DERIVED STATE ───
   const project = useMemo(() => projects.find(p => p.id === activeProjectId) || null, [projects, activeProjectId]);
+  // When opening a character, default minor/supporting ones to Essentials to reduce overwhelm; deeper
+  // roles default to Full. (Declared after `project` so the dependency array doesn't read it before init.)
+  useEffect(() => {
+    if (!editingCharId || _lastDetailCharRef.current === editingCharId) return;
+    _lastDetailCharRef.current = editingCharId;
+    const c = (project?.characters || []).find(x => x.id === editingCharId);
+    if (!c) return;
+    const minorRoles = ["minor", "supporting"];
+    setCharDetailLevel(minorRoles.includes(c.role) && !c.isBulk ? "essentials" : "full");
+  }, [editingCharId, project?.characters]);
   const activeChapter = useMemo(() => project?.chapters?.[activeChapterIdx] || null, [project, activeChapterIdx]);
 
   // ─── FUN FEATURE EFFECTS (depend on project/activeChapter/settings being defined) ───
