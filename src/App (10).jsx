@@ -785,6 +785,26 @@ const wordCount = (text) => {
   if (!clean) return 0;
   return clean.split(/\s+/).filter(w => w.length > 0).length;
 };
+// Downscale a base64/data-URL image to a small JPEG thumbnail (data URL) for gallery tiles, so large
+// libraries don't render full-resolution images into tiny boxes. Returns the original on any failure.
+const makeThumbnail = (dataUrl, maxPx = 240) => new Promise((resolve) => {
+  if (typeof dataUrl !== "string" || !dataUrl.startsWith("data:")) { resolve(dataUrl); return; }
+  try {
+    const img = new Image();
+    img.onload = () => {
+      try {
+        const scale = Math.min(1, maxPx / Math.max(img.width, img.height));
+        if (scale >= 1) { resolve(dataUrl); return; }
+        const cv = document.createElement("canvas");
+        cv.width = Math.round(img.width * scale); cv.height = Math.round(img.height * scale);
+        cv.getContext("2d").drawImage(img, 0, 0, cv.width, cv.height);
+        resolve(cv.toDataURL("image/jpeg", 0.72));
+      } catch { resolve(dataUrl); }
+    };
+    img.onerror = () => resolve(dataUrl);
+    img.src = dataUrl;
+  } catch { resolve(dataUrl); }
+});
 // ─── PROSE DENSITY / RHYTHM ANALYSIS (feature: heatmap) ───
 // Classifies prose into dialogue / action / exposition by sentence, so pacing can be visualized.
 // Heuristic, deliberately conservative: dialogue = contains quoted speech; action = short,
@@ -4567,6 +4587,7 @@ const createDefaultCharacter = () => ({
   lastUpdatedChapter: 0,
   // ─── FUN: Multi-image mood board ───
   moodBoard: [], // [{id, data, caption, addedAt}] — multiple reference images
+  modelPortfolios: [], // [{id, pkg, label, createdAt, shots:[{id,data,caption,shotKey,...}]}] — agency-style multi-angle sets
   signatureItemImages: [], // [{id, itemName, data, addedAt}]
 });
 
@@ -8187,6 +8208,56 @@ Render a photorealistic environment that matches every environmental detail desc
 // we tell the image model what a real photograph of that physical situation looks like, and let it
 // render. This keeps the feature honest while still producing high-end editorial results.
 
+// ─── MODEL PORTFOLIO SHOT LISTS ───
+// How a modeling agency actually builds a package: a "comp card / Z-card" pairs a beauty headshot
+// with full-length and profile shots; an "agency digitals/polaroids" set is clean & unstyled (front,
+// profiles, back, full-length) so the true person is visible; a "portfolio" is varied editorial looks.
+// The CONSTANT that makes it look professional is consistency — same person, same session, same light.
+// We reproduce that by generating a master beauty shot first, then passing it as an image-to-image
+// reference for every subsequent angle, so identity/wardrobe/lighting stay locked across the set.
+// Each shot: { key, label, framing, direction } where direction is the photographic instruction.
+const MODEL_PORTFOLIO_PACKAGES = {
+  digitals: {
+    label: "Agency Digitals (clean polaroids)",
+    blurb: "Unstyled, true-to-life set agencies use to see the real person: neutral pose, plain backdrop, soft daylight, minimal makeup.",
+    style: "Clean agency digital test: plain seamless light-grey studio backdrop, soft even north-facing daylight, no retouching, minimal or no makeup, natural hair, fitted neutral clothing (plain top), relaxed neutral expression, arms relaxed at sides. Honest, unstyled, true-to-life.",
+    shots: [
+      { key: "beauty", label: "Beauty headshot", framing: "3:4", direction: "Tight head-and-shoulders beauty shot, dead-on to camera, eyes to lens, soft neutral expression, even frontal daylight." },
+      { key: "profile-l", label: "Left profile", framing: "3:4", direction: "Head-and-shoulders, full LEFT profile (90° side view), chin level, neutral expression." },
+      { key: "profile-r", label: "Right profile", framing: "3:4", direction: "Head-and-shoulders, full RIGHT profile (90° side view), chin level, neutral expression." },
+      { key: "threequarter", label: "3/4 turn", framing: "3:4", direction: "Head-and-shoulders at a 3/4 turn (45°) toward the light, eyes to lens." },
+      { key: "full-front", label: "Full-length front", framing: "3:4", direction: "Full-length standing, facing camera, feet together, arms relaxed at sides, whole body in frame head to feet." },
+      { key: "full-back", label: "Full-length back", framing: "3:4", direction: "Full-length standing with BACK to camera, whole body head to feet, showing hair and posture from behind." },
+    ],
+  },
+  compcard: {
+    label: "Comp Card (Z-card looks)",
+    blurb: "The classic composite card: a strong beauty shot plus varied, lightly-styled looks that show range.",
+    style: "Professional comp-card photography, studio quality, flattering directional softbox key light with subtle fill, polished but natural, fashion-catalog standard.",
+    shots: [
+      { key: "beauty", label: "Cover beauty", framing: "3:4", direction: "Striking head-and-shoulders cover shot, dead-on, confident soft gaze to lens, immaculate light." },
+      { key: "smile", label: "Natural smile", framing: "3:4", direction: "Head-and-shoulders, genuine warm smile with visible teeth, eyes engaged, slight 3/4 turn." },
+      { key: "profile", label: "Editorial profile", framing: "3:4", direction: "Elegant side-profile portrait, chin slightly lifted, dramatic but soft side light." },
+      { key: "half", label: "Half-body editorial", framing: "3:4", direction: "Half-body (waist up), relaxed confident posture, one hand raised toward collar or hair, engaged expression." },
+      { key: "full-fashion", label: "Full-length fashion", framing: "3:4", direction: "Full-length fashion stance, weight on one hip, full body head to feet, poised and dynamic." },
+      { key: "movement", label: "Movement", framing: "3:4", direction: "Full-length candid stride or turn mid-motion, natural movement, hair and clothing responding to motion." },
+    ],
+  },
+  portfolio: {
+    label: "Portfolio (editorial range)",
+    blurb: "A varied book showing emotional and lighting range — the styled, expressive end of a model's work.",
+    style: "High-end editorial portfolio photography, magazine quality, expressive lighting, cinematic color grade, photoreal skin texture preserved.",
+    shots: [
+      { key: "beauty", label: "Signature beauty", framing: "3:4", direction: "Signature close beauty portrait, flawless soft light, captivating direct gaze." },
+      { key: "pensive", label: "Pensive", framing: "3:4", direction: "Head-and-shoulders, downcast or away gaze, introspective mood, soft window light." },
+      { key: "intense", label: "Intense", framing: "3:4", direction: "Tight portrait, intense direct stare, harder dramatic key light with deeper shadow." },
+      { key: "joyful", label: "Joyful", framing: "3:4", direction: "Candid laughing or joyful expression, bright airy light, natural energy." },
+      { key: "lowkey", label: "Low-key drama", framing: "4:3", direction: "Half-body in low-key chiaroscuro lighting, single source, deep shadows, cinematic." },
+      { key: "environmental", label: "Environmental", framing: "4:3", direction: "Three-quarter body environmental portrait, soft natural setting suggested behind with shallow depth of field, lifestyle feel." },
+    ],
+  },
+};
+
 const EDITORIAL_STUDIO_DEFAULTS = {
   enabled: false,
   garmentLayers: [],          // [{ id, text }] base→outer, drape described in order (module 1)
@@ -8459,6 +8530,20 @@ const buildEditorialStudioFragments = (studio) => {
 // `appearance` field, `signatureItems`, and occupation/role, because those carry daily clothing and
 // job costume ("teacher" → blazer) that would override the wardrobe set in the studio. Everything
 // about clothing, pose, lens, lighting, etc. comes from the studio controls instead.
+// Heuristic: does this text describe the face (and thus compete with the look-alike face anchor)?
+const _isFacialTrait = (s) => /\b(eye|eyes|iris|nose|lip|lips|mouth|jaw|jawline|cheek|cheekbone|brow|eyebrow|chin|face|facial|forehead|complexion|freckle|dimple)\b/i.test(s || "");
+// Remove facial-feature clauses from free-text appearance so they don't compete with the look-alike
+// face. Splits on sentence/comma boundaries and drops any fragment about facial features, keeping
+// hair, body, height, clothing-style, and general-impression fragments.
+const _stripFacialClauses = (text) => {
+  if (!text || typeof text !== "string") return "";
+  const fragments = text.split(/(?<=[.!?])\s+|,\s*/).map(f => f.trim()).filter(Boolean);
+  const kept = fragments.filter(f => {
+    if (/\bhair\b/i.test(f) && !_isFacialTrait(f.replace(/\bhair\b/gi, ""))) return true;
+    return !_isFacialTrait(f);
+  });
+  return kept.join(", ").replace(/\s+,/g, ",").trim();
+};
 const buildEditorialIdentityBase = (char) => {
   if (!char) return "a person";
   const bits = [];
@@ -8466,12 +8551,17 @@ const buildEditorialIdentityBase = (char) => {
   if (char.gender) bits.push(char.gender);
   if (char.build) bits.push(`${char.build} build`);
   if (char.height) bits.push(char.height);
-  if (char.lookAlike) bits.push(`face closely resembling ${char.lookAlike}`);
+  // The look-alike is the single source of truth for the FACE. We state it emphatically and do not
+  // add any other free-text facial descriptors (eyes/nose/lips/jaw), which would compete with it and
+  // cause the rendered face to drift. Identity = look-alike face + body + permanent marks.
+  if ((char.lookAlike || "").trim()) bits.push(`with the exact face and facial features of ${char.lookAlike.trim()} — the face must clearly and unmistakably be ${char.lookAlike.trim()}'s`);
   if ((char.permanentMarks || "").trim()) bits.push(`permanent body marks: ${char.permanentMarks.trim()}`);
-  // Pinned traits are explicitly locked identity descriptors (e.g. "emerald eyes") — keep them.
-  if (Array.isArray(char.traitPins)) char.traitPins.forEach(p => { if (p.prompt) bits.push(p.prompt); });
+  // Pinned traits are explicit user-locked descriptors; keep only NON-facial ones so they don't fight
+  // the look-alike face (facial pins like eye/nose/lip color are intentionally dropped here).
+  if (Array.isArray(char.traitPins)) char.traitPins.forEach(p => { if (p.prompt && !_isFacialTrait(p.prompt)) bits.push(p.prompt); });
   return bits.filter(Boolean).join(", ") || "a person";
 };
+
 
 // ─── WORLD IMAGE PROMPT GENERATOR ───
 // Generates 4 prompts covering 4 walls of the room from a single spec sheet.
@@ -9124,6 +9214,25 @@ const ExportPreviewMatrix = memo(({ chapter, onClose }) => {
   );
 });
 
+// ─── SHARED LIGHTBOX ───
+// One full-screen image viewer used by the Image Library (and available to other galleries). Shows
+// the image plus optional source/caption/prompt metadata; Escape or backdrop click closes.
+const Lightbox = memo(({ image, onClose }) => {
+  useEffect(() => { const h = (e) => { if (e.key === "Escape") onClose(); }; window.addEventListener("keydown", h); return () => window.removeEventListener("keydown", h); }, [onClose]);
+  if (!image) return null;
+  return createPortal(
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 9300, background: "rgba(0,0,0,0.85)", display: "flex", alignItems: "center", justifyContent: "center", padding: 24, flexDirection: "column", gap: 10 }}>
+      <img src={image.data} alt={image.caption || ""} style={{ maxWidth: "92vw", maxHeight: "78vh", objectFit: "contain", borderRadius: 4 }} onClick={e => e.stopPropagation()} />
+      <div style={{ color: "#ddd", fontSize: 12, textAlign: "center", maxWidth: "80vw" }}>
+        {image.source && <div style={{ fontWeight: 600 }}>{image.source}{image.kind ? ` · ${image.kind}` : ""}</div>}
+        {image.caption && <div style={{ color: "#aaa" }}>{image.caption}</div>}
+        {image.genPrompt && <div style={{ color: "#888", fontSize: 10, marginTop: 4, maxHeight: 80, overflow: "auto" }}>{image.genPrompt}</div>}
+      </div>
+    </div>,
+    document.body
+  );
+});
+
 // ─── UNIFIED PROJECT IMAGE LIBRARY ───
 // Aggregates every image scattered across the project (character portraits, mood boards, signature
 // items; world reference images, additional refs, logos/crests; project draft images) into one
@@ -9132,31 +9241,48 @@ const ExportPreviewMatrix = memo(({ chapter, onClose }) => {
 const collectProjectImages = (project) => {
   if (!project) return [];
   const out = [];
+  // `del` describes how to remove the image: {scope, id, field, key|itemId}. The library's onDelete
+  // uses it to target the right array/object across the project's mixed image-storage shapes.
   const push = (data, meta) => { if (typeof data === "string" && data.startsWith("data:")) out.push({ data, ...meta }); };
   (project.characters || []).forEach(c => {
     if (!c.name && !c.image) return;
-    push(c.image, { source: `Character · ${c.name || "unnamed"}`, kind: "Portrait", sourceType: "character", sourceId: c.id, caption: c.name });
-    (Array.isArray(c.moodBoard) ? c.moodBoard : []).forEach(m => push(m.data, { source: `Character · ${c.name || "unnamed"}`, kind: m.genKind ? `Mood · ${m.genKind}` : "Mood board", sourceType: "character", sourceId: c.id, caption: m.caption, genPrompt: m.genPrompt }));
-    (Array.isArray(c.signatureItemImages) ? c.signatureItemImages : []).forEach(s => push(s.data, { source: `Character · ${c.name || "unnamed"}`, kind: "Signature item", sourceType: "character", sourceId: c.id, caption: s.caption || s.itemName }));
+    push(c.image, { source: `Character · ${c.name || "unnamed"}`, kind: "Portrait", sourceType: "character", sourceId: c.id, caption: c.name, del: { scope: "char", id: c.id, field: "image" } });
+    (Array.isArray(c.moodBoard) ? c.moodBoard : []).forEach(m => push(m.data, { source: `Character · ${c.name || "unnamed"}`, kind: m.genKind ? `Mood · ${m.genKind}` : "Mood board", sourceType: "character", sourceId: c.id, caption: m.caption, genPrompt: m.genPrompt, del: { scope: "char", id: c.id, field: "moodBoard", itemId: m.id } }));
+    (Array.isArray(c.signatureItemImages) ? c.signatureItemImages : []).forEach(s => push(s.data, { source: `Character · ${c.name || "unnamed"}`, kind: "Signature item", sourceType: "character", sourceId: c.id, caption: s.caption || s.itemName, del: { scope: "char", id: c.id, field: "signatureItemImages", itemId: s.id } }));
   });
   (project.worldBuilding || []).forEach(w => {
     if (!w.name) return;
-    push(w.logoImage, { source: `World · ${w.name}`, kind: "Logo / crest", sourceType: "world", sourceId: w.id, caption: w.name });
-    push(w.orgGroupPhoto, { source: `World · ${w.name}`, kind: "Group photo", sourceType: "world", sourceId: w.id, caption: w.name });
+    push(w.logoImage, { source: `World · ${w.name}`, kind: "Logo / crest", sourceType: "world", sourceId: w.id, caption: w.name, del: { scope: "world", id: w.id, field: "logoImage" } });
+    push(w.orgGroupPhoto, { source: `World · ${w.name}`, kind: "Group photo", sourceType: "world", sourceId: w.id, caption: w.name, del: { scope: "world", id: w.id, field: "orgGroupPhoto" } });
     const refs = w.referenceImages;
-    if (refs && typeof refs === "object" && !Array.isArray(refs)) Object.entries(refs).forEach(([k, v]) => push(v, { source: `World · ${w.name}`, kind: `Reference · ${k}`, sourceType: "world", sourceId: w.id, caption: w.name }));
-    (Array.isArray(w.additionalRefs) ? w.additionalRefs : []).forEach(a => push(a.data, { source: `World · ${w.name}`, kind: "Reference", sourceType: "world", sourceId: w.id, caption: a.caption || w.name }));
+    if (refs && typeof refs === "object" && !Array.isArray(refs)) Object.entries(refs).forEach(([k, v]) => push(v, { source: `World · ${w.name}`, kind: `Reference · ${k}`, sourceType: "world", sourceId: w.id, caption: w.name, del: { scope: "world", id: w.id, field: "referenceImages", key: k } }));
+    (Array.isArray(w.additionalRefs) ? w.additionalRefs : []).forEach(a => push(a.data, { source: `World · ${w.name}`, kind: "Reference", sourceType: "world", sourceId: w.id, caption: a.caption || w.name, del: { scope: "world", id: w.id, field: "additionalRefs", itemId: a.id } }));
   });
-  (project.images || []).forEach(im => push(im.data || im.url, { source: "Project", kind: "Saved image", sourceType: "project", caption: im.caption }));
+  (project.images || []).forEach(im => push(im.data || im.url, { source: "Project", kind: "Saved image", sourceType: "project", caption: im.caption, del: { scope: "project", field: "images", itemId: im.id } }));
   return out;
 };
 
-const ProjectImageLibrary = memo(({ project, onClose, onJump }) => {
+const ProjectImageLibrary = memo(({ project, onClose, onJump, onDelete, onDownload }) => {
   const all = useMemo(() => collectProjectImages(project), [project]);
   const [filter, setFilter] = useState("all"); // all | character | world | project
   const [q, setQ] = useState("");
   const [lightbox, setLightbox] = useState(null);
-  useEffect(() => { const h = (e) => { if (e.key === "Escape") { lightbox ? setLightbox(null) : onClose(); } }; window.addEventListener("keydown", h); return () => window.removeEventListener("keydown", h); }, [lightbox, onClose]);
+  const [thumbs, setThumbs] = useState({}); // data-url -> downscaled thumbnail
+  useEffect(() => { const h = (e) => { if (e.key === "Escape" && !lightbox) onClose(); }; window.addEventListener("keydown", h); return () => window.removeEventListener("keydown", h); }, [lightbox, onClose]);
+  // Downscale visible images to thumbnails so large libraries stay light. Best-effort, cached by data.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      for (const im of all) {
+        if (cancelled) break;
+        if (thumbs[im.data]) continue;
+        const t = await makeThumbnail(im.data, 240);
+        if (cancelled) break;
+        setThumbs(prev => prev[im.data] ? prev : { ...prev, [im.data]: t });
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [all]);
   const shown = all.filter(im => (filter === "all" || im.sourceType === filter) && (!q.trim() || `${im.source} ${im.kind} ${im.caption || ""}`.toLowerCase().includes(q.trim().toLowerCase())));
   const counts = { all: all.length, character: all.filter(i => i.sourceType === "character").length, world: all.filter(i => i.sourceType === "world").length, project: all.filter(i => i.sourceType === "project").length };
   return createPortal(
@@ -9184,29 +9310,24 @@ const ProjectImageLibrary = memo(({ project, onClose, onJump }) => {
               {shown.map((im, i) => (
                 <div key={i} style={{ display: "flex", flexDirection: "column", gap: 4 }}>
                   <div onClick={() => setLightbox(im)} style={{ position: "relative", aspectRatio: "1/1", borderRadius: 2, overflow: "hidden", border: "1px solid var(--nf-border)", background: "var(--nf-bg-deep)", cursor: "zoom-in" }} title={im.caption || im.kind}>
-                    <img loading="lazy" src={im.data} alt={im.caption || ""} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                    <img loading="lazy" src={thumbs[im.data] || im.data} alt={im.caption || ""} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
                     <span style={{ position: "absolute", top: 3, left: 3, fontSize: 9, padding: "1px 5px", borderRadius: 2, background: "rgba(0,0,0,0.6)", color: "#fff", textTransform: "uppercase", letterSpacing: "0.04em" }}>{im.kind}</span>
                   </div>
                   <div style={{ fontSize: 10, color: "var(--nf-text-muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{im.source}</div>
-                  {onJump && im.sourceId && (
-                    <button onClick={() => { onJump(im); onClose(); }} className="nf-btn-micro" style={{ fontSize: 9, padding: "1px 5px" }}>Go to source</button>
-                  )}
+                  <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                    {onJump && im.sourceId && (
+                      <button onClick={() => { onJump(im); onClose(); }} className="nf-btn-micro" style={{ fontSize: 9, padding: "1px 5px" }}>Source</button>
+                    )}
+                    {onDownload && <button onClick={() => onDownload(im)} className="nf-btn-micro" style={{ fontSize: 9, padding: "1px 5px" }} title="Download this image">↓</button>}
+                    {onDelete && im.del && <button onClick={() => onDelete(im)} className="nf-btn-micro" style={{ fontSize: 9, padding: "1px 5px", color: "var(--nf-danger, #c0504d)" }} title="Delete this image">✕</button>}
+                  </div>
                 </div>
               ))}
             </div>
           )}
         </div>
       </div>
-      {lightbox && (
-        <div onClick={() => setLightbox(null)} style={{ position: "fixed", inset: 0, zIndex: 9200, background: "rgba(0,0,0,0.85)", display: "flex", alignItems: "center", justifyContent: "center", padding: 24, flexDirection: "column", gap: 10 }}>
-          <img src={lightbox.data} alt={lightbox.caption || ""} style={{ maxWidth: "92vw", maxHeight: "78vh", objectFit: "contain", borderRadius: 4 }} />
-          <div style={{ color: "#ddd", fontSize: 12, textAlign: "center", maxWidth: "80vw" }}>
-            <div style={{ fontWeight: 600 }}>{lightbox.source} · {lightbox.kind}</div>
-            {lightbox.caption && <div style={{ color: "#aaa" }}>{lightbox.caption}</div>}
-            {lightbox.genPrompt && <div style={{ color: "#888", fontSize: 10, marginTop: 4, maxHeight: 80, overflow: "auto" }}>{lightbox.genPrompt}</div>}
-          </div>
-        </div>
-      )}
+      <Lightbox image={lightbox} onClose={() => setLightbox(null)} />
     </div>,
     document.body
   );
@@ -10047,6 +10168,22 @@ const FEATURE_GUIDE = [
   { tab: "Characters", name: "Editorial Studio", what: "Full photographic styling of a character: pose, framing, camera angle, expression, clothing, lens/film, lighting, wind, water, particles, accessories, backdrop, color grade, and free-form director's notes. Identity (face + permanent marks) carries over; daily clothing and occupation do NOT.", how: "Characters → open a character → 'Editorial Studio…'. Every dropdown has a Custom option. The live preview shows the exact prompt.", keywords: "editorial studio pose clothing wardrobe lens lighting backdrop camera photo styling outfit wind water" },
   { tab: "Characters", name: "Mood board + lightbox", what: "Collect reference images per character; click any to view full-size with prev/next.", how: "Characters → open a character → Mood Board section.", keywords: "mood board images reference gallery lightbox photos" },
   { tab: "Characters", name: "Fill empty / AI fields", what: "Let the AI fill blank character fields (with a review step).", how: "Characters → open a character → 'Fill Empty'.", keywords: "autofill fill ai fields blank generate character" },
+  { tab: "Characters", name: "Essentials vs Full detail", what: "Collapse a character down to the core sections (Identity, Appearance, Story, Notes) or show every deep section. Minor and supporting characters open in Essentials automatically so you're not faced with the full ~60-field form.", how: "Characters → open a character → the Essentials / Full toggle in the section jump-bar.", keywords: "essentials full detail minor supporting collapse hide sections simple short form length" },
+  { tab: "Characters", name: "Living State (AI-maintained)", what: "The character's current emotional state, obligations owed, and what they currently know — updated by the AI as the story progresses, and now navigable from the jump-bar with its own completeness dot.", how: "Characters → open a character → 'Living State' (marked AI-MAINTAINED).", keywords: "living state emotional obligations knowledge ai maintained current mood tracking" },
+  { tab: "Characters", name: "Secrets — open vs spoiler-locked", what: "Two tiers of secrets: 'Open' ones the AI always knows and can weave in, and 'Spoiler-locked' ones hidden from the AI until you flip the reveal switch (it also flips automatically when the reveal is detected in your prose).", how: "Characters → open a character → Story & Backstory → Secrets.", keywords: "secrets hidden spoiler reveal locked twist gate ai hide" },
+  // World (additions)
+  { tab: "World", name: "World search, type filter & tree view", what: "Search world entries by name/type/description, filter to one category, or switch to a tree view that nests locations under their parent place.", how: "World tab → the search box, type dropdown, and '⌶ Tree' toggle above the list.", keywords: "world search filter category type tree nested location hierarchy find" },
+  { tab: "World", name: "Nested locations (Nested Within)", what: "Place a location inside a larger one (a tavern within a city). The parent and its children are shown on each entry and fed to the AI as geographic context; the tree view groups them visually.", how: "World → open a Location → 'Nested Within' selector.", keywords: "nested within parent child location contains geography hierarchy tree place inside" },
+  // Plot (additions)
+  { tab: "Plot", name: "Plot search & filters", what: "Search chapters, beats, and summaries, or filter the outline by a character (POV or in-cast) or by scene type.", how: "Plot tab → search box and the character / scene-type dropdowns above the outline.", keywords: "plot search filter pov character scene type find chapter beat" },
+  { tab: "Plot", name: "Reorder chapters (up/down)", what: "Move a plot entry up or down; the linked prose chapter moves with it so the outline and manuscript stay in the same order.", how: "Plot tab → the up/down arrows on a collapsed entry (or in the expanded view).", keywords: "reorder move up down chapter order sort rearrange plot sequence" },
+  { tab: "Plot", name: "Tension curve", what: "A sparkline of each chapter's tension across the whole book, so you can see your pacing arc and spot flat stretches.", how: "Plot tab → shown above the outline once at least two chapters have a tension value (set tension per chapter in the Write tab).", keywords: "tension curve pacing arc graph chart sparkline structure rising climax momentum" },
+  { tab: "Plot", name: "Act / part grouping", what: "Tag entries with a freeform act or part name (Act I, Setup, Part Two — anything); entries sharing a name group under a header in the outline.", how: "Plot tab → open an entry → 'Act / Part' field (reused names autocomplete).", keywords: "act part structure group header three-act section division beat sheet organize" },
+  { tab: "Plot", name: "Beat completion & word target", what: "Check off beats as you write them (the header shows x/y done), and see written-vs-target word counts per chapter.", how: "Plot tab → beat checkboxes in an expanded entry; the word target is set per entry and shows on the collapsed row.", keywords: "beat done complete checkbox progress word target count written tracking goal" },
+  // Images
+  { tab: "Global", name: "Image Library", what: "One place to browse every image in the project — character portraits and mood boards, world references and logos, saved images — with search, source filters, full-size lightbox, jump-to-source, download, and delete.", how: "Click the ▦ button at the bottom-left of the workspace.", keywords: "image library gallery all images browse manage download delete find pictures photos" },
+  { tab: "Characters", name: "Regenerate / Vary an image", what: "Make a new variation of any generated image from its stored prompt; the result is added to the lineage tree as a child so you can trace what came from what.", how: "Characters → open a character → 'View generation lineage' → '↻ Vary' on any image.", keywords: "regenerate vary variation image lineage prompt reroll again branch iterate" },
+  { tab: "Characters", name: "Model Portfolio (multi-angle agency set)", what: "Generates a full set of separate hyperreal photos from many angles — like a modeling agency comp card or digitals. Three packages: Agency Digitals (clean unstyled polaroids — front, both profiles, 3/4, full-length front/back), Comp Card (varied lightly-styled looks), and Portfolio (editorial emotional range). The first beauty shot becomes an identity anchor that every other angle is generated to match, so the face, hair, and wardrobe stay consistent across the whole set.", how: "Characters → open a character → Generate Reference Art → 📸 Model Portfolio → pick a package (needs an API key). Each set takes a few minutes; shots land in a saved portfolio and in the mood board.", keywords: "model portfolio agency comp card z-card digitals polaroids angles turnaround multi-angle modeling consistent hyperreal photo shoot session headshot full-length profile" },
   // Relationships
   { tab: "Relationships", name: "Draft a relationship with AI", what: "Rewrites a whole relationship — dynamic, chemistry, conflict, both perspectives, arc, and structured fields — grounded in both characters. Applied instantly with one-click undo.", how: "Relationships → a pair → 'Draft (AI)'. Or 'Draft All with AI' in the header for every pair.", keywords: "relationship draft ai generate dynamic chemistry conflict perspective undo" },
   { tab: "Relationships", name: "Fill empty (gentle)", what: "Fills only the blank relationship fields, with a review step — won't overwrite your writing.", how: "Relationships → a pair → 'Fill Empty'.", keywords: "relationship fill empty gentle autofill" },
@@ -12866,6 +13003,7 @@ export default function NovelForge() {
   const [imageLibraryOpen, setImageLibraryOpen] = useState(false);
   const [editorialChar, setEditorialChar] = useState(null); // character whose Editorial Studio is open
   const [editorialBusy, setEditorialBusy] = useState(false);
+  const [portfolioBusy, setPortfolioBusy] = useState(null); // { charId, pkg, done, total, label } while generating
   const [showExportPreview, setShowExportPreview] = useState(false);
   const [showBreathingPauser, setShowBreathingPauser] = useState(false);
   const [showChapterCelebration, setShowChapterCelebration] = useState(false);
@@ -14682,13 +14820,16 @@ Then 2-3 sentences describing the specific scene idea, character actions, and em
     const bits = [];
     if (char.age) bits.push(`${char.age} years old`);
     if (char.gender) bits.push(char.gender);
-    if (char.appearance) bits.push(char.appearance);
+    // Use the appearance free-text but strip facial-feature clauses — the look-alike owns the face,
+    // and re-describing eyes/nose/jaw here would compete with it and cause the face to drift.
+    const nonFacialAppearance = _stripFacialClauses(char.appearance);
+    if (nonFacialAppearance) bits.push(nonFacialAppearance);
     if (char.build) bits.push(`build: ${char.build}`);
     if (char.signatureItems) bits.push(`wearing ${char.signatureItems}`);
-    // If a look-alike face reference is set, anchor the face to it (matches the scene-prompt convention).
-    if (char.lookAlike) bits.push(`face closely resembling ${char.lookAlike}`);
-    // Honor any pinned traits (see spatial trait pinning) for consistency.
-    if (Array.isArray(char.traitPins)) char.traitPins.forEach(p => { if (p.prompt) bits.push(p.prompt); });
+    // Look-alike is the single face authority — stated emphatically, always.
+    if ((char.lookAlike || "").trim()) bits.push(`with the exact face and facial features of ${char.lookAlike.trim()} — the face must clearly and unmistakably be ${char.lookAlike.trim()}'s`);
+    // Honor pinned traits, but drop facial ones so they don't fight the look-alike.
+    if (Array.isArray(char.traitPins)) char.traitPins.forEach(p => { if (p.prompt && !_isFacialTrait(p.prompt)) bits.push(p.prompt); });
     const base = bits.filter(Boolean).join(", ");
     // Photorealistic, photographic-direction prompt — mirrors the scene image-prompt generator:
     // describe a real person to a photographer, visuals only, skin-pore realism, candid capture.
@@ -14739,11 +14880,67 @@ Then 2-3 sentences describing the specific scene idea, character actions, and em
         // (the most recent moodBoard entry), so the gallery can show a branching tree.
         const prev = char.moodBoard || [];
         const parentId = prev.length ? prev[prev.length - 1].id : null;
-        updateCharById(char.id, "moodBoard", [...prev, { id: uid(), data: img, caption, addedAt: new Date().toISOString(), genKind: variant, genPrompt: prompt, parentId }]);
+        updateCharById(char.id, "moodBoard", [...prev, { id: uid(), data: img, caption, addedAt: new Date().toISOString(), genKind: variant, genPrompt: prompt, parentId, aspectRatio: ratio, sceneChapterIdx: activeChapterIdx }]);
         showToast("Image added to mood board", "success");
       }
     } catch (e) { showToast("Generation failed", "error"); }
-  }, [settings.apiKey, buildCharacterArtPrompt, updateCharById, showToast, project?.styleLockImage]);
+  }, [settings.apiKey, buildCharacterArtPrompt, updateCharById, showToast, project?.styleLockImage, activeChapterIdx]);
+
+  // ─── MODEL PORTFOLIO GENERATOR ───
+  // Produces a full agency-style set of consistent shots. The professional trick: generate the master
+  // beauty shot first, then feed it back as an image-to-image reference for every other angle so the
+  // face, wardrobe, hair, and lighting stay locked across the whole set (the agency "same session"
+  // principle). Each shot is a separate full-resolution image, captioned and saved as one portfolio.
+  const generateModelPortfolio = useCallback(async (char, pkgKey) => {
+    if (!settings.apiKey) { showToast("Add an API key in Settings first", "error"); return; }
+    const pkg = MODEL_PORTFOLIO_PACKAGES[pkgKey];
+    if (!pkg) return;
+    const identity = buildEditorialIdentityBase(char);
+    const wardrobe = (char.signatureItems || "").trim();
+    // Shared photoreal contract applied to every shot in the set.
+    const realism = "Render as a real human being, photographed, not illustrated: lifelike skin with visible pores, fine texture, subtle imperfections, natural subsurface tones, realistic individual hair strands, true-to-life fabric. Shot on a full-frame camera, 85mm lens. Visuals only; nothing a camera could not capture. No illustration, no painting, no CGI look.";
+    const styleRef = project?.styleLockImage && project.styleLockImage.startsWith("data:") ? project.styleLockImage : null;
+    const portfolioId = uid();
+    const total = pkg.shots.length;
+    setPortfolioBusy({ charId: char.id, pkg: pkgKey, done: 0, total, label: pkg.shots[0].label });
+    showToast(`Generating ${pkg.label} — ${total} shots…`, "info");
+    let masterImg = null;
+    const results = [];
+    try {
+      for (let i = 0; i < pkg.shots.length; i++) {
+        const shot = pkg.shots[i];
+        setPortfolioBusy({ charId: char.id, pkg: pkgKey, done: i, total, label: shot.label });
+        const prompt = `Photorealistic photograph of ${char.name || "a person"} — ${identity}${wardrobe ? `, wearing ${wardrobe}` : ""}. ` +
+          `${pkg.style} ${shot.direction} ` +
+          (masterImg ? "CRITICAL: this is the SAME person as the reference image — keep the exact same face, bone structure, hair, skin, and wardrobe; only the angle, framing, pose, and expression change. " : "") +
+          realism;
+        // Identity lock: once we have the master shot, pass it (plus optional style ref) as references.
+        const refs = masterImg ? [masterImg, ...(styleRef ? [styleRef] : [])].slice(0, 4) : (styleRef ? [styleRef] : null);
+        let img = null;
+        try { img = await _genSingleImageRef.current(prompt, shot.framing, refs); } catch { img = null; }
+        if (img) {
+          if (!masterImg) masterImg = img; // first successful shot becomes the identity anchor
+          results.push({ id: uid(), data: img, caption: shot.label, shotKey: shot.key, addedAt: new Date().toISOString(), genKind: `portfolio:${pkgKey}`, genPrompt: prompt, aspectRatio: shot.framing, portfolioId });
+        }
+      }
+      if (results.length > 0) {
+        const c = (project?.characters || []).find(x => x.id === char.id) || char;
+        const existing = Array.isArray(c.modelPortfolios) ? c.modelPortfolios : [];
+        const portfolio = { id: portfolioId, pkg: pkgKey, label: pkg.label, createdAt: new Date().toISOString(), shots: results };
+        updateCharById(char.id, "modelPortfolios", [portfolio, ...existing]);
+        // Also drop them into the mood board so they flow into the lineage + image library.
+        const prevMood = c.moodBoard || [];
+        updateCharById(char.id, "moodBoard", [...prevMood, ...results.map(r => ({ ...r, caption: `${pkg.label}: ${r.caption}` }))]);
+        showToast(`${pkg.label} ready — ${results.length}/${total} shots`, "success");
+      } else {
+        showToast("Portfolio generation failed", "error");
+      }
+    } catch (e) {
+      showToast("Portfolio generation failed", "error");
+    } finally {
+      setPortfolioBusy(null);
+    }
+  }, [settings.apiKey, updateCharById, showToast, project?.styleLockImage, project?.characters]);
 
   // Editorial Studio: build the base photoreal prompt, append the structured studio fragments,
   // and run a single image generation. Aspect ratio adapts to whether water/full-body framing is on.
@@ -14780,13 +14977,13 @@ Then 2-3 sentences describing the specific scene idea, character actions, and em
       if (img) {
         const prev = char.moodBoard || [];
         const parentId = prev.length ? prev[prev.length - 1].id : null;
-        updateCharById(char.id, "moodBoard", [...prev, { id: uid(), data: img, caption: "Editorial Studio", addedAt: new Date().toISOString(), genKind: "editorial-studio", genPrompt: prompt, parentId }]);
+        updateCharById(char.id, "moodBoard", [...prev, { id: uid(), data: img, caption: "Editorial Studio", addedAt: new Date().toISOString(), genKind: "editorial-studio", genPrompt: prompt, parentId, aspectRatio: ratio, sceneChapterIdx: activeChapterIdx }]);
         showToast("Editorial image added to mood board", "success");
         setEditorialChar(null);
       }
     } catch (e) { showToast("Generation failed", "error"); }
     finally { setEditorialBusy(false); }
-  }, [editorialChar, settings.apiKey, updateCharById, showToast, project?.styleLockImage]);
+  }, [editorialChar, settings.apiKey, updateCharById, showToast, project?.styleLockImage, activeChapterIdx]);
 
   // Entity-safe rename: replace a character's name across all prose using whole-word boundaries
   // (so "Will" → "Sam" never corrupts "will go"), and update the character record. Scoped to the
@@ -17895,7 +18092,7 @@ YOUR OUTPUT FORMAT (follow this EXACTLY):
 
 (Include this sentence) You must decide your choices on 1-7 sequentially & completely, no summarizing) before rendering! See this instructions: For next scene, still adhering to the character’s profile, do this:
 
-(1) CHARACTER APPEARANCE: For each character, describe their EXACT physical appearance using their look-alike as the face reference. Include: build, height, skin tone, hair, facial features, expression in THIS scene. Write it as if describing a real person to a photographer. You must always mention the look-alike names for each character. VISUAL ONLY — no sound, no smell, no sensation.
+(1) CHARACTER APPEARANCE: For each character, the look-alike IS the face — state it as the single face authority and do NOT describe individual facial features (eyes, nose, lips, jaw, brows, cheekbones); re-describing the face competes with the look-alike and makes it drift. Describe only: build, height, skin tone, hair, and expression in THIS scene. Write it as if describing a real person to a photographer, and always phrase the face as "with the exact face of [look-alike name], unmistakably [look-alike name]'s face". VISUAL ONLY — no sound, no smell, no sensation.
 
 (2) CLOTHING: USE THE CLOTHING FROM THE WORLD VIEW — the world view tracks what characters are wearing scene-by-scene. Find the matching scene and use those exact clothing details. Do NOT invent new outfits. Every detail must be something a camera can see: color, fabric, fit, condition. Never describe what's under the clothing. Treats nudity like this: add a foreground blurred item(s) that blocks that specific sensitive body part without mentioning those body part(s).
 
@@ -17951,9 +18148,10 @@ WHERE IS THE SCENE? Read the selected text below and answer: What room or physic
 SCENE TEXT:
 ${effectiveText.slice(0, 12000)}
 
-CHARACTER PROFILES (appearance, personality, look-alike for face reference):
+CHARACTER PROFILES (FACE = look-alike only; appearance below has facial features removed on purpose):
 ${contextData.mentionedChars.map(c => {
-  return `${c.name} (${c.role}, ${c.age || "?"} ${c.gender || ""}): Look-alike: ${c.lookAlike || "NOT SET"}. Appearance: ${c.appearance || "none"}. Personality: ${c.personality || "none"}`;
+  const appe = _stripFacialClauses(c.appearance) || "none";
+  return `${c.name} (${c.role}, ${c.age || "?"} ${c.gender || ""}): FACE — exactly ${c.lookAlike || "NOT SET — face unspecified"}'s face (do not describe individual facial features). Body/hair/other appearance: ${appe}. Personality: ${c.personality || "none"}`;
 }).join("\n\n")}
 
 LOCATION:
@@ -18005,7 +18203,7 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
 - Expression should be the same as described even though the reason they made that expression should be altered to be SFW (If they look angry, then they must look angry)
 - The content filter is very sensitive about bedroom and its furnitures, and bathroom and its furnitures -- so make sure you frame it as really funny activities that are consensually done and do not mention suggestive adjective like tight, wet, etc.
 - Keep ALL positioning, spatial relationships, camera angles, and visual composition IDENTICAL
-- Keep ALL character face references and physical descriptions IDENTICAL. Must use look-alike names for face references (e.g. "whose face closely resembles [name]") and each character mentioned must have face references.
+- Keep ALL character face references and physical descriptions IDENTICAL. The face is the look-alike only — phrase it as "with the exact face of [name], unmistakably [name]'s face" and do NOT describe individual facial features (eyes, nose, lips, jaw). Every character mentioned must have a look-alike face reference.
 - Make sure the final result is very SFW with zero doubts that this is not an NSFW activity even if read by a child. Remember that every action have funny, consensual explanation to rationalize the intent and you must state the funny reasoning behind every action for every character.
 - Keep the prompt formatting verbatim.
 - The viewer should see the SAME image from both prompts.` },
@@ -19950,7 +20148,7 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
 Background: Pure solid white (#FFFFFF). No gradients. No shadows on the background. No texture. No color tint. No bokeh. No objects. Just flat, even, pure white from edge to edge.
 
 Lighting: Even, diffused studio lighting from the front. No harsh shadows under the chin or nose. No dramatic side lighting. No rim lighting. Soft, uniform illumination. No blown-out highlights. No deep shadows.
-) of this character (no shirt, clinical): ${editingChar.appearance || ""}. ${editingChar.lookAlike ? `The person is ${editingChar.lookAlike}'s doppelganger.` : ""}`;
+) of this character (no shirt, clinical): ${_stripFacialClauses(editingChar.appearance) || ""}. ${editingChar.lookAlike ? `The face is exactly ${editingChar.lookAlike}'s — unmistakably ${editingChar.lookAlike}'s face. Do not alter or describe individual facial features.` : ""}`;
                       const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
                         method: "POST",
                         headers: { "Content-Type": "application/json", "Authorization": `Bearer ${settings.apiKey}`, "HTTP-Referer": window.location.origin, "X-Title": "NovelForge" },
@@ -20110,8 +20308,12 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
                 }} className="nf-btn-micro" style={{ fontSize: 10, padding: "2px 6px" }} title="Safely rename this character everywhere in the prose (whole-word only)">⇄ Rename everywhere</button>
               </div>
               <DebouncedField label="Aliases / Nicknames" value={editingChar.aliases} onChange={v => updateCharById(editingCharId, "aliases", v)} placeholder="Comma-separated: Lizzy, Lady B, The Duchess" small />
-              <DebouncedField label="Look-Alike (for image prompts)" value={editingChar.lookAlike} onChange={v => updateCharById(editingCharId, "lookAlike", v)} placeholder="Famous person name, e.g. Joe Manganiello, Ana de Armas" small />
-              {/* D5: Group role + gender + pronouns, then age + status + appearance ch */}
+              <DebouncedField label="Look-Alike — face anchor (required for consistent images)" value={editingChar.lookAlike} onChange={v => updateCharById(editingCharId, "lookAlike", v)} placeholder="Famous person name, e.g. Joe Manganiello, Ana de Armas" small />
+              {!(editingChar.lookAlike || "").trim() && (
+                <div style={{ fontSize: 11, color: "var(--nf-accent)", margin: "-4px 0 8px", display: "flex", alignItems: "center", gap: 6 }}>
+                  ⚠ Set a look-alike — it's the single anchor for this character's face across every generated image. Without it, the face will drift between shots.
+                </div>
+              )}              {/* D5: Group role + gender + pronouns, then age + status + appearance ch */}
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "8px 12px" }}>
                 <SelectField label="Role" value={editingChar.role} onChange={v => updateCharById(editingCharId, "role", v)} options={ROLE_OPTIONS} />
                 <SelectField label="Gender" value={editingChar.gender} onChange={v => updateCharById(editingCharId, "gender", v)} options={GENDER_OPTIONS} placeholder="Select..." />
@@ -20205,7 +20407,7 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
             {/* D4: Section — Character */}
             <div className="nf-char-section" id="charsec-appearance" style={{ scrollMarginTop: 110 }}>
               <div className="nf-char-section-label" style={{ display: "flex", alignItems: "center" }}><span style={{ flex: 1 }}>Character & Appearance</span>{(() => { const c = charSectionCompleteness(CHAR_EDITOR_SECTIONS[1], editingChar); return <CharSecDot c={c} />; })()}</div>
-              <DebouncedField label="Appearance" value={editingChar.appearance} onChange={v => updateCharById(editingCharId, "appearance", v)} multiline placeholder="Coloring, hair, face, clothing style, overall impression — anything not already in Identity (height, build, and permanent marks live there)..." />
+              <DebouncedField label="Appearance" value={editingChar.appearance} onChange={v => updateCharById(editingCharId, "appearance", v)} multiline placeholder="Coloring, hair, clothing style, overall impression. (For images, the face comes from the Look-Alike — facial features you write here are skipped in image prompts to avoid fighting that anchor.)" />
               <DebouncedField label="Personality" value={editingChar.personality} onChange={v => updateCharById(editingCharId, "personality", v)} multiline placeholder="Core traits, temperament, quirks, contradictions..." />
               <DebouncedField label="Speech & Voice" value={editingChar.speechPattern} onChange={v => updateCharById(editingCharId, "speechPattern", v)} multiline placeholder="Vocabulary, accent, verbal tics, how they sound under stress..." small />
               <div className="nf-field" style={{ marginTop: 6 }}>
@@ -20483,6 +20685,56 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
                       <option value="surprised">Surprised</option>
                     </select>
                   </div>
+                </div>
+
+                {/* ─── MODEL PORTFOLIO — agency-style consistent multi-angle set ─── */}
+                <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid var(--nf-border)" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
+                    <span style={{ fontSize: 12, fontWeight: 600, color: "var(--nf-text)" }}>📸 Model Portfolio</span>
+                    <span style={{ fontSize: 10, color: "var(--nf-text-muted)" }}>consistent multi-angle set, like a modeling agency package</span>
+                  </div>
+                  <div style={{ fontSize: 11, color: "var(--nf-text-muted)", marginBottom: 8, lineHeight: 1.5 }}>
+                    Generates a full set of separate, hyperreal shots from many angles. The first beauty shot becomes the identity anchor — every other angle is rendered to match it, so the face, hair, and wardrobe stay consistent across the whole set (the agency "same session" principle).
+                  </div>
+                  {portfolioBusy && portfolioBusy.charId === editingCharId ? (
+                    <div style={{ padding: "10px 12px", background: "var(--nf-bg-deep)", border: "1px solid var(--nf-accent)", borderRadius: 2 }}>
+                      <div style={{ fontSize: 11, color: "var(--nf-accent)", marginBottom: 6 }}>Generating {MODEL_PORTFOLIO_PACKAGES[portfolioBusy.pkg]?.label} — shot {portfolioBusy.done + 1} of {portfolioBusy.total}: {portfolioBusy.label}…</div>
+                      <div style={{ height: 4, background: "var(--nf-border)", borderRadius: 2, overflow: "hidden" }}>
+                        <div style={{ width: `${Math.round((portfolioBusy.done / portfolioBusy.total) * 100)}%`, height: "100%", background: "var(--nf-accent)", transition: "width 0.3s" }} />
+                      </div>
+                      <div style={{ fontSize: 10, color: "var(--nf-text-muted)", marginTop: 6 }}>Each shot is a full generation — this takes a few minutes. Keep this tab open.</div>
+                    </div>
+                  ) : (
+                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                      {Object.entries(MODEL_PORTFOLIO_PACKAGES).map(([key, pkg]) => (
+                        <button key={key} onClick={() => generateModelPortfolio(editingChar, key)} disabled={!!portfolioBusy}
+                          className="nf-btn-micro" style={{ fontSize: 11, opacity: portfolioBusy ? 0.5 : 1 }} title={pkg.blurb}>
+                          {pkg.label} ({pkg.shots.length})
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  {/* Saved portfolios */}
+                  {(editingChar.modelPortfolios || []).map(pf => (
+                    <div key={pf.id} style={{ marginTop: 10, padding: "8px 10px", background: "var(--nf-bg-deep)", borderRadius: 2, border: "1px solid var(--nf-border)" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
+                        <span style={{ fontSize: 11, fontWeight: 600, color: "var(--nf-text)" }}>{pf.label}</span>
+                        <span style={{ fontSize: 10, color: "var(--nf-text-muted)" }}>{pf.shots.length} shots · {new Date(pf.createdAt).toLocaleDateString()}</span>
+                        <button onClick={() => updateCharById(editingCharId, "modelPortfolios", (editingChar.modelPortfolios || []).filter(x => x.id !== pf.id))}
+                          className="nf-btn-micro" style={{ fontSize: 9, padding: "1px 5px", marginLeft: "auto", color: "var(--nf-danger, #c0504d)" }} title="Remove this portfolio (images remain in the mood board)">✕</button>
+                      </div>
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(80px, 1fr))", gap: 6 }}>
+                        {pf.shots.map(s => (
+                          <div key={s.id} style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                            <div style={{ aspectRatio: "3/4", borderRadius: 2, overflow: "hidden", border: "1px solid var(--nf-border)", background: "var(--nf-bg-surface)" }}>
+                              <img loading="lazy" src={s.data} alt={s.caption} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                            </div>
+                            <span style={{ fontSize: 9, color: "var(--nf-text-muted)", textAlign: "center", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.caption}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
                 </div>
               </div>
             )}
@@ -21225,7 +21477,7 @@ Lighting: Even, diffused studio lighting from the front. No harsh shadows under 
                                         try {
                                           const members = item.orgHierarchy.filter(p => p.charId).map(p => { const ch = (project?.characters || []).find(c => c.id === p.charId); if (!ch || ch.isBulk) return null; return { name: ch.name, role: p.name, appearance: ch.appearance || "", lookAlike: ch.lookAlike || "", gender: ch.gender || "", build: ch.build || "" }; }).filter(Boolean);
                                           if (!members.length) { showToast("No non-bulk members", "error"); return; }
-                                          const memberDescs = members.map(m => `- ${m.name} (${m.role}): ${m.appearance || "no desc"}${m.lookAlike ? ` [looks like ${m.lookAlike}]` : ""}`).join("\n");
+                                          const memberDescs = members.map(m => `- ${m.name} (${m.role}): face is exactly ${m.lookAlike || "unspecified"}'s face (do not describe facial features)${m.build ? `, ${m.build} build` : ""}${_stripFacialClauses(m.appearance) ? `, ${_stripFacialClauses(m.appearance)}` : ""}`).join("\n");
                                           const res = await fetch("https://openrouter.ai/api/v1/chat/completions", { method: "POST", headers: { "Content-Type": "application/json", "Authorization": `Bearer ${settings.apiKey}`, "HTTP-Referer": window.location.origin, "X-Title": "NovelForge" }, body: JSON.stringify({ model: settings.model, messages: [{ role: "system", content: "Create a COMPLETE image generation prompt for a formal group portrait. Every person fully described. Output ONLY the prompt." }, { role: "user", content: `Group photo for "${item?.name || "unnamed"}".\nMembers:\n${memberDescs || ""}\n\nFormal group portrait, higher ranks center/front, appropriate setting.` }], max_tokens: 12000, temperature: 0.8 }) });
                                           if (!res.ok) { const errData = await res.json().catch(() => ({})); throw new Error(errData.error?.message || `API error (${res.status})`); }
                                           const data = await res.json();
@@ -25145,6 +25397,41 @@ Speech pattern: ${char.speechPattern || ""}` },
           onJump={(im) => {
             if (im.sourceType === "character" && im.sourceId) { setActiveTab("characters"); setEditingCharId(im.sourceId); }
             else if (im.sourceType === "world" && im.sourceId) { setActiveTab("world"); setExpandedWorldIds(prev => new Set([...prev, im.sourceId])); }
+          }}
+          onDownload={(im) => {
+            try {
+              const a = document.createElement("a");
+              a.href = im.data;
+              const safe = (im.caption || im.kind || "image").replace(/[^a-z0-9]+/gi, "-").toLowerCase().slice(0, 40);
+              a.download = `${safe || "image"}.png`;
+              document.body.appendChild(a); a.click(); a.remove();
+            } catch { showToast("Download failed", "error"); }
+          }}
+          onDelete={(im) => {
+            const d = im.del; if (!d) return;
+            setConfirmDialog({
+              message: `Delete this image from ${im.source}? This can't be undone.`,
+              confirmLabel: "Delete",
+              onConfirm: () => {
+                setConfirmDialog(null);
+                if (d.scope === "char") {
+                  const c = (project?.characters || []).find(x => x.id === d.id); if (!c) return;
+                  if (d.field === "image") updateCharById(d.id, "image", "");
+                  else updateCharById(d.id, d.field, (Array.isArray(c[d.field]) ? c[d.field] : []).filter(it => it.id !== d.itemId));
+                } else if (d.scope === "world") {
+                  updateProject({ worldBuilding: (project?.worldBuilding || []).map(w => {
+                    if (w.id !== d.id) return w;
+                    if (d.field === "logoImage" || d.field === "orgGroupPhoto") return { ...w, [d.field]: "" };
+                    if (d.field === "referenceImages") { const r = { ...(w.referenceImages || {}) }; delete r[d.key]; return { ...w, referenceImages: r }; }
+                    if (d.field === "additionalRefs") return { ...w, additionalRefs: (w.additionalRefs || []).filter(a => a.id !== d.itemId) };
+                    return w;
+                  }) });
+                } else if (d.scope === "project") {
+                  updateProject({ images: (project?.images || []).filter(x => x.id !== d.itemId) });
+                }
+                showToast("Image deleted", "success");
+              },
+            });
           }} />}
         {lineageChar && <GenerationLineage images={(project?.characters || []).find(x => x.id === lineageChar.id)?.moodBoard || lineageChar.moodBoard} regenBusyId={lineageRegenBusy} onClose={() => setLineageChar(null)}
           onRegenerate={async (srcImg) => {
@@ -25153,11 +25440,11 @@ Speech pattern: ${char.speechPattern || ""}` },
             setLineageRegenBusy(srcImg.id);
             showToast("Generating variation…", "info");
             try {
-              const img = await _genSingleImageRef.current(srcImg.genPrompt, "3:4", null);
+              const img = await _genSingleImageRef.current(srcImg.genPrompt, srcImg.aspectRatio || "3:4", null);
               if (img) {
                 const c = (project?.characters || []).find(x => x.id === lineageChar.id);
                 const prev = c?.moodBoard || [];
-                updateCharById(lineageChar.id, "moodBoard", [...prev, { id: uid(), data: img, caption: (srcImg.caption || srcImg.genKind || "image") + " (variation)", addedAt: new Date().toISOString(), genKind: srcImg.genKind, genPrompt: srcImg.genPrompt, parentId: srcImg.id }]);
+                updateCharById(lineageChar.id, "moodBoard", [...prev, { id: uid(), data: img, caption: (srcImg.caption || srcImg.genKind || "image") + " (variation)", addedAt: new Date().toISOString(), genKind: srcImg.genKind, genPrompt: srcImg.genPrompt, parentId: srcImg.id, aspectRatio: srcImg.aspectRatio || "3:4", sceneChapterIdx: srcImg.sceneChapterIdx }]);
                 showToast("Variation added", "success");
               } else showToast("Generation failed", "error");
             } catch { showToast("Generation failed", "error"); }
