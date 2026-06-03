@@ -1,6 +1,6 @@
-// APP_UPDATE_TIMESTAMP: 20260603_173955_Jakarta
-// FILE_NAME: App_update_20260603_173955_Jakarta.jsx
-// FIX_MARKER: apple-simple-prompt-sheets-all-prompts-v5
+// APP_UPDATE_TIMESTAMP: 20260603_184042_Jakarta
+// FILE_NAME: App_update_20260603_184042_Jakarta.jsx
+// FIX_MARKER: apple-simple-prompt-sheets-portfolio-packages-v6
 import { useState, useEffect, useRef, useCallback, useMemo, useReducer, memo, createContext, useContext, Fragment } from "react";
 import { createPortal } from "react-dom";
 
@@ -14,6 +14,8 @@ const LS_SETTINGS = "novelforge:settings";
 const LS_TAB_CHATS = "novelforge:tabChats";
 const LS_CONFIG_SHEET_ID = "novelforge:configSheetId";
 const LS_APP_CONFIG_CACHE = "novelforge:appConfigCache";
+const LS_GOOGLE_AUTH = "novelforge:googleAuth";
+const LS_GOOGLE_SETUP = "novelforge:googleSetup";
 const IDB_DB_NAME = "novelforge-db";
 const IDB_STORE = "kv";
 const IDB_VERSION = 1;
@@ -5083,7 +5085,7 @@ const CONFIG_PROMPT_EDITOR_TABLES = [
 ];
 const CONFIG_TEXT_PROMPT_TABLE_KEYS = new Set(PROMPT_TEMPLATE_TABLE_KEYS);
 const CONFIG_SCHEMA_VERSION = "4";
-const PROMPT_STRUCTURE_RELEASE = "apple-simple-prompt-sheets-all-prompts-v5-2026-06-03";
+const PROMPT_STRUCTURE_RELEASE = "apple-simple-prompt-sheets-portfolio-packages-v6-2026-06-03";
 const cfgBool = (value, fallback = true) => {
   if (value == null || value === "") return fallback;
   if (typeof value === "boolean") return value;
@@ -5847,6 +5849,24 @@ const DETAILED_PROMPT_TEMPLATES = [
   {"id": "postprocess.voiceDriftDetector", "area": "Agents", "tab": "Agents", "subtab": "Post-process", "feature": "Voice Drift Detector", "action": "post-generation audit", "name": "Post-process voice drift detector", "system": "You are the Voice Drift Detector. Compare dialogue in generated content against each character's speechPattern and voiceSamples. Return strict JSON with driftScores and issues.", "user": "Generated content:\n{{generatedContent}}\n\nCharacters:\n{{characters}}\n\nReturn JSON: { \"driftScores\": { \"charName\": 0-10 }, \"issues\": [{ \"char\": \"...\", \"line\": \"...\", \"issue\": \"...\" }] }", "maxTokens": 2400, "temperature": 0.2, "json": "TRUE", "active": "TRUE", "version": 2, "notes": "Runs after generation when enabled."},
   {"id": "postprocess.hookScorer", "area": "Agents", "tab": "Agents", "subtab": "Post-process", "feature": "Chapter-End Hook Scorer", "action": "post-generation audit", "name": "Post-process chapter-end hook scorer", "system": "You are the Chapter-End Hook Scorer. Rate the last 2-3 paragraphs for page-turner quality. Return strict JSON only.", "user": "Generated content:\n{{generatedContent}}\n\nReturn JSON: { \"score\": 0-10, \"technique\": \"question|urgency|reveal|shift|action\", \"notes\": \"brief suggestion\" }", "maxTokens": 1200, "temperature": 0.2, "json": "TRUE", "active": "TRUE", "version": 2, "notes": "Runs after generation when enabled."},
   {"id": "postprocess.motifAuditor", "area": "Agents", "tab": "Agents", "subtab": "Post-process", "feature": "Motif Weaving Auditor", "action": "post-generation audit", "name": "Post-process motif weaving auditor", "system": "You are the Motif Weaving Auditor. Check how well generated content integrates the project's motifs. Return strict JSON only.", "user": "Generated content:\n{{generatedContent}}\n\nProject motifs:\n{{motifs}}\n\nReturn JSON: { \"motifsUsed\": [], \"motifsNeglected\": [], \"suggestions\": \"brief advice\" }", "maxTokens": 1800, "temperature": 0.2, "json": "TRUE", "active": "TRUE", "version": 2, "notes": "Runs after generation when enabled."},
+  {"id": "character.studio.portfolio.digitals.beauty", "area": "Characters", "tab": "Characters", "subtab": "Studio", "feature": "Model Portfolio", "action": "Agency Digitals (clean polaroids) — Beauty headshot", "name": "Model Portfolio — Agency Digitals (clean polaroids) — Beauty headshot", "system": "You create one photorealistic model-portfolio image prompt from character identity data. Output goes directly to an image model, so write camera-visible direction only. Preserve identity, wardrobe, framing, and same-session consistency.", "user": "Photorealistic photograph of {{characterName}}.\n\nIDENTITY LOCK:\n{{identity}}\n\nWARDROBE LOCK:\n{{wardrobe}}\n\nPACKAGE: Agency Digitals (clean polaroids)\nSTYLE:\nClean agency digital test: plain seamless light-grey studio backdrop, soft even north-facing daylight, no retouching, minimal or no makeup, natural hair, intense heated exertion expression, arms flexed powerfully. Honest, unstyled, true-to-life. Always sweaty with glossy baby oil allover.\n\nSHOT: Beauty headshot\nDIRECTION:\nTight head-and-shoulders beauty shot, dead-on to camera, eyes locked to lens, intense heated exertion expression, neck extended in full overhead athletic reach, shoulders powerfully engaged, even frontal daylight.\n\nSAME-PERSON LOCK:\n{{samePersonLock}}\n\nREALISM CONTRACT:\n{{realismContract}}", "maxTokens": 12000, "temperature": 0.65, "json": "FALSE", "active": "TRUE", "version": 3, "sort": 4300, "notes": "Characters → Art Studio → Model Portfolio. This row controls the exact prompt for this package shot."},
+  {"id": "character.studio.portfolio.digitals.profile-l", "area": "Characters", "tab": "Characters", "subtab": "Studio", "feature": "Model Portfolio", "action": "Agency Digitals (clean polaroids) — Left profile", "name": "Model Portfolio — Agency Digitals (clean polaroids) — Left profile", "system": "You create one photorealistic model-portfolio image prompt from character identity data. Output goes directly to an image model, so write camera-visible direction only. Preserve identity, wardrobe, framing, and same-session consistency.", "user": "Photorealistic photograph of {{characterName}}.\n\nIDENTITY LOCK:\n{{identity}}\n\nWARDROBE LOCK:\n{{wardrobe}}\n\nPACKAGE: Agency Digitals (clean polaroids)\nSTYLE:\nClean agency digital test: plain seamless light-grey studio backdrop, soft even north-facing daylight, no retouching, minimal or no makeup, natural hair, intense heated exertion expression, arms flexed powerfully. Honest, unstyled, true-to-life. Always sweaty with glossy baby oil allover.\n\nSHOT: Left profile\nDIRECTION:\nHead-and-shoulders full LEFT profile (90° side view), chin level, intense heated exertion expression, deep athletic lunge with strong torso rotation and full overhead extension.\n\nSAME-PERSON LOCK:\n{{samePersonLock}}\n\nREALISM CONTRACT:\n{{realismContract}}", "maxTokens": 12000, "temperature": 0.65, "json": "FALSE", "active": "TRUE", "version": 3, "sort": 4310, "notes": "Characters → Art Studio → Model Portfolio. This row controls the exact prompt for this package shot."},
+  {"id": "character.studio.portfolio.digitals.profile-r", "area": "Characters", "tab": "Characters", "subtab": "Studio", "feature": "Model Portfolio", "action": "Agency Digitals (clean polaroids) — Right profile", "name": "Model Portfolio — Agency Digitals (clean polaroids) — Right profile", "system": "You create one photorealistic model-portfolio image prompt from character identity data. Output goes directly to an image model, so write camera-visible direction only. Preserve identity, wardrobe, framing, and same-session consistency.", "user": "Photorealistic photograph of {{characterName}}.\n\nIDENTITY LOCK:\n{{identity}}\n\nWARDROBE LOCK:\n{{wardrobe}}\n\nPACKAGE: Agency Digitals (clean polaroids)\nSTYLE:\nClean agency digital test: plain seamless light-grey studio backdrop, soft even north-facing daylight, no retouching, minimal or no makeup, natural hair, intense heated exertion expression, arms flexed powerfully. Honest, unstyled, true-to-life. Always sweaty with glossy baby oil allover.\n\nSHOT: Right profile\nDIRECTION:\nHead-and-shoulders full RIGHT profile (90° side view), chin level, intense heated exertion expression, dynamic sport pivot with powerful spinal extension and engaged side stretch.\n\nSAME-PERSON LOCK:\n{{samePersonLock}}\n\nREALISM CONTRACT:\n{{realismContract}}", "maxTokens": 12000, "temperature": 0.65, "json": "FALSE", "active": "TRUE", "version": 3, "sort": 4320, "notes": "Characters → Art Studio → Model Portfolio. This row controls the exact prompt for this package shot."},
+  {"id": "character.studio.portfolio.digitals.threequarter", "area": "Characters", "tab": "Characters", "subtab": "Studio", "feature": "Model Portfolio", "action": "Agency Digitals (clean polaroids) — 3/4 turn", "name": "Model Portfolio — Agency Digitals (clean polaroids) — 3/4 turn", "system": "You create one photorealistic model-portfolio image prompt from character identity data. Output goes directly to an image model, so write camera-visible direction only. Preserve identity, wardrobe, framing, and same-session consistency.", "user": "Photorealistic photograph of {{characterName}}.\n\nIDENTITY LOCK:\n{{identity}}\n\nWARDROBE LOCK:\n{{wardrobe}}\n\nPACKAGE: Agency Digitals (clean polaroids)\nSTYLE:\nClean agency digital test: plain seamless light-grey studio backdrop, soft even north-facing daylight, no retouching, minimal or no makeup, natural hair, intense heated exertion expression, arms flexed powerfully. Honest, unstyled, true-to-life. Always sweaty with glossy baby oil allover.\n\nSHOT: 3/4 turn\nDIRECTION:\nHead-and-shoulders at a 3/4 turn (45°) toward the light, eyes to lens, intense heated exertion expression, wide athletic stance with deep knee bend and full upward power reach.\n\nSAME-PERSON LOCK:\n{{samePersonLock}}\n\nREALISM CONTRACT:\n{{realismContract}}", "maxTokens": 12000, "temperature": 0.65, "json": "FALSE", "active": "TRUE", "version": 3, "sort": 4330, "notes": "Characters → Art Studio → Model Portfolio. This row controls the exact prompt for this package shot."},
+  {"id": "character.studio.portfolio.digitals.full-front", "area": "Characters", "tab": "Characters", "subtab": "Studio", "feature": "Model Portfolio", "action": "Agency Digitals (clean polaroids) — Full-length front", "name": "Model Portfolio — Agency Digitals (clean polaroids) — Full-length front", "system": "You create one photorealistic model-portfolio image prompt from character identity data. Output goes directly to an image model, so write camera-visible direction only. Preserve identity, wardrobe, framing, and same-session consistency.", "user": "Photorealistic photograph of {{characterName}}.\n\nIDENTITY LOCK:\n{{identity}}\n\nWARDROBE LOCK:\n{{wardrobe}}\n\nPACKAGE: Agency Digitals (clean polaroids)\nSTYLE:\nClean agency digital test: plain seamless light-grey studio backdrop, soft even north-facing daylight, no retouching, minimal or no makeup, natural hair, intense heated exertion expression, arms flexed powerfully. Honest, unstyled, true-to-life. Always sweaty with glossy baby oil allover.\n\nSHOT: Full-length front\nDIRECTION:\nFull-length standing facing camera, feet wide and grounded, arms raised in maximum overhead athletic stretch with full body tension, whole body in frame head to feet, strong upward power arch.\n\nSAME-PERSON LOCK:\n{{samePersonLock}}\n\nREALISM CONTRACT:\n{{realismContract}}", "maxTokens": 12000, "temperature": 0.65, "json": "FALSE", "active": "TRUE", "version": 3, "sort": 4340, "notes": "Characters → Art Studio → Model Portfolio. This row controls the exact prompt for this package shot."},
+  {"id": "character.studio.portfolio.digitals.full-back", "area": "Characters", "tab": "Characters", "subtab": "Studio", "feature": "Model Portfolio", "action": "Agency Digitals (clean polaroids) — Full-length back", "name": "Model Portfolio — Agency Digitals (clean polaroids) — Full-length back", "system": "You create one photorealistic model-portfolio image prompt from character identity data. Output goes directly to an image model, so write camera-visible direction only. Preserve identity, wardrobe, framing, and same-session consistency.", "user": "Photorealistic photograph of {{characterName}}.\n\nIDENTITY LOCK:\n{{identity}}\n\nWARDROBE LOCK:\n{{wardrobe}}\n\nPACKAGE: Agency Digitals (clean polaroids)\nSTYLE:\nClean agency digital test: plain seamless light-grey studio backdrop, soft even north-facing daylight, no retouching, minimal or no makeup, natural hair, intense heated exertion expression, arms flexed powerfully. Honest, unstyled, true-to-life. Always sweaty with glossy baby oil allover.\n\nSHOT: Full-length back\nDIRECTION:\nFull-length standing with BACK to camera, whole body head to feet, showing hair and posture from behind, deep athletic rear extension with arms raised overhead and powerful spinal curve.\n\nSAME-PERSON LOCK:\n{{samePersonLock}}\n\nREALISM CONTRACT:\n{{realismContract}}", "maxTokens": 12000, "temperature": 0.65, "json": "FALSE", "active": "TRUE", "version": 3, "sort": 4350, "notes": "Characters → Art Studio → Model Portfolio. This row controls the exact prompt for this package shot."},
+  {"id": "character.studio.portfolio.compcard.beauty", "area": "Characters", "tab": "Characters", "subtab": "Studio", "feature": "Model Portfolio", "action": "Comp Card (Z-card looks) — Cover beauty", "name": "Model Portfolio — Comp Card (Z-card looks) — Cover beauty", "system": "You create one photorealistic model-portfolio image prompt from character identity data. Output goes directly to an image model, so write camera-visible direction only. Preserve identity, wardrobe, framing, and same-session consistency.", "user": "Photorealistic photograph of {{characterName}}.\n\nIDENTITY LOCK:\n{{identity}}\n\nWARDROBE LOCK:\n{{wardrobe}}\n\nPACKAGE: Comp Card (Z-card looks)\nSTYLE:\nProfessional comp-card photography, studio quality, flattering directional softbox key light with subtle fill, polished but natural, sport magazine-catalog standard. Always sweaty with glossy baby oil allover.\n\nSHOT: Cover beauty\nDIRECTION:\nStriking head-and-shoulders cover shot, dead-on, captivating magnetic gaze to lens with heated expression, full overhead athletic extension, shoulders powerfully open, immaculate light.\n\nSAME-PERSON LOCK:\n{{samePersonLock}}\n\nREALISM CONTRACT:\n{{realismContract}}", "maxTokens": 12000, "temperature": 0.65, "json": "FALSE", "active": "TRUE", "version": 3, "sort": 4360, "notes": "Characters → Art Studio → Model Portfolio. This row controls the exact prompt for this package shot."},
+  {"id": "character.studio.portfolio.compcard.smile", "area": "Characters", "tab": "Characters", "subtab": "Studio", "feature": "Model Portfolio", "action": "Comp Card (Z-card looks) — Natural smile", "name": "Model Portfolio — Comp Card (Z-card looks) — Natural smile", "system": "You create one photorealistic model-portfolio image prompt from character identity data. Output goes directly to an image model, so write camera-visible direction only. Preserve identity, wardrobe, framing, and same-session consistency.", "user": "Photorealistic photograph of {{characterName}}.\n\nIDENTITY LOCK:\n{{identity}}\n\nWARDROBE LOCK:\n{{wardrobe}}\n\nPACKAGE: Comp Card (Z-card looks)\nSTYLE:\nProfessional comp-card photography, studio quality, flattering directional softbox key light with subtle fill, polished but natural, sport magazine-catalog standard. Always sweaty with glossy baby oil allover.\n\nSHOT: Natural smile\nDIRECTION:\nHead-and-shoulders, soft smile with eyes deeply engaged and heated intensity, slight 3/4 turn, dynamic sport power stance with upward reach and core engagement.\n\nSAME-PERSON LOCK:\n{{samePersonLock}}\n\nREALISM CONTRACT:\n{{realismContract}}", "maxTokens": 12000, "temperature": 0.65, "json": "FALSE", "active": "TRUE", "version": 3, "sort": 4370, "notes": "Characters → Art Studio → Model Portfolio. This row controls the exact prompt for this package shot."},
+  {"id": "character.studio.portfolio.compcard.profile", "area": "Characters", "tab": "Characters", "subtab": "Studio", "feature": "Model Portfolio", "action": "Comp Card (Z-card looks) — Editorial profile", "name": "Model Portfolio — Comp Card (Z-card looks) — Editorial profile", "system": "You create one photorealistic model-portfolio image prompt from character identity data. Output goes directly to an image model, so write camera-visible direction only. Preserve identity, wardrobe, framing, and same-session consistency.", "user": "Photorealistic photograph of {{characterName}}.\n\nIDENTITY LOCK:\n{{identity}}\n\nWARDROBE LOCK:\n{{wardrobe}}\n\nPACKAGE: Comp Card (Z-card looks)\nSTYLE:\nProfessional comp-card photography, studio quality, flattering directional softbox key light with subtle fill, polished but natural, sport magazine-catalog standard. Always sweaty with glossy baby oil allover.\n\nSHOT: Editorial profile\nDIRECTION:\nElegant side-profile portrait, chin slightly lifted, dramatic but soft side light, elongated athletic extension with full spinal curve and overhead arm reach.\n\nSAME-PERSON LOCK:\n{{samePersonLock}}\n\nREALISM CONTRACT:\n{{realismContract}}", "maxTokens": 12000, "temperature": 0.65, "json": "FALSE", "active": "TRUE", "version": 3, "sort": 4380, "notes": "Characters → Art Studio → Model Portfolio. This row controls the exact prompt for this package shot."},
+  {"id": "character.studio.portfolio.compcard.half", "area": "Characters", "tab": "Characters", "subtab": "Studio", "feature": "Model Portfolio", "action": "Comp Card (Z-card looks) — Half-body editorial", "name": "Model Portfolio — Comp Card (Z-card looks) — Half-body editorial", "system": "You create one photorealistic model-portfolio image prompt from character identity data. Output goes directly to an image model, so write camera-visible direction only. Preserve identity, wardrobe, framing, and same-session consistency.", "user": "Photorealistic photograph of {{characterName}}.\n\nIDENTITY LOCK:\n{{identity}}\n\nWARDROBE LOCK:\n{{wardrobe}}\n\nPACKAGE: Comp Card (Z-card looks)\nSTYLE:\nProfessional comp-card photography, studio quality, flattering directional softbox key light with subtle fill, polished but natural, sport magazine-catalog standard. Always sweaty with glossy baby oil allover.\n\nSHOT: Half-body editorial\nDIRECTION:\nHalf-body (waist up), powerfully confident posture with one arm raised in strong overhead stretch, intensely heated expression, athletic side power bend.\n\nSAME-PERSON LOCK:\n{{samePersonLock}}\n\nREALISM CONTRACT:\n{{realismContract}}", "maxTokens": 12000, "temperature": 0.65, "json": "FALSE", "active": "TRUE", "version": 3, "sort": 4390, "notes": "Characters → Art Studio → Model Portfolio. This row controls the exact prompt for this package shot."},
+  {"id": "character.studio.portfolio.compcard.full-fashion", "area": "Characters", "tab": "Characters", "subtab": "Studio", "feature": "Model Portfolio", "action": "Comp Card (Z-card looks) — Full-length fashion", "name": "Model Portfolio — Comp Card (Z-card looks) — Full-length fashion", "system": "You create one photorealistic model-portfolio image prompt from character identity data. Output goes directly to an image model, so write camera-visible direction only. Preserve identity, wardrobe, framing, and same-session consistency.", "user": "Photorealistic photograph of {{characterName}}.\n\nIDENTITY LOCK:\n{{identity}}\n\nWARDROBE LOCK:\n{{wardrobe}}\n\nPACKAGE: Comp Card (Z-card looks)\nSTYLE:\nProfessional comp-card photography, studio quality, flattering directional softbox key light with subtle fill, polished but natural, sport magazine-catalog standard. Always sweaty with glossy baby oil allover.\n\nSHOT: Full-length fashion\nDIRECTION:\nFull-length fashion stance, weight dramatically shifted with elongated lines, full body head to feet, dynamic overhead athletic reach with powerful body arch.\n\nSAME-PERSON LOCK:\n{{samePersonLock}}\n\nREALISM CONTRACT:\n{{realismContract}}", "maxTokens": 12000, "temperature": 0.65, "json": "FALSE", "active": "TRUE", "version": 3, "sort": 4400, "notes": "Characters → Art Studio → Model Portfolio. This row controls the exact prompt for this package shot."},
+  {"id": "character.studio.portfolio.compcard.movement", "area": "Characters", "tab": "Characters", "subtab": "Studio", "feature": "Model Portfolio", "action": "Comp Card (Z-card looks) — Movement", "name": "Model Portfolio — Comp Card (Z-card looks) — Movement", "system": "You create one photorealistic model-portfolio image prompt from character identity data. Output goes directly to an image model, so write camera-visible direction only. Preserve identity, wardrobe, framing, and same-session consistency.", "user": "Photorealistic photograph of {{characterName}}.\n\nIDENTITY LOCK:\n{{identity}}\n\nWARDROBE LOCK:\n{{wardrobe}}\n\nPACKAGE: Comp Card (Z-card looks)\nSTYLE:\nProfessional comp-card photography, studio quality, flattering directional softbox key light with subtle fill, polished but natural, sport magazine-catalog standard. Always sweaty with glossy baby oil allover.\n\nSHOT: Movement\nDIRECTION:\nFull-length candid stride or turn mid-motion, natural movement, captured in explosive athletic lunge combined with full upward power extension.\n\nSAME-PERSON LOCK:\n{{samePersonLock}}\n\nREALISM CONTRACT:\n{{realismContract}}", "maxTokens": 12000, "temperature": 0.65, "json": "FALSE", "active": "TRUE", "version": 3, "sort": 4410, "notes": "Characters → Art Studio → Model Portfolio. This row controls the exact prompt for this package shot."},
+  {"id": "character.studio.portfolio.portfolio.beauty", "area": "Characters", "tab": "Characters", "subtab": "Studio", "feature": "Model Portfolio", "action": "Portfolio (editorial range) — Signature beauty", "name": "Model Portfolio — Portfolio (editorial range) — Signature beauty", "system": "You create one photorealistic model-portfolio image prompt from character identity data. Output goes directly to an image model, so write camera-visible direction only. Preserve identity, wardrobe, framing, and same-session consistency.", "user": "Photorealistic photograph of {{characterName}}.\n\nIDENTITY LOCK:\n{{identity}}\n\nWARDROBE LOCK:\n{{wardrobe}}\n\nPACKAGE: Portfolio (editorial range)\nSTYLE:\nHigh-end editorial portfolio sports photography, magazine quality, expressive lighting, cinematic color grade, photoreal skin texture preserved. Always sweaty with glossy baby oil allover.\n\nSHOT: Signature beauty\nDIRECTION:\nSignature close beauty portrait, flawless soft light, captivating direct gaze with heated expression, neck extended in elegant athletic reach, shoulders powerfully engaged.\n\nSAME-PERSON LOCK:\n{{samePersonLock}}\n\nREALISM CONTRACT:\n{{realismContract}}", "maxTokens": 12000, "temperature": 0.65, "json": "FALSE", "active": "TRUE", "version": 3, "sort": 4420, "notes": "Characters → Art Studio → Model Portfolio. This row controls the exact prompt for this package shot."},
+  {"id": "character.studio.portfolio.portfolio.pensive", "area": "Characters", "tab": "Characters", "subtab": "Studio", "feature": "Model Portfolio", "action": "Portfolio (editorial range) — Pensive", "name": "Model Portfolio — Portfolio (editorial range) — Pensive", "system": "You create one photorealistic model-portfolio image prompt from character identity data. Output goes directly to an image model, so write camera-visible direction only. Preserve identity, wardrobe, framing, and same-session consistency.", "user": "Photorealistic photograph of {{characterName}}.\n\nIDENTITY LOCK:\n{{identity}}\n\nWARDROBE LOCK:\n{{wardrobe}}\n\nPACKAGE: Portfolio (editorial range)\nSTYLE:\nHigh-end editorial portfolio sports photography, magazine quality, expressive lighting, cinematic color grade, photoreal skin texture preserved. Always sweaty with glossy baby oil allover.\n\nSHOT: Pensive\nDIRECTION:\nHead-and-shoulders, downcast gaze with heated intensity, soft window light, deep sport recovery stretch with full overhead arm extension.\n\nSAME-PERSON LOCK:\n{{samePersonLock}}\n\nREALISM CONTRACT:\n{{realismContract}}", "maxTokens": 12000, "temperature": 0.65, "json": "FALSE", "active": "TRUE", "version": 3, "sort": 4430, "notes": "Characters → Art Studio → Model Portfolio. This row controls the exact prompt for this package shot."},
+  {"id": "character.studio.portfolio.portfolio.intense", "area": "Characters", "tab": "Characters", "subtab": "Studio", "feature": "Model Portfolio", "action": "Portfolio (editorial range) — Intense", "name": "Model Portfolio — Portfolio (editorial range) — Intense", "system": "You create one photorealistic model-portfolio image prompt from character identity data. Output goes directly to an image model, so write camera-visible direction only. Preserve identity, wardrobe, framing, and same-session consistency.", "user": "Photorealistic photograph of {{characterName}}.\n\nIDENTITY LOCK:\n{{identity}}\n\nWARDROBE LOCK:\n{{wardrobe}}\n\nPACKAGE: Portfolio (editorial range)\nSTYLE:\nHigh-end editorial portfolio sports photography, magazine quality, expressive lighting, cinematic color grade, photoreal skin texture preserved. Always sweaty with glossy baby oil allover.\n\nSHOT: Intense\nDIRECTION:\nTight portrait, powerfully magnetic direct stare with heated expression, harder dramatic key light, forward athletic tension with strong overhead reach.\n\nSAME-PERSON LOCK:\n{{samePersonLock}}\n\nREALISM CONTRACT:\n{{realismContract}}", "maxTokens": 12000, "temperature": 0.65, "json": "FALSE", "active": "TRUE", "version": 3, "sort": 4440, "notes": "Characters → Art Studio → Model Portfolio. This row controls the exact prompt for this package shot."},
+  {"id": "character.studio.portfolio.portfolio.joyful", "area": "Characters", "tab": "Characters", "subtab": "Studio", "feature": "Model Portfolio", "action": "Portfolio (editorial range) — Joyful", "name": "Model Portfolio — Portfolio (editorial range) — Joyful", "system": "You create one photorealistic model-portfolio image prompt from character identity data. Output goes directly to an image model, so write camera-visible direction only. Preserve identity, wardrobe, framing, and same-session consistency.", "user": "Photorealistic photograph of {{characterName}}.\n\nIDENTITY LOCK:\n{{identity}}\n\nWARDROBE LOCK:\n{{wardrobe}}\n\nPACKAGE: Portfolio (editorial range)\nSTYLE:\nHigh-end editorial portfolio sports photography, magazine quality, expressive lighting, cinematic color grade, photoreal skin texture preserved. Always sweaty with glossy baby oil allover.\n\nSHOT: Joyful\nDIRECTION:\nCandid laughing or joyful heated expression, bright airy light, dynamic sport celebration with full upward power stretch and open athletic lines.\n\nSAME-PERSON LOCK:\n{{samePersonLock}}\n\nREALISM CONTRACT:\n{{realismContract}}", "maxTokens": 12000, "temperature": 0.65, "json": "FALSE", "active": "TRUE", "version": 3, "sort": 4450, "notes": "Characters → Art Studio → Model Portfolio. This row controls the exact prompt for this package shot."},
+  {"id": "character.studio.portfolio.portfolio.lowkey", "area": "Characters", "tab": "Characters", "subtab": "Studio", "feature": "Model Portfolio", "action": "Portfolio (editorial range) — Low-key drama", "name": "Model Portfolio — Portfolio (editorial range) — Low-key drama", "system": "You create one photorealistic model-portfolio image prompt from character identity data. Output goes directly to an image model, so write camera-visible direction only. Preserve identity, wardrobe, framing, and same-session consistency.", "user": "Photorealistic photograph of {{characterName}}.\n\nIDENTITY LOCK:\n{{identity}}\n\nWARDROBE LOCK:\n{{wardrobe}}\n\nPACKAGE: Portfolio (editorial range)\nSTYLE:\nHigh-end editorial portfolio sports photography, magazine quality, expressive lighting, cinematic color grade, photoreal skin texture preserved. Always sweaty with glossy baby oil allover.\n\nSHOT: Low-key drama\nDIRECTION:\nHalf-body in low-key chiaroscuro lighting, single source, deep shadows, cinematic, dramatic athletic arch with powerful overhead extension.\n\nSAME-PERSON LOCK:\n{{samePersonLock}}\n\nREALISM CONTRACT:\n{{realismContract}}", "maxTokens": 12000, "temperature": 0.65, "json": "FALSE", "active": "TRUE", "version": 3, "sort": 4460, "notes": "Characters → Art Studio → Model Portfolio. This row controls the exact prompt for this package shot."},
+  {"id": "character.studio.portfolio.portfolio.environmental", "area": "Characters", "tab": "Characters", "subtab": "Studio", "feature": "Model Portfolio", "action": "Portfolio (editorial range) — Environmental", "name": "Model Portfolio — Portfolio (editorial range) — Environmental", "system": "You create one photorealistic model-portfolio image prompt from character identity data. Output goes directly to an image model, so write camera-visible direction only. Preserve identity, wardrobe, framing, and same-session consistency.", "user": "Photorealistic photograph of {{characterName}}.\n\nIDENTITY LOCK:\n{{identity}}\n\nWARDROBE LOCK:\n{{wardrobe}}\n\nPACKAGE: Portfolio (editorial range)\nSTYLE:\nHigh-end editorial portfolio sports photography, magazine quality, expressive lighting, cinematic color grade, photoreal skin texture preserved. Always sweaty with glossy baby oil allover.\n\nSHOT: Environmental\nDIRECTION:\nThree-quarter body environmental portrait, soft natural setting suggested behind with shallow depth of field, strong athletic lunge with elongated upward reach and full body tension.\n\nSAME-PERSON LOCK:\n{{samePersonLock}}\n\nREALISM CONTRACT:\n{{realismContract}}", "maxTokens": 12000, "temperature": 0.65, "json": "FALSE", "active": "TRUE", "version": 3, "sort": 4470, "notes": "Characters → Art Studio → Model Portfolio. This row controls the exact prompt for this package shot."},
   {"id": "world.roomImagePrompts", "area": "World", "tab": "World", "subtab": "Images", "feature": "Location room image prompts", "action": "generate four walls", "name": "Architectural room prompt generator", "system": "You are an architectural visualization specialist. Given a literary description of a location, produce a MASTER establishing shot prompt plus 4 wall-view prompts that together cover every wall and surface of the room. All views depict one physically consistent room. Use exact dimensions in cm, materials, colors, lighting, furniture placement, and wall zones. No people and no text overlays.", "user": "LOCATION: {{name}}\nTYPE: {{category}}\n\nPROJECT CONTEXT:\n{{projectContext}}\n\nDESCRIPTION:\n{{description}}\n\nOutput exactly these sections:\n===SPEC_SHEET===\n===PROMPT_MASTER===\n===PROMPT_WALL_A===\n===PROMPT_WALL_B===\n===PROMPT_WALL_C===\n===PROMPT_WALL_D===", "maxTokens": 24000, "temperature": 0.4, "json": "FALSE", "active": "TRUE", "version": 2, "notes": "World tab → generated master/wall prompts for location reference images."},
 ];
 const buildDefaultAppConfig = () => ({
@@ -6014,7 +6034,7 @@ const promptTextOrFallback = (config, id, part, vars = {}, fallback = "") => {
 };
 
 const promptGuideRowsFromConfig = (config = {}) => [
-  { section: "Start here", whatToEdit: "AI prompts", where: "Use the tab sheets: WritePrompts, CharactersPrompts, CharacterStudioPrompts, WorldPrompts, PlotPrompts, RelationshipsPrompts, ChaptersPrompts, ImagesPrompts, AgentsPrompts, HelpPrompts", safeToChange: "Only edit the system and user columns first", notes: "Do not edit id unless you are intentionally creating a new prompt. Use PromptMap to find the exact row." },
+  { section: "Start here", whatToEdit: "AI prompts", where: "Use the tab sheets: WritePrompts, CharactersPrompts, CharacterStudioPrompts, WorldPrompts, PlotPrompts, RelationshipsPrompts, ChaptersPrompts, ImagesPrompts, AgentsPrompts, HelpPrompts", safeToChange: "Only edit the system and user columns first", notes: "Do not edit id unless you are intentionally creating a new prompt. Use PromptMap to find the exact row. Model Portfolio rows live in CharacterStudioPrompts under feature = Model Portfolio." },
   { section: "How prompts work", whatToEdit: "system", where: "Each prompt sheet", safeToChange: "Yes", notes: "System = the AI role and rules." },
   { section: "How prompts work", whatToEdit: "user", where: "Each prompt sheet", safeToChange: "Yes", notes: "User = the task template. Keep {{placeholders}} unless you know what they do." },
   { section: "Organization", whatToEdit: "tab / subtab / feature / action / name", where: "Each prompt sheet", safeToChange: "Yes", notes: "These columns are labels for humans. They make the sheet searchable and low-learning-curve." },
@@ -6220,7 +6240,53 @@ const GDrive = {
       this._grantedScope = "";
       this._tokenClient = null;
       this._tokenClientKey = "";
+      this._loadSavedAuth(next);
     }
+    if (next) {
+      try {
+        const setup = JSON.parse(localStorage.getItem(LS_GOOGLE_SETUP) || "{}");
+        localStorage.setItem(LS_GOOGLE_SETUP, JSON.stringify({ ...setup, clientId: next }));
+      } catch {}
+    }
+  },
+
+  _saveAuth() {
+    try {
+      if (!this._clientId || !this._token) return;
+      localStorage.setItem(LS_GOOGLE_AUTH, JSON.stringify({
+        clientId: this._clientId,
+        token: this._token,
+        tokenExpiry: this._tokenExpiry,
+        grantedScope: this._grantedScope,
+        savedAt: Date.now(),
+      }));
+    } catch {}
+  },
+
+  _loadSavedAuth(clientId = this._clientId) {
+    try {
+      const saved = JSON.parse(localStorage.getItem(LS_GOOGLE_AUTH) || "{}");
+      if (!saved?.token || saved.clientId !== clientId) return false;
+      if (Date.now() >= Number(saved.tokenExpiry || 0) - 60000) return false;
+      this._token = saved.token;
+      this._tokenExpiry = Number(saved.tokenExpiry || 0);
+      this._grantedScope = saved.grantedScope || "";
+      return this._hasRequiredScopes();
+    } catch { return false; }
+  },
+
+  restoreSavedSetup() {
+    try {
+      const setup = JSON.parse(localStorage.getItem(LS_GOOGLE_SETUP) || "{}");
+      const clientId = setup.clientId || "";
+      if (clientId) this.setClientId(clientId);
+      return setup;
+    } catch { return {}; }
+  },
+
+  hasUsableToken() {
+    if (this._token && Date.now() < this._tokenExpiry - 60000 && this._hasRequiredScopes()) return true;
+    return this._clientId ? this._loadSavedAuth(this._clientId) : false;
   },
 
   _hasRequiredScopes() {
@@ -6245,6 +6311,7 @@ const GDrive = {
         this._token = resp.access_token;
         this._tokenExpiry = Date.now() + (resp.expires_in || 3600) * 1000;
         this._grantedScope = resp.scope || GOOGLE_OAUTH_SCOPES;
+        this._saveAuth();
         if (!this._hasRequiredScopes()) {
           this._token = null;
           this._tokenExpiry = 0;
@@ -6272,7 +6339,7 @@ const GDrive = {
   },
 
   async ensureToken() {
-    if (this._token && Date.now() < this._tokenExpiry - 60000 && this._hasRequiredScopes()) return this._token;
+    if (this.hasUsableToken()) return this._token;
     return this.authenticate(false);
   },
 
@@ -6385,8 +6452,11 @@ const GDrive = {
     return data.projects ? data : null;
   },
 
-  isConnected() { return !!this._token && Date.now() < this._tokenExpiry; },
-  disconnect() { this._token = null; this._tokenExpiry = 0; this._grantedScope = ""; this._folderId = null; this._fileId = null; this._tokenClient = null; this._tokenClientKey = ""; },
+  isConnected() { return this.hasUsableToken(); },
+  disconnect({ forgetSetup = false } = {}) {
+    this._token = null; this._tokenExpiry = 0; this._grantedScope = ""; this._folderId = null; this._fileId = null; this._tokenClient = null; this._tokenClientKey = "";
+    try { localStorage.removeItem(LS_GOOGLE_AUTH); if (forgetSetup) localStorage.removeItem(LS_GOOGLE_SETUP); } catch {}
+  },
 };
 
 
@@ -6394,7 +6464,16 @@ const GDrive = {
 // ─── Google Sheets App Config API ───
 const ConfigSheets = {
   _spreadsheetId: null,
-  setSpreadsheetId(id) { this._spreadsheetId = id || null; if (id) localStorage.setItem(LS_CONFIG_SHEET_ID, id); },
+  setSpreadsheetId(id) {
+    this._spreadsheetId = id || null;
+    if (id) {
+      localStorage.setItem(LS_CONFIG_SHEET_ID, id);
+      try {
+        const setup = JSON.parse(localStorage.getItem(LS_GOOGLE_SETUP) || "{}");
+        localStorage.setItem(LS_GOOGLE_SETUP, JSON.stringify({ ...setup, configSheetId: id }));
+      } catch {}
+    }
+  },
   getSpreadsheetId() { return this._spreadsheetId || localStorage.getItem(LS_CONFIG_SHEET_ID) || ""; },
   async request(path, options = {}) {
     await GDrive.ensureToken();
@@ -6413,8 +6492,34 @@ const ConfigSheets = {
     const body = { properties: { title }, sheets: Object.values(CONFIG_TABLES).map(t => ({ properties: { title: t.tab, hidden: !!t.hidden } })) };
     const data = await this.request("spreadsheets", { method: "POST", body: JSON.stringify(body) });
     this.setSpreadsheetId(data.spreadsheetId);
+    try {
+      const setup = JSON.parse(localStorage.getItem(LS_GOOGLE_SETUP) || "{}");
+      localStorage.setItem(LS_GOOGLE_SETUP, JSON.stringify({ ...setup, configSheetId: data.spreadsheetId }));
+    } catch {}
     await this.seedDefaults();
     return data.spreadsheetId;
+  },
+  async findExistingSpreadsheet(title = "NovelForge App Config") {
+    await GDrive.ensureToken();
+    const q = `name='${String(title).replace(/'/g, "\\'")}' and mimeType='application/vnd.google-apps.spreadsheet' and trashed=false`;
+    const res = await fetch(`https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id,name,modifiedTime)&orderBy=modifiedTime desc&pageSize=5`, {
+      headers: { Authorization: `Bearer ${GDrive._token}` },
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error?.message || `Drive search error ${res.status}`);
+    }
+    const data = await res.json();
+    const file = data.files?.[0];
+    if (file?.id) {
+      this.setSpreadsheetId(file.id);
+      try {
+        const setup = JSON.parse(localStorage.getItem(LS_GOOGLE_SETUP) || "{}");
+        localStorage.setItem(LS_GOOGLE_SETUP, JSON.stringify({ ...setup, configSheetId: file.id }));
+      } catch {}
+      return file.id;
+    }
+    return "";
   },
   async ensureTabs() {
     const id = this.getSpreadsheetId();
@@ -6563,7 +6668,15 @@ const ConfigSheets = {
     await this.request(`spreadsheets/${id}/values:batchUpdate`, { method: "POST", body: JSON.stringify({ valueInputOption: "RAW", data }) });
     return normalized;
   },
-  disconnect() { this._spreadsheetId = null; localStorage.removeItem(LS_CONFIG_SHEET_ID); },
+  disconnect() {
+    this._spreadsheetId = null;
+    localStorage.removeItem(LS_CONFIG_SHEET_ID);
+    try {
+      const setup = JSON.parse(localStorage.getItem(LS_GOOGLE_SETUP) || "{}");
+      delete setup.configSheetId;
+      localStorage.setItem(LS_GOOGLE_SETUP, JSON.stringify(setup));
+    } catch {}
+  },
 };
 
 // ─── Storage (IndexedDB — handles unlimited data including images) ───
@@ -12420,7 +12533,7 @@ const RichTextToolbar = memo(({ editorRef, onContentChange }) => {
 
 // ─── TAB AI CHAT ───
 // Fix #13, #14, #15: Smart tab-specific context with entity awareness
-const TabAIChat = memo(({ project, settings, appConfig, tabName, tabContext, placeholder, onAutoFill, messages, setMessages, chapterIdx = 0, editingEntityId = null }) => {
+const TabAIChat = memo(({ project, settings, appConfig, appConfigLiveLoader = null, tabName, tabContext, placeholder, onAutoFill, messages, setMessages, chapterIdx = 0, editingEntityId = null }) => {
   const [input, setInput] = useState("");
   const [isGenerating, setIsGenerating] = useState(false);
   const chatEndRef = useRef(null);
@@ -12448,6 +12561,10 @@ const TabAIChat = memo(({ project, settings, appConfig, tabName, tabContext, pla
     setIsGenerating(true);
 
     try {
+      const liveAppConfig = appConfigLiveLoader
+        ? await appConfigLiveLoader(PROMPT_TEMPLATE_TABLE_KEYS_WITH_LEGACY, `tab chat:${tabName}`)
+        : appConfig;
+
       // ─── Multi-agent mode: orchestrator + specialists pipeline ───
       let contextInfo = "";
       let agentBriefs = null;
@@ -12458,7 +12575,7 @@ const TabAIChat = memo(({ project, settings, appConfig, tabName, tabContext, pla
             project, chapterIdx,
             taskHint: `Tab: ${tabName}. EditingEntity: ${editingEntityId || "none"}.`,
             settings,
-            appConfig,
+            appConfig: liveAppConfig,
             signal: null,
             onProgress: (event) => setAgentEvents(prev => [...prev.slice(-18), { id: uid(), at: new Date().toISOString(), ...event }]),
           });
@@ -12480,7 +12597,7 @@ const TabAIChat = memo(({ project, settings, appConfig, tabName, tabContext, pla
         : [nonErrorMsgs[0], ...nonErrorMsgs.slice(-9)]; // Keep first + last 9
       const history = historySlice.map(m => ({ role: m.role, content: m.content }));
 
-      const tabPromptTpl = findPromptTemplate(appConfig, `tab.chat.${tabName}`) || findPromptTemplate(appConfig, "tab.chat") || findPromptTemplate(buildDefaultAppConfig(), "tab.chat");
+      const tabPromptTpl = findPromptTemplate(liveAppConfig, `tab.chat.${tabName}`) || findPromptTemplate(liveAppConfig, "tab.chat") || findPromptTemplate(buildDefaultAppConfig(), "tab.chat");
       const tabPromptVars = { tabName, tabContext: tabContext || tabName, contextInfo, message: msgText, editingEntityId: editingEntityId || "", agentBriefs: agentBriefs ? JSON.stringify(agentBriefs, null, 2) : "" };
       const tabSystemFallback = `You are an expert fiction writing assistant. You are helping with ${tabContext || "this tab"}.
 
@@ -12588,7 +12705,7 @@ Rules:
     }
     abortRef.current = null;
     if (mountedRef.current) setIsGenerating(false);
-  }, [input, isGenerating, messages, project, settings, appConfig, tabContext, tabName, setMessages, chapterIdx, editingEntityId]);
+  }, [input, isGenerating, messages, project, settings, appConfig, appConfigLiveLoader, tabContext, tabName, setMessages, chapterIdx, editingEntityId]);
 
   const handleAutoFill = useCallback((content) => {
     try {
@@ -14909,71 +15026,77 @@ export default function NovelForge() {
     return rows.map(r => ({ value: r.value || r.label, label: r.label || r.value, ...parseJSONSafe(r.metadataJSON, {}) }));
   }, [appConfig?.dropdowns]);
 
-  const refreshAppConfigFromSheet = useCallback(async (reason = "manual") => {
+  const prepareConfigSheetAccess = useCallback(async (reason = "action") => {
     const sheetId = ConfigSheets.getSpreadsheetId() || configSheetId || "";
-    if (!sheetId) return appConfig;
+    if (!sheetId) return { ok: false, message: "No config spreadsheet connected" };
+    ConfigSheets.setSpreadsheetId(sheetId);
+
+    // Remembered setup means normal runs should not ask you to paste IDs again. Google may still
+    // show consent if the browser token expired or was cleared; otherwise this silently reuses auth.
+    const clientId = gdriveClientId || settings.googleClientId || GDrive._clientId || "";
+    if (clientId) GDrive.setClientId(clientId);
+    if (!GDrive._clientId) return { ok: false, message: "No Google OAuth Client ID remembered" };
+
+    await GDrive.ensureToken();
+    setGdriveConnected(true);
+    return { ok: true, sheetId };
+  }, [configSheetId, gdriveClientId, settings.googleClientId]);
+
+  const commitLiveAppConfig = useCallback((cfg) => {
+    const normalized = normalizeAppConfig(cfg);
+    setAppConfig(normalized);
+    cacheAppConfig(normalized);
+    setConfigLastSync(new Date());
+    setConfigError("");
+    return normalized;
+  }, []);
+
+  const refreshAppConfigFromSheet = useCallback(async (reason = "manual") => {
     try {
-      ConfigSheets.setSpreadsheetId(sheetId);
-      const fresh = await ConfigSheets.load();
-      setAppConfig(fresh);
-      localStorage.setItem(LS_APP_CONFIG_CACHE, JSON.stringify(fresh));
-      setConfigLastSync(new Date().toISOString());
-      setConfigError("");
-      return fresh;
+      await prepareConfigSheetAccess(reason);
+      const fresh = await ConfigSheets.load({ autoRepair: true });
+      return commitLiveAppConfig(fresh);
     } catch (e) {
       const msg = e?.message || String(e);
-      console.warn(`[NovelForge] Live config refresh failed for ${reason}:`, msg);
-      setConfigError(msg);
+      console.warn(`[NovelForge] Live config refresh failed for ${reason}; using cached config:`, msg);
+      setConfigError(`Using cached config. Live Sheet refresh failed: ${msg}`);
       return appConfig;
     }
-  }, [appConfig, configSheetId]);
+  }, [appConfig, prepareConfigSheetAccess, commitLiveAppConfig]);
 
   const getLivePromptTemplate = useCallback(async (id, kind = "promptTemplates") => {
-    const sheetId = ConfigSheets.getSpreadsheetId() || configSheetId || "";
     let cfg = appConfig;
-    if (sheetId) {
-      try {
-        // PromptTemplates is now a legacy hidden sheet. For live prompt reads, load every
-        // structured prompt sheet so edits in CharactersPrompts / ImagesPrompts / AgentsPrompts
-        // are actually used at click time instead of falling back to stale local defaults.
-        if (kind === "promptTemplates") {
-          const raw = await ConfigSheets.loadTables(PROMPT_TEMPLATE_TABLE_KEYS_WITH_LEGACY);
-          cfg = normalizeAppConfig({ ...appConfig, ...raw });
-        } else {
-          const rows = await ConfigSheets.loadTable(kind);
-          cfg = normalizeAppConfig({ ...appConfig, [kind]: rows });
-        }
-        setAppConfig(cfg);
-        localStorage.setItem(LS_APP_CONFIG_CACHE, JSON.stringify(cfg));
-        setConfigLastSync(new Date().toISOString());
-        setConfigError("");
-      } catch (e) {
-        const msg = e?.message || String(e);
-        console.warn(`[NovelForge] Live prompt fetch failed for ${id}:`, msg);
-        setConfigError(msg);
+    try {
+      await prepareConfigSheetAccess(`prompt:${id}`);
+      if (kind === "promptTemplates") {
+        const raw = await ConfigSheets.loadTables(PROMPT_TEMPLATE_TABLE_KEYS_WITH_LEGACY);
+        cfg = commitLiveAppConfig({ ...appConfig, ...raw });
+      } else {
+        const rows = await ConfigSheets.loadTable(kind);
+        cfg = commitLiveAppConfig({ ...appConfig, [kind]: rows });
       }
+    } catch (e) {
+      const msg = e?.message || String(e);
+      console.warn(`[NovelForge] Live prompt fetch failed for ${id}; using cached config:`, msg);
+      setConfigError(`Using cached config. Live Sheet refresh failed: ${msg}`);
     }
     return findPromptTemplate(cfg, id, kind) || findPromptTemplate(appConfig, id, kind) || findPromptTemplate(buildDefaultAppConfig(), id, kind);
-  }, [appConfig, configSheetId]);
+  }, [appConfig, prepareConfigSheetAccess, commitLiveAppConfig]);
 
   const getLiveConfigForAction = useCallback(async (tables = [], reason = "action") => {
-    const sheetId = ConfigSheets.getSpreadsheetId() || configSheetId || "";
-    if (!sheetId) return appConfig;
     try {
-      const raw = await ConfigSheets.loadTables(tables);
-      const cfg = normalizeAppConfig({ ...appConfig, ...raw });
-      setAppConfig(cfg);
-      localStorage.setItem(LS_APP_CONFIG_CACHE, JSON.stringify(cfg));
-      setConfigLastSync(new Date().toISOString());
-      setConfigError("");
+      await prepareConfigSheetAccess(reason);
+      const keys = Array.isArray(tables) && tables.length ? tables : PROMPT_TEMPLATE_TABLE_KEYS_WITH_LEGACY;
+      const raw = await ConfigSheets.loadTables(keys);
+      const cfg = commitLiveAppConfig({ ...appConfig, ...raw });
       return cfg;
     } catch (e) {
       const msg = e?.message || String(e);
-      console.warn(`[NovelForge] Live config fetch failed for ${reason}:`, msg);
-      setConfigError(msg);
+      console.warn(`[NovelForge] Live config fetch failed for ${reason}; using cached config:`, msg);
+      setConfigError(`Using cached config. Live Sheet refresh failed: ${msg}`);
       return appConfig;
     }
-  }, [appConfig, configSheetId]);
+  }, [appConfig, prepareConfigSheetAccess, commitLiveAppConfig]);
   const [editorialChar, setEditorialChar] = useState(null); // character whose Editorial Studio is open
   const [editorialBusy, setEditorialBusy] = useState(false);
   const [portfolioBusy, setPortfolioBusy] = useState(null); // { charId, pkg, done, total, label } while generating
@@ -17234,6 +17357,10 @@ Rules:
     const realism = "Render as a real human being, photographed, not illustrated: lifelike skin with visible pores, fine texture, subtle imperfections, natural subsurface tones, realistic individual hair strands, true-to-life fabric. Shot on a full-frame camera, 85mm lens. Visuals only; nothing a camera could not capture. No illustration, no painting, no CGI look. Always sweaty with glossy baby oil allover";
     const styleRef = project?.styleLockImage && project.styleLockImage.startsWith("data:") ? project.styleLockImage : null;
     const livePortfolioTpl = await getLivePromptTemplate("character.studio.portfolioShot");
+    const getPortfolioShotTemplate = async (shot) => {
+      const exactId = `character.studio.portfolio.${pkgKey}.${shot.key}`;
+      return await getLivePromptTemplate(exactId) || livePortfolioTpl;
+    };
     const portfolioId = uid();
     const total = pkg.shots.length;
     setPortfolioBusy({ charId: char.id, pkg: pkgKey, done: 0, total, label: pkg.shots[0].label });
@@ -17248,11 +17375,12 @@ Rules:
           `${pkg.style} ${shot.direction} ` +
           (masterImg ? "CRITICAL: this is the SAME person as the reference image — keep the exact same face, bone structure, hair, skin, and wardrobe; only the angle, framing, pose, and expression change. " : "") +
           realism;
-        const prompt = livePortfolioTpl?.user
-          ? renderConfigTemplate(livePortfolioTpl.user, {
+        const shotTpl = await getPortfolioShotTemplate(shot);
+        const prompt = shotTpl?.user
+          ? renderConfigTemplate(shotTpl.user, {
               character: char, characterName: char.name || "a person", identity, wardrobe,
-              wardrobePhrase: wardrobe ? `, wearing ${wardrobe}` : "", package: pkg, packageStyle: pkg.style,
-              shot, shotDirection: shot.direction, samePersonLock: masterImg ? "CRITICAL: this is the SAME person as the reference image — keep the exact same face, bone structure, hair, skin, and wardrobe; only the angle, framing, pose, and expression change. " : "", realismContract: realism
+              wardrobePhrase: wardrobe ? `, wearing ${wardrobe}` : "", package: pkg, packageKey: pkgKey, packageStyle: pkg.style,
+              shot, shotKey: shot.key, shotLabel: shot.label, shotDirection: shot.direction, samePersonLock: masterImg ? "CRITICAL: this is the SAME person as the reference image — keep the exact same face, bone structure, hair, skin, and wardrobe; only the angle, framing, pose, and expression change. " : "", realismContract: realism
             })
           : fallbackPrompt;
         // Identity lock: once we have the master shot, pass it (plus optional style ref) as references.
@@ -17551,7 +17679,7 @@ ${liveStyleRefTpl?.user ? renderConfigTemplate(liveStyleRefTpl.user, { character
             chapterIdx: activeChapterIdx,
             taskHint: `Write tab generation mode: ${genMode}. Selected text: ${selectedText ? "yes" : "no"}.`,
             settings,
-            appConfig,
+            appConfig: liveAppConfig,
             signal: null,
             onProgress: (event) => setAgentActivity(prev => [...prev.slice(-22), { id: uid(), at: new Date().toISOString(), ...event }]),
           });
@@ -18631,6 +18759,8 @@ If no relationship changes, respond "No relationship updates needed."` },
       localStorage.removeItem(LS_TAB_CHATS);
       localStorage.removeItem(LS_CONFIG_SHEET_ID);
       localStorage.removeItem(LS_APP_CONFIG_CACHE);
+      localStorage.removeItem(LS_GOOGLE_AUTH);
+      localStorage.removeItem(LS_GOOGLE_SETUP);
     } catch (e) { console.error("Flush failed:", e); }
 
     // 3. Disconnect Google Drive and clear image caches
@@ -18697,6 +18827,29 @@ If no relationship changes, respond "No relationship updates needed."` },
   }, [showToast]);
 
 
+
+  const handleConfigFindOrCreate = useCallback(async () => {
+    const clientId = gdriveClientId || settings.googleClientId;
+    if (!clientId) { showToast("Enter your Google OAuth Client ID once first", "error"); return; }
+    try {
+      setConfigSyncing(true); setConfigError("");
+      GDrive.setClientId(clientId);
+      if (!GDrive.isConnected()) await GDrive.authenticate(false);
+      setGdriveConnected(true);
+      let id = configSheetId.trim() || ConfigSheets.getSpreadsheetId();
+      if (!id) id = await ConfigSheets.findExistingSpreadsheet();
+      if (!id) id = await ConfigSheets.createSpreadsheet();
+      ConfigSheets.setSpreadsheetId(id);
+      const cfg = await ConfigSheets.load({ autoRepair: true });
+      setConfigSheetId(id);
+      setAppConfig(cfg);
+      cacheAppConfig(cfg);
+      setConfigLastSync(new Date());
+      setSettings(prev => ({ ...prev, googleClientId: clientId }));
+      showToast("Config Sheet ready. Setup is remembered on this browser.", "success");
+    } catch (e) { setConfigError(e.message); showToast(`Config auto-setup failed: ${e.message}`, "error"); }
+    finally { setConfigSyncing(false); }
+  }, [configSheetId, gdriveClientId, settings.googleClientId, showToast, setSettings]);
 
   const handleConfigCreate = useCallback(async () => {
     if (!gdriveClientId && !settings.googleClientId) { showToast("Enter your Google OAuth Client ID first", "error"); return; }
@@ -19120,7 +19273,8 @@ CRITICAL: Every sentence must describe something visible. If a detail cannot be 
     showToast(`Generating 4 wall prompts for "${item?.name || "unnamed"}"...`, "info");
 
     try {
-      const prompts = await generateWorldImagePrompts(item, project, callOpenRouter, appConfig);
+      const liveCfg = await getLiveConfigForAction(PROMPT_TEMPLATE_TABLE_KEYS_WITH_LEGACY, "world image prompts");
+      const prompts = await generateWorldImagePrompts(item, project, callOpenRouter, liveCfg);
       if (prompts && Object.values(prompts).some(p => p)) {
         updateProject({
           worldBuilding: items.map(w =>
@@ -19146,7 +19300,7 @@ CRITICAL: Every sentence must describe something visible. If a detail cannot be 
       });
       showToast(`Generation failed: ${e.message}`, "error");
     }
-  }, [project, settings.apiKey, callOpenRouter, updateProject, showToast]);
+  }, [project, settings.apiKey, callOpenRouter, updateProject, getLiveConfigForAction, showToast]);
 
   const handleGdriveSync = useCallback(async () => {
     if (!GDrive.isConnected()) { showToast("Connect to Google Drive first", "error"); return; }
@@ -19339,8 +19493,19 @@ CRITICAL: Every sentence must describe something visible. If a detail cannot be 
   }, [gdriveAutoSync, gdriveConnected, gdriveSyncInterval, projects, settings, tabChatHistories]);
  
   useEffect(() => {
-    if (settings.googleClientId) { setGdriveClientId(settings.googleClientId); GDrive.setClientId(settings.googleClientId); }
-  }, [settings.googleClientId]);
+    const remembered = GDrive.restoreSavedSetup();
+    const clientId = settings.googleClientId || remembered.clientId || "";
+    if (clientId) {
+      setGdriveClientId(clientId);
+      GDrive.setClientId(clientId);
+      if (GDrive.isConnected()) setGdriveConnected(true);
+    }
+    const rememberedSheetId = remembered.configSheetId || ConfigSheets.getSpreadsheetId();
+    if (rememberedSheetId && !configSheetId) {
+      ConfigSheets.setSpreadsheetId(rememberedSheetId);
+      setConfigSheetId(rememberedSheetId);
+    }
+  }, [settings.googleClientId, configSheetId]);
 
   useEffect(() => () => { if (gdriveSyncTimerRef.current) clearInterval(gdriveSyncTimerRef.current); }, []);
 
@@ -24408,7 +24573,7 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
           )}
         </div>
         {!isMobile && settings.apiKey && (
-          <TabAIChat project={project} settings={settings} appConfig={appConfig} tabName="characters"
+          <TabAIChat project={project} settings={settings} appConfig={appConfig} appConfigLiveLoader={getLiveConfigForAction} tabName="characters"
             tabContext="characters — create, flesh out, or brainstorm character details"
             placeholder='Try: "Generate a character" or "Fill empty fields"'
             onAutoFill={handleCharAutoFill}
@@ -24428,7 +24593,7 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                     <button className="nf-btn-icon" onClick={() => setShowAiMobile(false)}><Icons.X /></button>
                   </div>
                   <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
-                    <TabAIChat project={project} settings={settings} appConfig={appConfig} tabName="characters"
+                    <TabAIChat project={project} settings={settings} appConfig={appConfig} appConfigLiveLoader={getLiveConfigForAction} tabName="characters"
                       tabContext="characters — create, flesh out, or brainstorm character details"
                       placeholder='Try: "Generate a character"'
                       onAutoFill={handleCharAutoFill}
@@ -25701,7 +25866,7 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
           {items.length === 0 && <div className="nf-empty-state">Add world-building entries to enrich AI context</div>}
         </div>
         {!isMobile && settings.apiKey && (
-          <TabAIChat project={project} settings={settings} appConfig={appConfig} tabName="world"
+          <TabAIChat project={project} settings={settings} appConfig={appConfig} appConfigLiveLoader={getLiveConfigForAction} tabName="world"
             tabContext="world-building — create locations, rules, cultures, magic systems"
             onAutoFill={handleWorldAutoFill}
             chapterIdx={activeChapterIdx}
@@ -25718,7 +25883,7 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                     <button className="nf-btn-icon" onClick={() => setShowAiMobile(false)}><Icons.X /></button>
                   </div>
                   <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
-                    <TabAIChat project={project} settings={settings} appConfig={appConfig} tabName="world"
+                    <TabAIChat project={project} settings={settings} appConfig={appConfig} appConfigLiveLoader={getLiveConfigForAction} tabName="world"
                       tabContext="world-building — create locations, rules, cultures, magic systems"
                       onAutoFill={handleWorldAutoFill} chapterIdx={activeChapterIdx}
                       messages={getTabMessages("world")} setMessages={setTabMessages("world")} />
@@ -26224,7 +26389,7 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
           {outline.length === 0 && <div className="nf-empty-state">Plan your story structure</div>}
         </div>
         {!isMobile && settings.apiKey && (
-          <TabAIChat project={project} settings={settings} appConfig={appConfig} tabName="plot"
+          <TabAIChat project={project} settings={settings} appConfig={appConfig} appConfigLiveLoader={getLiveConfigForAction} tabName="plot"
             tabContext="plot outline — plan chapters, structure arcs, develop beats"
             onAutoFill={handlePlotAutoFill}
             chapterIdx={activeChapterIdx}
@@ -26242,7 +26407,7 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                     <button className="nf-btn-icon" onClick={() => setShowAiMobile(false)}><Icons.X /></button>
                   </div>
                   <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
-                    <TabAIChat project={project} settings={settings} appConfig={appConfig} tabName="plot"
+                    <TabAIChat project={project} settings={settings} appConfig={appConfig} appConfigLiveLoader={getLiveConfigForAction} tabName="plot"
                       tabContext="plot outline — plan chapters, structure arcs, develop beats"
                       onAutoFill={handlePlotAutoFill} chapterIdx={activeChapterIdx}
                       editingEntityId={expandedPlotIds.size === 1 ? [...expandedPlotIds][0] : null}
@@ -26658,7 +26823,7 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
           {rels.length > 0 && filteredRels.length === 0 && <div className="nf-empty-state">No relationships match this view</div>}
         </div>
         {!isMobile && settings.apiKey && (
-          <TabAIChat project={project} settings={settings} appConfig={appConfig} tabName="relationships"
+          <TabAIChat project={project} settings={settings} appConfig={appConfig} appConfigLiveLoader={getLiveConfigForAction} tabName="relationships"
             tabContext="relationship dynamics — develop chemistry, tension arcs"
             onAutoFill={handleRelAutoFill}
             chapterIdx={activeChapterIdx}
@@ -26675,7 +26840,7 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                     <button className="nf-btn-icon" onClick={() => setShowAiMobile(false)}><Icons.X /></button>
                   </div>
                   <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
-                    <TabAIChat project={project} settings={settings} appConfig={appConfig} tabName="relationships"
+                    <TabAIChat project={project} settings={settings} appConfig={appConfig} appConfigLiveLoader={getLiveConfigForAction} tabName="relationships"
                       tabContext="relationship dynamics — develop chemistry, tension arcs"
                       onAutoFill={handleRelAutoFill} chapterIdx={activeChapterIdx}
                       messages={getTabMessages("relationships")} setMessages={setTabMessages("relationships")} />
@@ -27841,7 +28006,7 @@ Speech pattern: ${char.speechPattern || ""}` },
         )}
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           {!gdriveConnected ? (
-            <button onClick={handleGdriveConnect} disabled={!gdriveClientId} className="nf-btn nf-btn-primary">☁ Connect</button>
+            <button onClick={handleGdriveConnect} disabled={!(gdriveClientId || settings.googleClientId)} className="nf-btn nf-btn-primary">☁ Connect</button>
           ) : (
             <>
               <button onClick={handleGdriveSync} disabled={gdriveSyncing} className="nf-btn nf-btn-primary">
@@ -27912,10 +28077,10 @@ Speech pattern: ${char.speechPattern || ""}` },
         </div>
         {!configSheetId && (
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
-            <button onClick={handleConfigCreate} disabled={configSyncing || (!gdriveClientId && !settings.googleClientId)} className="nf-btn nf-btn-primary">
-              {configSyncing ? <><Spinner /> Setting up...</> : <>Create Config Sheet</>}
+            <button onClick={handleConfigFindOrCreate} disabled={configSyncing || (!gdriveClientId && !settings.googleClientId)} className="nf-btn nf-btn-primary">
+              {configSyncing ? <><Spinner /> Setting up...</> : <>Find / Create Config Sheet</>}
             </button>
-            <button onClick={() => setConfigToolsOpen(v => !v)} className="nf-btn nf-btn-ghost"><Icons.Settings /> Connect existing</button>
+            <button onClick={() => setConfigToolsOpen(v => !v)} className="nf-btn nf-btn-ghost"><Icons.Settings /> Advanced connect</button>
           </div>
         )}
         {(configToolsOpen || configSheetId) && (
@@ -27925,14 +28090,15 @@ Speech pattern: ${char.speechPattern || ""}` },
               <input value={configSheetId} onChange={e => setConfigSheetId(e.target.value)} className="nf-input" placeholder="Paste the spreadsheet ID here" style={{ fontSize: 12 }} />
             </div>
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              <button onClick={handleConfigConnect} disabled={configSyncing || !configSheetId.trim()} className="nf-btn nf-btn-primary">Connect / Load</button>
+              <button onClick={handleConfigFindOrCreate} disabled={configSyncing || (!gdriveClientId && !settings.googleClientId)} className="nf-btn nf-btn-primary">Find / Create</button>
+              <button onClick={handleConfigConnect} disabled={configSyncing || !configSheetId.trim()} className="nf-btn nf-btn-ghost">Connect / Load ID</button>
               <button onClick={handleConfigSyncFromSheet} disabled={configSyncing || !configSheetId.trim()} className="nf-btn nf-btn-ghost">Sync from Sheet</button>
               <button onClick={handleConfigPushDefaults} disabled={configSyncing || !configSheetId.trim()} className="nf-btn nf-btn-ghost">Repair/migrate prompt sheets now</button>
               {configSheetId && <a href={`https://docs.google.com/spreadsheets/d/${configSheetId}`} target="_blank" rel="noopener" className="nf-btn nf-btn-ghost">Open Sheet</a>}
               {configSheetId && <button onClick={handleConfigDisconnect} className="nf-btn nf-btn-ghost" style={{ color: "var(--nf-accent)" }}>Disconnect Config</button>}
             </div>
             <div style={{ fontSize: 11, color: "var(--nf-text-muted)", lineHeight: 1.5 }}>
-              One setup creates separate prompt tabs by app area: WritePrompts, CharactersPrompts, CharacterStudioPrompts, WorldPrompts, PlotPrompts, RelationshipsPrompts, ChaptersPrompts, ImagesPrompts, AgentsPrompts, and HelpPrompts. PromptTemplates is kept only as a legacy compatibility tab. Prompt-driven actions read the structured Google Sheet tabs right before running, so sheet edits are live without a manual sync. Use “Repair tabs + add missing defaults” to create the new tabs and migrate old PromptTemplates rows without erasing your edits.
+              One setup creates separate prompt tabs by app area: WritePrompts, CharactersPrompts, CharacterStudioPrompts, WorldPrompts, PlotPrompts, RelationshipsPrompts, ChaptersPrompts, ImagesPrompts, AgentsPrompts, and HelpPrompts. PromptTemplates is kept only as a legacy compatibility tab. The app remembers your Client ID and Sheet ID on this browser. AI and image actions live-pull the relevant rows from Google Sheets right before the prompt runs. The local cache is only a fallback if Sheets cannot be reached. The app remembers your Client ID and Sheet ID on this browser, so normal use should not require copy-paste again.
             </div>
             {configError && <div style={{ fontSize: 11, color: "var(--nf-accent)", lineHeight: 1.5 }}>{configError}</div>}
           </div>
