@@ -1,6 +1,6 @@
-// APP_UPDATE_TIMESTAMP: 20260603_171512_Jakarta
-// FILE_NAME: App_update_20260603_171512_Jakarta.jsx
-// FIX_MARKER: character-studio-prompts-visible-dedicated-sheet-v4
+// APP_UPDATE_TIMESTAMP: 20260603_173955_Jakarta
+// FILE_NAME: App_update_20260603_173955_Jakarta.jsx
+// FIX_MARKER: apple-simple-prompt-sheets-all-prompts-v5
 import { useState, useEffect, useRef, useCallback, useMemo, useReducer, memo, createContext, useContext, Fragment } from "react";
 import { createPortal } from "react-dom";
 
@@ -4150,8 +4150,8 @@ const buildMemoryIndex = (project, currentChapterIdx) => {
 };
 
 // ═══ ORCHESTRATOR — Plans the run ═══
-const runOrchestrator = async ({ userRequest, memoryIndex, taskHint, settings, signal, taskDifficulty = "hard" }) => {
-  const system = `You are the orchestrator for a multi-agent novel-writing assistant. Your job: analyze the user's request and decide which specialist agents to consult.
+const runOrchestrator = async ({ userRequest, memoryIndex, taskHint, settings, signal, taskDifficulty = "hard", appConfig = null }) => {
+  const defaultSystem = `You are the orchestrator for a multi-agent novel-writing assistant. Your job: analyze the user's request and decide which specialist agents to consult.
 
 Return ONLY a JSON object with this shape:
 {
@@ -4173,13 +4173,16 @@ GUIDELINES:
 - Do not over-delegate: prefer 3-6 specialists for ordinary work, 7-10 only for complex story decisions.
 Skip specialists that aren't needed to save tokens.`;
 
-  const user = `USER REQUEST: ${userRequest}
+  const defaultUser = `USER REQUEST: ${userRequest}
 ${taskHint ? `HINT: ${taskHint}` : ""}
 
 MEMORY INDEX:
 ${JSON.stringify(memoryIndex, null, 2)}
 
 Return your plan as JSON.`;
+  const vars = { userRequest, taskHint: taskHint || "", memoryIndex: JSON.stringify(memoryIndex, null, 2) };
+  const system = promptTextOrFallback(appConfig, "agents.orchestrator", "system", vars, defaultSystem);
+  const user = promptTextOrFallback(appConfig, "agents.orchestrator", "user", vars, defaultUser);
 
   const raw = await _callAgent({ role: "orchestrator", system, user, settings, signal, temperature: 0.2, json: true, taskDifficulty });
   try {
@@ -4425,12 +4428,28 @@ const SPECIALIST_AGENTS = {
 };
 
 // Run a specialist — returns a compact brief string
-const runSpecialist = async ({ key, project, chapterIdx, memoryIndex, settings, signal, taskDifficulty = null }) => {
+const SPECIALIST_PROMPT_IDS = {
+  sceneStructureAgent: "agent.sceneStructure",
+  characterAgent: "agent.character",
+  relationshipAgent: "agent.relationship",
+  timelineAgent: "agent.continuity",
+  loreRulesAgent: "agent.loreRules",
+  settingAgent: "agent.setting",
+  revealAgent: "agent.revealReaderKnowledge",
+  thematicAgent: "agent.thematic",
+  craftAgent: "agent.style",
+  standardsAgent: "agent.standards",
+};
+const runSpecialist = async ({ key, project, chapterIdx, memoryIndex, settings, signal, taskDifficulty = null, appConfig = null }) => {
   const spec = SPECIALIST_AGENTS[key];
   if (!spec) throw new Error(`Unknown specialist: ${key}`);
-  const user = spec.buildContext(project, chapterIdx, memoryIndex);
+  const context = spec.buildContext(project, chapterIdx, memoryIndex);
+  const promptId = SPECIALIST_PROMPT_IDS[key] || `agent.${key}`;
+  const vars = { context, project: JSON.stringify(project || {}, null, 2), memoryIndex: JSON.stringify(memoryIndex || {}, null, 2), chapterIdx, chapterNumber: chapterIdx + 1 };
+  const system = promptTextOrFallback(appConfig, promptId, "system", vars, spec.system);
+  const user = promptTextOrFallback(appConfig, promptId, "user", vars, context);
   return _callAgent({
-    role: key, system: spec.system, user, settings, signal, temperature: 0.4, taskDifficulty,
+    role: key, system, user, settings, signal, temperature: 0.4, taskDifficulty,
   });
 };
 
@@ -4472,7 +4491,7 @@ const AgentRuntime = {
     return sig;
   },
 
-  async runFull({ userRequest, project, chapterIdx, taskHint, settings, signal, onProgress }) {
+  async runFull({ userRequest, project, chapterIdx, taskHint, settings, signal, onProgress, appConfig = null }) {
     if (!settings?.apiKey) throw new Error("API key not set");
     if (!settings?.agentsEnabled) throw new Error("Multi-agent mode disabled");
 
@@ -4485,7 +4504,7 @@ const AgentRuntime = {
     // 1. Plan the run. Easy/normal tasks use local routing to save money; hard tasks use the LLM orchestrator.
     const plan = useEconomyPlanner
       ? buildHeuristicAgentPlan({ userRequest, taskHint, difficulty })
-      : await runOrchestrator({ userRequest, memoryIndex, taskHint, settings, signal, taskDifficulty: difficulty });
+      : await runOrchestrator({ userRequest, memoryIndex, taskHint, settings, signal, taskDifficulty: difficulty, appConfig });
     plan.difficulty = plan.difficulty || difficulty;
     onProgress?.({ stage: "plan", plan, message: plan.reasoning || "Routing plan ready." });
 
@@ -4505,7 +4524,7 @@ const AgentRuntime = {
         }
         onProgress?.({ stage: "agent_start", key, label, message: `${label} is reading its focused slice of the story.` });
         try {
-          const brief = await runSpecialist({ key, project, chapterIdx, memoryIndex, settings, signal, taskDifficulty: difficulty });
+          const brief = await runSpecialist({ key, project, chapterIdx, memoryIndex, settings, signal, taskDifficulty: difficulty, appConfig });
           this._briefCache.set(cacheKey, brief);
           onProgress?.({ stage: "agent_done", key, label, message: `${label} returned a focused brief.`, preview: String(brief || "").slice(0, 220) });
           return { key, brief, cached: false };
@@ -4544,7 +4563,7 @@ ${b.brief}
   },
 
   // Run a post-processor agent (continuity check, voice drift, hook scorer)
-  async runPostProcessor({ key, project, chapterIdx, generatedContent, settings, signal }) {
+  async runPostProcessor({ key, project, chapterIdx, generatedContent, settings, signal, appConfig = null }) {
     const prompts = {
       continuityChecker: {
         system: `You are the Continuity Checker. Scan the generated content for any inconsistencies with the character profiles, world lore, relationships, or timeline. Return a JSON object: { "issues": [{ "type": "...", "description": "...", "suggestion": "..." }], "overallScore": 0-10 }`,
@@ -4586,7 +4605,19 @@ ${JSON.stringify((project.relationships || []).map(r => ({ char1: r.char1, char2
       },    };
     const p = prompts[key];
     if (!p) throw new Error(`Unknown post-processor: ${key}`);
-    const raw = await _callAgent({ role: key, system: p.system, user: p.user, settings, signal, temperature: 0.3, json: true });
+    const vars = {
+      output: generatedContent,
+      generatedContent,
+      context: JSON.stringify(buildMemoryIndex(project, chapterIdx), null, 2),
+      project: JSON.stringify(project || {}, null, 2),
+      characters: JSON.stringify((project.characters || []).filter(c => c.name && !c.isBulk).map(c => ({ id: c.id, name: c.name, role: c.role, speechPattern: c.speechPattern, voiceSamples: c.voiceSamples })), null, 2),
+      relationships: JSON.stringify((project.relationships || []).map(r => ({ char1: r.char1, char2: r.char2, status: r.status, tension: r.tension, dynamic: r.dynamic })), null, 2),
+      motifs: JSON.stringify(project.motifs || [], null, 2),
+    };
+    const promptId = `postprocess.${key}`;
+    const system = promptTextOrFallback(appConfig, promptId, "system", vars, p.system);
+    const user = promptTextOrFallback(appConfig, promptId, "user", vars, p.user);
+    const raw = await _callAgent({ role: key, system, user, settings, signal, temperature: 0.3, json: true });
     try { return JSON.parse(raw); } catch { return { raw }; }
   },
 
@@ -4935,7 +4966,9 @@ const getCharacterTemplateRows = (config) => {
 // ─── GOOGLE SHEETS APP CONFIG ───
 // One Google Sheet can customize expandable app data without editing code.
 // Users do not need to touch the sheet after setup; Settings provides create/sync/repair controls.
-const PROMPT_TEMPLATE_HEADERS = ["id", "area", "tab", "subtab", "feature", "action", "name", "system", "user", "maxTokens", "temperature", "json", "active", "version", "sort", "notes"];
+const PROMPT_TEMPLATE_HEADERS = ["tab", "subtab", "feature", "action", "name", "system", "user", "id", "area", "maxTokens", "temperature", "json", "active", "version", "sort", "notes"];
+const START_HERE_HEADERS = ["section", "whatToEdit", "where", "safeToChange", "notes"];
+const PROMPT_MAP_HEADERS = ["tab", "subtab", "feature", "action", "name", "promptId", "sheet", "editTheseCells", "notes"];
 const STRUCTURED_PROMPT_TEMPLATE_TABLES = {
   promptTemplatesWrite: { tab: "WritePrompts", area: "Write", headers: PROMPT_TEMPLATE_HEADERS },
   promptTemplatesCharacters: { tab: "CharactersPrompts", area: "Characters", headers: PROMPT_TEMPLATE_HEADERS },
@@ -5021,6 +5054,8 @@ const mergePromptTemplateRows = (...groups) => {
   return merged;
 };
 const CONFIG_TABLES = {
+  startHere: { tab: "START_HERE", headers: START_HERE_HEADERS },
+  promptMap: { tab: "PromptMap", headers: PROMPT_MAP_HEADERS },
   meta: { tab: "ConfigMeta", headers: ["key", "value", "notes"] },
   dropdowns: { tab: "DropdownOptions", headers: ["id", "group", "value", "label", "sort", "active", "customAllowed", "notes", "metadataJSON"] },
   promptTemplates: { tab: "PromptTemplates", headers: PROMPT_TEMPLATE_HEADERS, legacy: true, hidden: true },
@@ -5047,8 +5082,8 @@ const CONFIG_PROMPT_EDITOR_TABLES = [
   { key: "imagePromptTemplates", label: "ImagePromptTemplates", short: "Image Templates" },
 ];
 const CONFIG_TEXT_PROMPT_TABLE_KEYS = new Set(PROMPT_TEMPLATE_TABLE_KEYS);
-const CONFIG_SCHEMA_VERSION = "3";
-const PROMPT_STRUCTURE_RELEASE = "prompt-sheets-v4-character-studio-dedicated-2026-06-03";
+const CONFIG_SCHEMA_VERSION = "4";
+const PROMPT_STRUCTURE_RELEASE = "apple-simple-prompt-sheets-all-prompts-v5-2026-06-03";
 const cfgBool = (value, fallback = true) => {
   if (value == null || value === "") return fallback;
   if (typeof value === "boolean") return value;
@@ -5807,7 +5842,12 @@ const DETAILED_PROMPT_TEMPLATES = [
     "active": "TRUE",
     "version": 2,
     "notes": "Post-generation state updater."
-  }
+  },
+  {"id": "agent.standards", "area": "Agents", "tab": "Agents", "subtab": "Specialists", "feature": "Craft Standards Agent", "action": "specialist brief", "name": "Craft Standards Agent specialist prompt", "system": "You are the Craft Standards Agent. Return a SHORT brief (50-100 words) specifying prose quality standards for this genre: what to lean into, what to avoid, voice precedents, and hard craft limits. Be concise and actionable.", "user": "Focused context:\n{{context}}", "maxTokens": 1200, "temperature": 0.4, "json": "FALSE", "active": "TRUE", "version": 2, "notes": "Specialist prompt used by multi-agent writing mode."},
+  {"id": "postprocess.voiceDriftDetector", "area": "Agents", "tab": "Agents", "subtab": "Post-process", "feature": "Voice Drift Detector", "action": "post-generation audit", "name": "Post-process voice drift detector", "system": "You are the Voice Drift Detector. Compare dialogue in generated content against each character's speechPattern and voiceSamples. Return strict JSON with driftScores and issues.", "user": "Generated content:\n{{generatedContent}}\n\nCharacters:\n{{characters}}\n\nReturn JSON: { \"driftScores\": { \"charName\": 0-10 }, \"issues\": [{ \"char\": \"...\", \"line\": \"...\", \"issue\": \"...\" }] }", "maxTokens": 2400, "temperature": 0.2, "json": "TRUE", "active": "TRUE", "version": 2, "notes": "Runs after generation when enabled."},
+  {"id": "postprocess.hookScorer", "area": "Agents", "tab": "Agents", "subtab": "Post-process", "feature": "Chapter-End Hook Scorer", "action": "post-generation audit", "name": "Post-process chapter-end hook scorer", "system": "You are the Chapter-End Hook Scorer. Rate the last 2-3 paragraphs for page-turner quality. Return strict JSON only.", "user": "Generated content:\n{{generatedContent}}\n\nReturn JSON: { \"score\": 0-10, \"technique\": \"question|urgency|reveal|shift|action\", \"notes\": \"brief suggestion\" }", "maxTokens": 1200, "temperature": 0.2, "json": "TRUE", "active": "TRUE", "version": 2, "notes": "Runs after generation when enabled."},
+  {"id": "postprocess.motifAuditor", "area": "Agents", "tab": "Agents", "subtab": "Post-process", "feature": "Motif Weaving Auditor", "action": "post-generation audit", "name": "Post-process motif weaving auditor", "system": "You are the Motif Weaving Auditor. Check how well generated content integrates the project's motifs. Return strict JSON only.", "user": "Generated content:\n{{generatedContent}}\n\nProject motifs:\n{{motifs}}\n\nReturn JSON: { \"motifsUsed\": [], \"motifsNeglected\": [], \"suggestions\": \"brief advice\" }", "maxTokens": 1800, "temperature": 0.2, "json": "TRUE", "active": "TRUE", "version": 2, "notes": "Runs after generation when enabled."},
+  {"id": "world.roomImagePrompts", "area": "World", "tab": "World", "subtab": "Images", "feature": "Location room image prompts", "action": "generate four walls", "name": "Architectural room prompt generator", "system": "You are an architectural visualization specialist. Given a literary description of a location, produce a MASTER establishing shot prompt plus 4 wall-view prompts that together cover every wall and surface of the room. All views depict one physically consistent room. Use exact dimensions in cm, materials, colors, lighting, furniture placement, and wall zones. No people and no text overlays.", "user": "LOCATION: {{name}}\nTYPE: {{category}}\n\nPROJECT CONTEXT:\n{{projectContext}}\n\nDESCRIPTION:\n{{description}}\n\nOutput exactly these sections:\n===SPEC_SHEET===\n===PROMPT_MASTER===\n===PROMPT_WALL_A===\n===PROMPT_WALL_B===\n===PROMPT_WALL_C===\n===PROMPT_WALL_D===", "maxTokens": 24000, "temperature": 0.4, "json": "FALSE", "active": "TRUE", "version": 2, "notes": "World tab → generated master/wall prompts for location reference images."},
 ];
 const buildDefaultAppConfig = () => ({
   meta: [
@@ -5927,6 +5967,9 @@ const configForSheetWrite = (config = {}) => {
   for (const key of PROMPT_TEMPLATE_TABLE_KEYS) out[key] = split[key] || [];
   // Keep the old all-in-one tab as a blank compatibility sheet so users are not editing prompts in two places.
   out.promptTemplates = [];
+  // Human-first sheets: START_HERE explains what to edit; PromptMap is a searchable index of every prompt row.
+  out.startHere = promptGuideRowsFromConfig(out);
+  out.promptMap = promptMapRowsFromConfig(out);
   return out;
 };
 const getCfgOptions = (config, group, fallback = []) => {
@@ -5957,7 +6000,43 @@ const renderConfigTemplate = (template = "", vars = {}) => String(template || ""
   for (const part of parts) cur = cur?.[part];
   return cur == null ? "" : String(cur);
 });
-const findPromptTemplate = (config, id, kind = "promptTemplates") => (config?.[kind] || []).find(p => p.id === id && cfgBool(p.active, true));
+const allTextPromptRows = (config = {}) => mergePromptTemplateRows(
+  ...PROMPT_TEMPLATE_TABLE_KEYS.map(k => config?.[k] || []),
+  config?.promptTemplates || []
+);
+const promptRowsForKind = (config = {}, kind = "promptTemplates") => kind === "promptTemplates" ? allTextPromptRows(config) : (config?.[kind] || []);
+const findPromptTemplate = (config, id, kind = "promptTemplates") => promptRowsForKind(config, kind).find(p => p.id === id && cfgBool(p.active, true));
+const getPromptTemplateAny = (config, id, kind = "promptTemplates") => findPromptTemplate(config, id, kind) || findPromptTemplate(loadCachedAppConfig(), id, kind) || findPromptTemplate(buildDefaultAppConfig(), id, kind);
+const promptTextOrFallback = (config, id, part, vars = {}, fallback = "") => {
+  const tpl = getPromptTemplateAny(config, id);
+  const raw = tpl?.[part] || fallback || "";
+  return renderConfigTemplate(raw, vars);
+};
+
+const promptGuideRowsFromConfig = (config = {}) => [
+  { section: "Start here", whatToEdit: "AI prompts", where: "Use the tab sheets: WritePrompts, CharactersPrompts, CharacterStudioPrompts, WorldPrompts, PlotPrompts, RelationshipsPrompts, ChaptersPrompts, ImagesPrompts, AgentsPrompts, HelpPrompts", safeToChange: "Only edit the system and user columns first", notes: "Do not edit id unless you are intentionally creating a new prompt. Use PromptMap to find the exact row." },
+  { section: "How prompts work", whatToEdit: "system", where: "Each prompt sheet", safeToChange: "Yes", notes: "System = the AI role and rules." },
+  { section: "How prompts work", whatToEdit: "user", where: "Each prompt sheet", safeToChange: "Yes", notes: "User = the task template. Keep {{placeholders}} unless you know what they do." },
+  { section: "Organization", whatToEdit: "tab / subtab / feature / action / name", where: "Each prompt sheet", safeToChange: "Yes", notes: "These columns are labels for humans. They make the sheet searchable and low-learning-curve." },
+  { section: "Advanced", whatToEdit: "maxTokens / temperature / json / active", where: "Each prompt sheet", safeToChange: "Careful", notes: "active=FALSE disables a row. json=TRUE means the app expects valid JSON." },
+  { section: "Do not touch unless needed", whatToEdit: "id", where: "Each prompt sheet", safeToChange: "No", notes: "The app looks up prompts by id. Changing it breaks that feature unless the code also changes." },
+  { section: "Other editable config", whatToEdit: "Dropdowns, UI strings, defaults, image templates", where: "DropdownOptions, UIStrings, Defaults, ImagePromptTemplates, ImageTemplates", safeToChange: "Yes", notes: "These are still available, but prompt editing should start from the tab-level prompt sheets." },
+  { section: "Repair", whatToEdit: "Missing rows", where: "Settings → Google Sheets config → Merge/repair defaults", safeToChange: "Yes", notes: "This adds any new default prompt rows without deleting your edits." },
+];
+const promptMapRowsFromConfig = (config = {}) => allTextPromptRows(config)
+  .map((row, i) => enrichPromptTemplateRow(row, i))
+  .sort((a, b) => String(a.tab || "").localeCompare(String(b.tab || "")) || String(a.subtab || "").localeCompare(String(b.subtab || "")) || Number(a.sort || 0) - Number(b.sort || 0))
+  .map(row => ({
+    tab: row.tab || "",
+    subtab: row.subtab || "",
+    feature: row.feature || "",
+    action: row.action || "",
+    name: row.name || "",
+    promptId: row.id || "",
+    sheet: CONFIG_TABLES[promptTemplateTableKeyForRow(row)]?.tab || "",
+    editTheseCells: "system, user",
+    notes: row.notes || "",
+  }));
 
 const applyCharacterTemplate = (char, template) => {
   if (!template) return char;
@@ -6354,7 +6433,24 @@ const ConfigSheets = {
     const data = [];
     for (const [key, meta] of Object.entries(CONFIG_TABLES)) data.push({ range: `${meta.tab}!A1`, values: objectsToRows(defaults[key] || [], meta.headers) });
     await this.request(`spreadsheets/${id}/values:batchUpdate`, { method: "POST", body: JSON.stringify({ valueInputOption: "RAW", data }) });
+    await this.formatForHumans().catch(e => console.warn("[NovelForge] Sheet formatting skipped:", e.message));
     return defaults;
+  },
+  async formatForHumans() {
+    const id = this.getSpreadsheetId();
+    if (!id) throw new Error("No config spreadsheet connected");
+    const meta = await this.request(`spreadsheets/${id}?fields=sheets.properties(sheetId,title)`);
+    const byTitle = Object.fromEntries((meta.sheets || []).map(sh => [sh.properties?.title, sh.properties?.sheetId]));
+    const requests = [];
+    const humanTabs = new Set(["START_HERE", "PromptMap", ...CONFIG_PROMPT_EDITOR_TABLES.map(t => CONFIG_TABLES[t.key]?.tab).filter(Boolean)]);
+    for (const [title, sheetId] of Object.entries(byTitle)) {
+      if (sheetId == null) continue;
+      requests.push({ updateSheetProperties: { properties: { sheetId, gridProperties: { frozenRowCount: 1 } }, fields: "gridProperties.frozenRowCount" } });
+      requests.push({ repeatCell: { range: { sheetId, startRowIndex: 0, endRowIndex: 1 }, cell: { userEnteredFormat: { textFormat: { bold: true }, backgroundColor: humanTabs.has(title) ? { red: 0.93, green: 0.88, blue: 0.78 } : { red: 0.9, green: 0.9, blue: 0.9 } } }, fields: "userEnteredFormat(textFormat,backgroundColor)" } });
+      requests.push({ autoResizeDimensions: { dimensions: { sheetId, dimension: "COLUMNS", startIndex: 0, endIndex: title.includes("Prompts") || title === "PromptMap" ? 16 : 10 } } });
+    }
+    if (requests.length) await this.request(`spreadsheets/${id}:batchUpdate`, { method: "POST", body: JSON.stringify({ requests }) });
+    return true;
   },
   async load({ autoRepair = false } = {}) {
     const id = this.getSpreadsheetId();
@@ -6428,6 +6524,7 @@ const ConfigSheets = {
     const sheetConfig = configForSheetWrite(rawConfig);
     for (const [key, meta] of Object.entries(CONFIG_TABLES)) data.push({ range: `${meta.tab}!A1`, values: objectsToRows(sheetConfig[key] || [], meta.headers) });
     await this.request(`spreadsheets/${id}/values:batchUpdate`, { method: "POST", body: JSON.stringify({ valueInputOption: "RAW", data }) });
+    await this.formatForHumans().catch(e => console.warn("[NovelForge] Sheet formatting skipped:", e.message));
     return normalizeAppConfig(sheetConfig);
   },
   async mergeDefaults() {
@@ -10324,7 +10421,7 @@ const buildEditorialIdentityBase = (char) => {
 
 // ─── WORLD IMAGE PROMPT GENERATOR ───
 // Generates 4 prompts covering 4 walls of the room from a single spec sheet.
-const generateWorldImagePrompts = async (item, project, callOpenRouter) => {
+const generateWorldImagePrompts = async (item, project, callOpenRouter, appConfig = null) => {
   const desc = item.description || "";
   if (!desc.trim()) return null;
 
@@ -10391,10 +10488,12 @@ ${projectContext}
 DESCRIPTION:
 ${desc}`;
 
+  const tpl = getPromptTemplateAny(appConfig, "world.roomImagePrompts");
+  const vars = { item, world: item, project, description: desc, projectContext, name: item.name || "Unnamed", category: item.category || "" };
   const response = await callOpenRouter([
-    { role: "system", content: systemPrompt },
-    { role: "user", content: userMessage },
-  ], { maxTokens: 24000, temperature: 0.4 });
+    { role: "system", content: tpl?.system ? renderConfigTemplate(tpl.system, vars) : systemPrompt },
+    { role: "user", content: tpl?.user ? renderConfigTemplate(tpl.user, vars) : userMessage },
+  ], { maxTokens: Number(tpl?.maxTokens || 24000), temperature: Number(tpl?.temperature || 0.4) });
 
   if (!response) return null;
 
@@ -12359,6 +12458,7 @@ const TabAIChat = memo(({ project, settings, appConfig, tabName, tabContext, pla
             project, chapterIdx,
             taskHint: `Tab: ${tabName}. EditingEntity: ${editingEntityId || "none"}.`,
             settings,
+            appConfig,
             signal: null,
             onProgress: (event) => setAgentEvents(prev => [...prev.slice(-18), { id: uid(), at: new Date().toISOString(), ...event }]),
           });
@@ -17451,6 +17551,7 @@ ${liveStyleRefTpl?.user ? renderConfigTemplate(liveStyleRefTpl.user, { character
             chapterIdx: activeChapterIdx,
             taskHint: `Write tab generation mode: ${genMode}. Selected text: ${selectedText ? "yes" : "no"}.`,
             settings,
+            appConfig,
             signal: null,
             onProgress: (event) => setAgentActivity(prev => [...prev.slice(-22), { id: uid(), at: new Date().toISOString(), ...event }]),
           });
@@ -17465,7 +17566,12 @@ ${agentResult.assembledContext}
         }
       }
 
-      const messages = [{ role: "system", content: buildSystemPrompt(genMode, genMode === "rewrite" ? selectedText : null) + liveAgentContext }, ...history, { role: "user", content: contextualUserMsg }];
+      const liveSystemTpl = await getLivePromptTemplate("write.system.main");
+      const defaultSystemContent = buildSystemPrompt(genMode, genMode === "rewrite" ? selectedText : null);
+      const systemContent = (liveSystemTpl?.system
+        ? renderConfigTemplate(liveSystemTpl.system, { mode: genMode, request: userMsg, context: defaultSystemContent, selectionOrEnding: selectedText || "", project, chapter: project?.chapters?.[activeChapterIdx] })
+        : defaultSystemContent) + liveAgentContext;
+      const messages = [{ role: "system", content: systemContent }, ...history, { role: "user", content: contextualUserMsg }];
       const res = await callOpenRouterStream(messages, {
         temperature: params.temperature,
         frequencyPenalty: params.frequencyPenalty,
@@ -17502,7 +17608,7 @@ ${agentResult.assembledContext}
             try {
               const updates = await AgentRuntime.runPostProcessor({
                 key: "stateUpdater", project: getFreshProject(), chapterIdx: chapterIdxSnapshot,
-                generatedContent: finalContent, settings, signal: null,
+                generatedContent: finalContent, settings, appConfig, signal: null,
               });
               if (updates && (updates.characterUpdates || updates.relationshipUpdates || updates.chapterState)) {
                 stateUpdaterSetHook = typeof updates?.chapterState?.chapterEndHookScore === "number";
@@ -17518,7 +17624,7 @@ ${agentResult.assembledContext}
             try {
               const issues = await AgentRuntime.runPostProcessor({
                 key: "continuityChecker", project: getFreshProject(), chapterIdx: chapterIdxSnapshot,
-                generatedContent: finalContent, settings, signal: null,
+                generatedContent: finalContent, settings, appConfig, signal: null,
               });
               if (issues?.issues?.length > 0) {
                 showToast(`Continuity: ${issues.issues.length} potential issue(s) flagged`, "info");
@@ -17530,7 +17636,7 @@ ${agentResult.assembledContext}
             try {
               const score = await AgentRuntime.runPostProcessor({
                 key: "hookScorer", project: getFreshProject(), chapterIdx: chapterIdxSnapshot,
-                generatedContent: finalContent, settings, signal: null,
+                generatedContent: finalContent, settings, appConfig, signal: null,
               });
               if (typeof score?.score === "number") {
                 setProjects(prev => prev.map(p => {
@@ -17547,14 +17653,14 @@ ${agentResult.assembledContext}
           // 4) motifAuditor + voiceDriftDetector — independent, safe to run after (no project writes).
           if (pps.motifAuditor) {
             try {
-              const m = await AgentRuntime.runPostProcessor({ key: "motifAuditor", project: getFreshProject(), chapterIdx: chapterIdxSnapshot, generatedContent: finalContent, settings, signal: null });
+              const m = await AgentRuntime.runPostProcessor({ key: "motifAuditor", project: getFreshProject(), chapterIdx: chapterIdxSnapshot, generatedContent: finalContent, settings, appConfig, signal: null });
               const neglected = Array.isArray(m?.motifsNeglected) ? m.motifsNeglected.length : 0;
               if (neglected > 0) showToast(`Motifs: ${neglected} motif(s) underused this chapter`, "info");
             } catch (e) { console.warn("[motifAuditor]", e); }
           }
           if (pps.voiceDriftDetector) {
             try {
-              const v = await AgentRuntime.runPostProcessor({ key: "voiceDriftDetector", project: getFreshProject(), chapterIdx: chapterIdxSnapshot, generatedContent: finalContent, settings, signal: null });
+              const v = await AgentRuntime.runPostProcessor({ key: "voiceDriftDetector", project: getFreshProject(), chapterIdx: chapterIdxSnapshot, generatedContent: finalContent, settings, appConfig, signal: null });
               const drifts = v?.issues?.length || 0;
               if (drifts > 0) showToast(`Voice drift: ${drifts} line(s) may be off-voice`, "info");
             } catch (e) { console.warn("[voiceDriftDetector]", e); }
@@ -19014,7 +19120,7 @@ CRITICAL: Every sentence must describe something visible. If a detail cannot be 
     showToast(`Generating 4 wall prompts for "${item?.name || "unnamed"}"...`, "info");
 
     try {
-      const prompts = await generateWorldImagePrompts(item, project, callOpenRouter);
+      const prompts = await generateWorldImagePrompts(item, project, callOpenRouter, appConfig);
       if (prompts && Object.values(prompts).some(p => p)) {
         updateProject({
           worldBuilding: items.map(w =>
