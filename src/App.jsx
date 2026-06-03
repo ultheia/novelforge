@@ -1,6 +1,6 @@
-// APP_UPDATE_TIMESTAMP: 20260603_185706_Jakarta
-// FILE_NAME: App_update_20260603_185706_Jakarta.jsx
-// FIX_MARKER: fix-google-live-pull-gdrive-tdz-v6
+// APP_UPDATE_TIMESTAMP: 20260603_190900_Jakarta
+// FILE_NAME: App_update_20260603_190900_Jakarta.jsx
+// FIX_MARKER: stream-character-studio-portfolio-shots-and-5x-agent-tokens-v1
 import { useState, useEffect, useRef, useCallback, useMemo, useReducer, memo, createContext, useContext, Fragment } from "react";
 import { createPortal } from "react-dom";
 
@@ -21,6 +21,8 @@ const IDB_STORE = "kv";
 const IDB_VERSION = 1;
 const GDRIVE_FILE_NAME = "novelforge-backup.json";
 const LS_IMAGE_WORKSPACE = "novelforge:imageWorkspace";
+const AGENT_TOKEN_MULTIPLIER = 5;
+const AGENT_TOKEN_HARD_CAP = 100000;
 
 const loadImageWorkspaceValue = (key, fallback) => {
   try {
@@ -4020,9 +4022,9 @@ const getAgentModel = (settings, role, taskDifficulty = null) => {
 const getAgentBudget = (role, taskDifficulty = null) => {
   const r = getAgentRole(role);
   const base = r ? r.budget : 1600;
-  if (taskDifficulty === "easy") return Math.min(base, 1200);
-  if (taskDifficulty === "normal") return Math.min(base, 2200);
-  return base;
+  // User request: all agents/subagents get 5x token budget, capped at 100k.
+  // Do not down-clamp easy/normal tasks; the role budget is already the source of truth.
+  return Math.min(base * AGENT_TOKEN_MULTIPLIER, AGENT_TOKEN_HARD_CAP);
 };
 
 const classifyAgentTaskDifficulty = (userRequest = "", taskHint = "") => {
@@ -4076,7 +4078,7 @@ const _callAgent = async ({ role, system, user, settings, signal, temperature = 
       { role: "user", content: user },
     ],
     temperature,
-    max_tokens: Math.min(budget, taskDifficulty === "hard" ? 48000 : 12000),
+    max_tokens: Math.min(budget, AGENT_TOKEN_HARD_CAP),
   };
   if (json) body.response_format = { type: "json_object" };
 
@@ -17364,10 +17366,38 @@ Rules:
     };
     const portfolioId = uid();
     const total = pkg.shots.length;
+    const portfolioCreatedAt = new Date().toISOString();
     setPortfolioBusy({ charId: char.id, pkg: pkgKey, done: 0, total, label: pkg.shots[0].label });
     showToast(`Generating ${pkg.label} — ${total} shots…`, "info");
     let masterImg = null;
     const results = [];
+
+    // Stream each finished portfolio shot into the character immediately.
+    // This avoids the old behavior where all images were held in `results` and only shown in bulk at the end.
+    const appendPortfolioShot = (shotItem) => {
+      setProjects(prev => prev.map(p => {
+        if (p.id !== activeProjectId) return p;
+        return {
+          ...p,
+          characters: (p.characters || []).map(c => {
+            if (c.id !== char.id) return c;
+            const existingPortfolios = Array.isArray(c.modelPortfolios) ? c.modelPortfolios : [];
+            const currentPortfolio = existingPortfolios.find(pf => pf.id === portfolioId);
+            const otherPortfolios = existingPortfolios.filter(pf => pf.id !== portfolioId);
+            const nextPortfolio = currentPortfolio
+              ? { ...currentPortfolio, updatedAt: new Date().toISOString(), shots: [...(currentPortfolio.shots || []), shotItem] }
+              : { id: portfolioId, pkg: pkgKey, label: pkg.label, createdAt: portfolioCreatedAt, updatedAt: new Date().toISOString(), shots: [shotItem] };
+            const moodItem = { ...shotItem, caption: `${pkg.label}: ${shotItem.caption}` };
+            return {
+              ...c,
+              modelPortfolios: [nextPortfolio, ...otherPortfolios],
+              moodBoard: [...(Array.isArray(c.moodBoard) ? c.moodBoard : []), moodItem],
+            };
+          }),
+        };
+      }));
+    };
+
     try {
       for (let i = 0; i < pkg.shots.length; i++) {
         const shot = pkg.shots[i];
@@ -17390,17 +17420,14 @@ Rules:
         try { img = await _genSingleImageRef.current(prompt, shot.framing, refs); } catch { img = null; }
         if (img) {
           if (!masterImg) masterImg = img; // first successful shot becomes the identity anchor
-          results.push({ id: uid(), data: img, caption: shot.label, shotKey: shot.key, addedAt: new Date().toISOString(), genKind: `portfolio:${pkgKey}`, genPrompt: prompt, aspectRatio: shot.framing, portfolioId });
+          const shotItem = { id: uid(), data: img, caption: shot.label, shotKey: shot.key, addedAt: new Date().toISOString(), genKind: `portfolio:${pkgKey}`, genPrompt: prompt, aspectRatio: shot.framing, portfolioId };
+          results.push(shotItem);
+          appendPortfolioShot(shotItem);
+          setPortfolioBusy({ charId: char.id, pkg: pkgKey, done: i + 1, total, label: pkg.shots[i + 1]?.label || shot.label });
+          showToast(`${pkg.label}: ${shot.label} added (${i + 1}/${total})`, "success");
         }
       }
       if (results.length > 0) {
-        const c = (project?.characters || []).find(x => x.id === char.id) || char;
-        const existing = Array.isArray(c.modelPortfolios) ? c.modelPortfolios : [];
-        const portfolio = { id: portfolioId, pkg: pkgKey, label: pkg.label, createdAt: new Date().toISOString(), shots: results };
-        updateCharById(char.id, "modelPortfolios", [portfolio, ...existing]);
-        // Also drop them into the mood board so they flow into the lineage + image library.
-        const prevMood = c.moodBoard || [];
-        updateCharById(char.id, "moodBoard", [...prevMood, ...results.map(r => ({ ...r, caption: `${pkg.label}: ${r.caption}` }))]);
         showToast(`${pkg.label} ready — ${results.length}/${total} shots`, "success");
       } else {
         showToast("Portfolio generation failed", "error");
@@ -17410,7 +17437,7 @@ Rules:
     } finally {
       setPortfolioBusy(null);
     }
-  }, [settings.apiKey, getLivePromptTemplate, updateCharById, showToast, project?.styleLockImage, project?.characters, charWardrobe]);
+  }, [settings.apiKey, getLivePromptTemplate, showToast, project?.styleLockImage, activeProjectId, setProjects, charWardrobe]);
 
   // Editorial Studio: build the base photoreal prompt, append the structured studio fragments,
   // and run a single image generation. Aspect ratio adapts to whether water/full-body framing is on.
