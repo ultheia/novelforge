@@ -1,5 +1,6 @@
-// APP_UPDATE_TIMESTAMP: 20260603_162041_Jakarta
-// FILE_NAME: App_update_20260603_162041_Jakarta.jsx
+// APP_UPDATE_TIMESTAMP: 20260603_171512_Jakarta
+// FILE_NAME: App_update_20260603_171512_Jakarta.jsx
+// FIX_MARKER: character-studio-prompts-visible-dedicated-sheet-v4
 import { useState, useEffect, useRef, useCallback, useMemo, useReducer, memo, createContext, useContext, Fragment } from "react";
 import { createPortal } from "react-dom";
 
@@ -4934,10 +4935,11 @@ const getCharacterTemplateRows = (config) => {
 // ─── GOOGLE SHEETS APP CONFIG ───
 // One Google Sheet can customize expandable app data without editing code.
 // Users do not need to touch the sheet after setup; Settings provides create/sync/repair controls.
-const PROMPT_TEMPLATE_HEADERS = ["id", "area", "name", "system", "user", "maxTokens", "temperature", "json", "active", "version", "notes"];
+const PROMPT_TEMPLATE_HEADERS = ["id", "area", "tab", "subtab", "feature", "action", "name", "system", "user", "maxTokens", "temperature", "json", "active", "version", "sort", "notes"];
 const STRUCTURED_PROMPT_TEMPLATE_TABLES = {
   promptTemplatesWrite: { tab: "WritePrompts", area: "Write", headers: PROMPT_TEMPLATE_HEADERS },
   promptTemplatesCharacters: { tab: "CharactersPrompts", area: "Characters", headers: PROMPT_TEMPLATE_HEADERS },
+  promptTemplatesCharacterStudio: { tab: "CharacterStudioPrompts", area: "Characters", subtab: "Studio", headers: PROMPT_TEMPLATE_HEADERS },
   promptTemplatesWorld: { tab: "WorldPrompts", area: "World", headers: PROMPT_TEMPLATE_HEADERS },
   promptTemplatesPlot: { tab: "PlotPrompts", area: "Plot", headers: PROMPT_TEMPLATE_HEADERS },
   promptTemplatesRelationships: { tab: "RelationshipsPrompts", area: "Relationships", headers: PROMPT_TEMPLATE_HEADERS },
@@ -4948,16 +4950,61 @@ const STRUCTURED_PROMPT_TEMPLATE_TABLES = {
 };
 const PROMPT_TEMPLATE_TABLE_KEYS = Object.keys(STRUCTURED_PROMPT_TEMPLATE_TABLES);
 const PROMPT_TEMPLATE_TABLE_KEYS_WITH_LEGACY = [...PROMPT_TEMPLATE_TABLE_KEYS, "promptTemplates"];
+const promptTemplateMetaForRow = (row = {}) => {
+  const id = String(row?.id || "").trim();
+  const area = String(row?.area || "").trim() || (id.startsWith("character.") ? "Characters" : id.startsWith("image.") ? "Images" : id.startsWith("world.") ? "World" : id.startsWith("plot.") ? "Plot" : id.startsWith("relationships.") ? "Relationships" : id.startsWith("chapter.") ? "Chapters" : id.startsWith("agent.") ? "Agents" : id.startsWith("help.") ? "Help" : "Help");
+  let tab = area;
+  let subtab = String(row?.subtab || "").trim();
+  let feature = String(row?.feature || "").trim();
+  let action = String(row?.action || "").trim();
+  if (id.startsWith("character.studio.")) { tab = "Characters"; subtab = "Studio"; feature = feature || "Character Studio"; action = action || id.replace("character.studio.", ""); }
+  else if (id.startsWith("character.autopilot.")) { tab = "Characters"; subtab = "Autopilot"; feature = feature || "Character Autopilot"; action = action || id.replace("character.autopilot.", ""); }
+  else if (id.startsWith("character.")) { tab = "Characters"; subtab = subtab || "Main"; feature = feature || "Character tools"; action = action || id.replace("character.", ""); }
+  else if (id.startsWith("write.")) { tab = "Write"; subtab = subtab || "Writing"; feature = feature || "Write tab"; action = action || id.replace("write.", ""); }
+  else if (id.startsWith("world.")) { tab = "World"; subtab = subtab || "Main"; feature = feature || "World tab"; action = action || id.replace("world.", ""); }
+  else if (id.startsWith("plot.")) { tab = "Plot"; subtab = subtab || "Main"; feature = feature || "Plot tab"; action = action || id.replace("plot.", ""); }
+  else if (id.startsWith("relationships.")) { tab = "Relationships"; subtab = subtab || "Main"; feature = feature || "Relationships tab"; action = action || id.replace("relationships.", ""); }
+  else if (id.startsWith("chapter.")) { tab = "Chapters"; subtab = subtab || "Main"; feature = feature || "Chapter tools"; action = action || id.replace("chapter.", ""); }
+  else if (id.startsWith("image.")) { tab = "Images"; subtab = subtab || "Main"; feature = feature || "Images tab"; action = action || id.replace("image.", ""); }
+  else if (id.startsWith("agent.")) { tab = "Agents"; subtab = subtab || "Runtime"; feature = feature || "Agent system"; action = action || id.replace("agent.", ""); }
+  else if (id.startsWith("help.")) { tab = "Help"; subtab = subtab || "Help"; feature = feature || "Help/chat"; action = action || id.replace("help.", ""); }
+  else if (id.startsWith("tab.chat.")) { tab = "Help"; subtab = subtab || "Tab chat"; feature = feature || "Tab chat"; action = action || id.replace("tab.chat.", ""); }
+  else { subtab = subtab || "Misc"; feature = feature || `${tab} prompts`; action = action || id; }
+  return { area, tab, subtab, feature, action };
+};
+const enrichPromptTemplateRow = (row = {}, i = 0) => {
+  const meta = promptTemplateMetaForRow(row);
+  return {
+    ...row,
+    area: row.area || meta.area,
+    tab: row.tab || meta.tab,
+    subtab: row.subtab || meta.subtab,
+    feature: row.feature || meta.feature,
+    action: row.action || meta.action,
+    sort: row.sort || String((i + 1) * 10),
+  };
+};
+const promptTemplateTableKeyForRow = (row = {}) => {
+  const id = String(row?.id || "").trim();
+  if (id.startsWith("character.studio.")) return "promptTemplatesCharacterStudio";
+  const wanted = String(row?.area || promptTemplateMetaForRow(row).area || "").trim().toLowerCase();
+  return PROMPT_TEMPLATE_TABLE_KEYS.find(k => {
+    const t = STRUCTURED_PROMPT_TEMPLATE_TABLES[k];
+    if (t.subtab && String(t.subtab).toLowerCase() !== String(row?.subtab || promptTemplateMetaForRow(row).subtab || "").toLowerCase()) return false;
+    return String(t.area || "").toLowerCase() === wanted && !t.subtab;
+  }) || "promptTemplatesHelp";
+};
 const promptTemplateTableKeyForArea = (area = "") => {
   const wanted = String(area || "").trim().toLowerCase();
-  return PROMPT_TEMPLATE_TABLE_KEYS.find(k => String(STRUCTURED_PROMPT_TEMPLATE_TABLES[k].area || "").toLowerCase() === wanted) || "promptTemplatesHelp";
+  return PROMPT_TEMPLATE_TABLE_KEYS.find(k => String(STRUCTURED_PROMPT_TEMPLATE_TABLES[k].area || "").toLowerCase() === wanted && !STRUCTURED_PROMPT_TEMPLATE_TABLES[k].subtab) || "promptTemplatesHelp";
 };
 const splitPromptTemplatesByArea = (rows = []) => {
   const out = Object.fromEntries(PROMPT_TEMPLATE_TABLE_KEYS.map(k => [k, []]));
-  for (const row of rows || []) {
-    const key = promptTemplateTableKeyForArea(row?.area || "Help");
-    out[key].push(row);
-  }
+  (rows || []).forEach((row, i) => {
+    const enriched = enrichPromptTemplateRow(row, i);
+    const key = promptTemplateTableKeyForRow(enriched);
+    out[key].push(enriched);
+  });
   return out;
 };
 const mergePromptTemplateRows = (...groups) => {
@@ -4989,6 +5036,7 @@ const CONFIG_TABLES = {
 const CONFIG_PROMPT_EDITOR_TABLES = [
   { key: "promptTemplatesWrite", label: "WritePrompts", short: "Write" },
   { key: "promptTemplatesCharacters", label: "CharactersPrompts", short: "Characters" },
+  { key: "promptTemplatesCharacterStudio", label: "CharacterStudioPrompts", short: "Character Studio" },
   { key: "promptTemplatesWorld", label: "WorldPrompts", short: "World" },
   { key: "promptTemplatesPlot", label: "PlotPrompts", short: "Plot" },
   { key: "promptTemplatesRelationships", label: "RelationshipsPrompts", short: "Relationships" },
@@ -5000,7 +5048,7 @@ const CONFIG_PROMPT_EDITOR_TABLES = [
 ];
 const CONFIG_TEXT_PROMPT_TABLE_KEYS = new Set(PROMPT_TEMPLATE_TABLE_KEYS);
 const CONFIG_SCHEMA_VERSION = "3";
-const PROMPT_STRUCTURE_RELEASE = "prompt-sheets-v3-visible-2026-06-03";
+const PROMPT_STRUCTURE_RELEASE = "prompt-sheets-v4-character-studio-dedicated-2026-06-03";
 const cfgBool = (value, fallback = true) => {
   if (value == null || value === "") return fallback;
   if (typeof value === "boolean") return value;
@@ -27778,7 +27826,7 @@ Speech pattern: ${char.speechPattern || ""}` },
               {configSheetId && <button onClick={handleConfigDisconnect} className="nf-btn nf-btn-ghost" style={{ color: "var(--nf-accent)" }}>Disconnect Config</button>}
             </div>
             <div style={{ fontSize: 11, color: "var(--nf-text-muted)", lineHeight: 1.5 }}>
-              One setup creates separate prompt tabs by app area: WritePrompts, CharactersPrompts, WorldPrompts, PlotPrompts, RelationshipsPrompts, ChaptersPrompts, ImagesPrompts, AgentsPrompts, and HelpPrompts. PromptTemplates is kept only as a legacy compatibility tab. Prompt-driven actions read the structured Google Sheet tabs right before running, so sheet edits are live without a manual sync. Use “Repair tabs + add missing defaults” to create the new tabs and migrate old PromptTemplates rows without erasing your edits.
+              One setup creates separate prompt tabs by app area: WritePrompts, CharactersPrompts, CharacterStudioPrompts, WorldPrompts, PlotPrompts, RelationshipsPrompts, ChaptersPrompts, ImagesPrompts, AgentsPrompts, and HelpPrompts. PromptTemplates is kept only as a legacy compatibility tab. Prompt-driven actions read the structured Google Sheet tabs right before running, so sheet edits are live without a manual sync. Use “Repair tabs + add missing defaults” to create the new tabs and migrate old PromptTemplates rows without erasing your edits.
             </div>
             {configError && <div style={{ fontSize: 11, color: "var(--nf-accent)", lineHeight: 1.5 }}>{configError}</div>}
           </div>
