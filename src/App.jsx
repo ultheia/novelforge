@@ -1,6 +1,6 @@
-// APP_UPDATE_TIMESTAMP: 20260603_184042_Jakarta
-// FILE_NAME: App_update_20260603_184042_Jakarta.jsx
-// FIX_MARKER: apple-simple-prompt-sheets-portfolio-packages-v6
+// APP_UPDATE_TIMESTAMP: 20260603_185706_Jakarta
+// FILE_NAME: App_update_20260603_185706_Jakarta.jsx
+// FIX_MARKER: fix-google-live-pull-gdrive-tdz-v6
 import { useState, useEffect, useRef, useCallback, useMemo, useReducer, memo, createContext, useContext, Fragment } from "react";
 import { createPortal } from "react-dom";
 
@@ -14901,6 +14901,15 @@ export default function NovelForge() {
   const [configPromptKind, setConfigPromptKind] = useState("promptTemplatesWrite");
   const [configPromptId, setConfigPromptId] = useState("");
   const [configDirty, setConfigDirty] = useState(false);
+
+  // ─── GOOGLE DRIVE STATE ───
+  const [gdriveClientId, setGdriveClientId] = useState("");
+  const [gdriveConnected, setGdriveConnected] = useState(false);
+  const [gdriveSyncing, setGdriveSyncing] = useState(false);
+  const [gdriveLastSync, setGdriveLastSync] = useState(null);
+  const [gdriveAutoSync, setGdriveAutoSync] = useState(false);
+  const [gdriveSyncInterval, setGdriveSyncInterval] = useState(5);
+  const gdriveSyncTimerRef = useRef(null);
   const [chatMessages, setChatMessages] = useState([]);
   const [chatInput, setChatInput] = useState("");
   const [isGenerating, setIsGenerating] = useState(false);
@@ -15142,14 +15151,6 @@ export default function NovelForge() {
   const [viewingDraftId, setViewingDraftId] = useState(null);
   const [activeBeatId, setActiveBeatId] = useState(null); // Tracks which beat cursor is in
   
-  // ─── GOOGLE DRIVE STATE ───
-  const [gdriveClientId, setGdriveClientId] = useState("");
-  const [gdriveConnected, setGdriveConnected] = useState(false);
-  const [gdriveSyncing, setGdriveSyncing] = useState(false);
-  const [gdriveLastSync, setGdriveLastSync] = useState(null);
-  const [gdriveAutoSync, setGdriveAutoSync] = useState(false);
-  const [gdriveSyncInterval, setGdriveSyncInterval] = useState(5);
-  const gdriveSyncTimerRef = useRef(null);
 
   const chatEndRef = useRef(null);
   const editorRef = useRef(null);
