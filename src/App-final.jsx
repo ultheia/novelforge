@@ -6585,18 +6585,6 @@ const GDrive = {
 
 
 // ─── Google Sheets App Config API ───
-const _sheetA1Col = (zeroIndex) => {
-  let n = Number(zeroIndex) + 1;
-  let out = "";
-  while (n > 0) {
-    const r = (n - 1) % 26;
-    out = String.fromCharCode(65 + r) + out;
-    n = Math.floor((n - 1) / 26);
-  }
-  return out || "A";
-};
-const _sheetA1Tab = (title) => `'${String(title || "").replace(/'/g, "''")}'`;
-
 const ConfigSheets = {
   _spreadsheetId: null,
   setSpreadsheetId(id) {
@@ -6756,49 +6744,6 @@ const ConfigSheets = {
     }
     return raw;
   },
-  async upsertPromptTemplateUserCell(tableKey, promptId, userPrompt, fallbackRow = {}) {
-    const id = this.getSpreadsheetId();
-    if (!id) throw new Error("No config spreadsheet connected");
-    const meta = CONFIG_TABLES[tableKey];
-    if (!meta) throw new Error(`Unknown config table: ${tableKey}`);
-    await this.ensureTabs();
-
-    const tab = meta.tab;
-    const data = await this.request(`spreadsheets/${id}/values/${encodeURIComponent(`${tab}!A:Z`)}`);
-    let values = data.values || [];
-    const headers = values[0]?.length ? values[0] : (meta.headers || []);
-
-    if (!values.length) {
-      await this.request(`spreadsheets/${id}/values/${encodeURIComponent(`${tab}!A1`)}`, {
-        method: "PUT",
-        body: JSON.stringify({ values: [headers] }),
-      });
-      values = [headers];
-    }
-
-    const idIdx = headers.findIndex(h => String(h).trim() === "id");
-    const userIdx = headers.findIndex(h => String(h).trim() === "user");
-    if (idIdx < 0 || userIdx < 0) throw new Error(`${tab} is missing id/user columns`);
-
-    const rowIndex = values.findIndex((row, idx) => idx > 0 && String(row[idIdx] || "").trim() === String(promptId || "").trim());
-    if (rowIndex === -1) {
-      const row = { ...fallbackRow, id: promptId, user: userPrompt, active: fallbackRow.active || "TRUE" };
-      const rowValues = headers.map(h => row[h] ?? "");
-      await this.request(`spreadsheets/${id}/values/${encodeURIComponent(`${tab}!A:Z`)}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`, {
-        method: "POST",
-        body: JSON.stringify({ values: [rowValues] }),
-      });
-      return { appended: true, range: `${tab}!${_sheetA1Col(userIdx)}:new`, tab, field: "user" };
-    }
-
-    const cell = `${_sheetA1Tab(tab)}!${_sheetA1Col(userIdx)}${rowIndex + 1}`;
-    await this.request(`spreadsheets/${id}/values/${encodeURIComponent(cell)}?valueInputOption=RAW`, {
-      method: "PUT",
-      body: JSON.stringify({ values: [[userPrompt]] }),
-    });
-    return { appended: false, range: `${tab}!${_sheetA1Col(userIdx)}${rowIndex + 1}`, tab, field: "user" };
-  },
-
   async saveRaw(rawConfig) {
     const id = this.getSpreadsheetId();
     if (!id) throw new Error("No config spreadsheet connected");
@@ -7393,12 +7338,6 @@ const MultiImageGallery = memo(({ label, hint, images, onAdd, onRemove, onUpdate
   }, [imgs.length, viewerIdx]);
 
   const viewer = viewerIdx !== null ? imgs[viewerIdx] : null;
-  const qaLabel = (qa) => {
-    if (!qa) return "";
-    if (qa.status === "unavailable") return "QA unavailable";
-    if (qa.status === "maxed") return `QA maxed ${qa.attempts || "?"}/${qa.maxAttempts || 3}`;
-    return `QA passed ${qa.attempts || 1}/${qa.maxAttempts || 3}`;
-  };
 
   return (
     <div className="nf-field">
@@ -7428,11 +7367,6 @@ const MultiImageGallery = memo(({ label, hint, images, onAdd, onRemove, onUpdate
                 style={{ position: "absolute", top: 3, right: 3, padding: 2, background: "rgba(0,0,0,0.55)", color: "#fff", border: "none", borderRadius: 2, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}
                 aria-label="Remove image"><Icons.X /></button>
             </div>
-            {img.qa && (
-              <div title={img.qa.reason || qaLabel(img.qa)} style={{ alignSelf: "flex-start", maxWidth: "100%", padding: "1px 5px", borderRadius: 2, background: "var(--nf-bg-deep)", border: "1px solid var(--nf-border)", color: "var(--nf-text-muted)", fontSize: 9, lineHeight: 1.25, fontFamily: "var(--nf-font-mono)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                {qaLabel(img.qa)}
-              </div>
-            )}
             {/* Caption now sits in normal flow beneath the thumbnail — no more overlap with the next row. */}
             {onUpdateCaption && (
               <input value={img.caption || ""} onChange={e => onUpdateCaption(img.id, e.target.value)}
@@ -7474,7 +7408,6 @@ const MultiImageGallery = memo(({ label, hint, images, onAdd, onRemove, onUpdate
               style={{ maxWidth: "90vw", maxHeight: "78vh", objectFit: "contain", borderRadius: 4, boxShadow: "0 8px 40px rgba(0,0,0,0.6)" }} />
             <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6 }}>
               {viewer.caption && <div style={{ color: "#fff", fontSize: 13, textAlign: "center", maxWidth: 600 }}>{viewer.caption}</div>}
-              {viewer.qa && <div title={viewer.qa.reason || qaLabel(viewer.qa)} style={{ color: "rgba(255,255,255,0.72)", fontSize: 10, fontFamily: "var(--nf-font-mono)", padding: "2px 6px", border: "1px solid rgba(255,255,255,0.14)", borderRadius: 3, background: "rgba(255,255,255,0.08)" }}>{qaLabel(viewer.qa)}</div>}
               <div style={{ color: "rgba(255,255,255,0.6)", fontSize: 11, fontFamily: "var(--nf-font-mono)" }}>{viewerIdx + 1} / {imgs.length}</div>
             </div>
           </div>
@@ -15503,10 +15436,7 @@ export default function NovelForge() {
   }, [appConfig, prepareConfigSheetAccess, commitLiveAppConfig]);
   const [editorialChar, setEditorialChar] = useState(null); // character whose Editorial Studio is open
   const [editorialBusy, setEditorialBusy] = useState(false);
-  const [portfolioBusy, setPortfolioBusy] = useState(null); // { charId, pkg, done, total, label, shotKey } while generating
-  const [portfolioShotSelections, setPortfolioShotSelections] = useState({}); // { "charId:pkgKey": "all" | shotKey }
-  const [portfolioPromptEditor, setPortfolioPromptEditor] = useState(null); // { pkgKey, shotKey, promptId, label, draft, loading, error }
-  const [portfolioPromptSaving, setPortfolioPromptSaving] = useState(false);
+  const [portfolioBusy, setPortfolioBusy] = useState(null); // { charId, pkg, done, total, label } while generating
   const [imageRedoBusy, setImageRedoBusy] = useState(null); // image id while a generated character image is being rerolled from text only
   const [showExportPreview, setShowExportPreview] = useState(false);
   const [showBreathingPauser, setShowBreathingPauser] = useState(false);
@@ -15950,7 +15880,6 @@ export default function NovelForge() {
   const projectsRef = useRef(projects);
   const handleImportJsonRef = useRef(null);
   const _genSingleImageRef = useRef(null);
-  const _lastImageQaRef = useRef(null);
   const settingsRef = useRef(settings);
   const themeRef = useRef(theme);
   const tabChatHistoriesRef = useRef(tabChatHistories);
@@ -17717,7 +17646,7 @@ Rules:
       const c = (project?.characters || []).find(x => x.id === job.charId) || job.char || {};
       const imageId = uid();
       const prev = Array.isArray(c.moodBoard) ? c.moodBoard : [];
-      updateCharById(job.charId, "moodBoard", [...prev, { id: imageId, data: img, caption: job.caption, addedAt: new Date().toISOString(), genKind: job.variant, genPrompt: job.prompt, parentId: null, aspectRatio: job.ratio, sceneChapterIdx: activeChapterIdx, qa: _lastImageQaRef.current }]);
+      updateCharById(job.charId, "moodBoard", [...prev, { id: imageId, data: img, caption: job.caption, addedAt: new Date().toISOString(), genKind: job.variant, genPrompt: job.prompt, parentId: null, aspectRatio: job.ratio, sceneChapterIdx: activeChapterIdx }]);
       setCharacterArtJobs(prevJobs => ({ ...prevJobs, [job.id]: { ...prevJobs[job.id], status: "success", imageId, updatedAt: new Date().toISOString() } }));
       showToast(`${job.caption} generated`, "success");
     } catch (e) {
@@ -17743,88 +17672,15 @@ Rules:
     runCharacterArtJob(retryJob);
   }, [characterArtJobs, runCharacterArtJob]);
 
-  const openPortfolioPromptEditor = useCallback(async (pkgKey, shotKey) => {
-    const pkg = MODEL_PORTFOLIO_PACKAGES[pkgKey];
-    const shot = pkg?.shots?.find(s => s.key === shotKey);
-    if (!pkg || !shot) { showToast("Pick a valid portfolio shot", "error"); return; }
-    const promptId = `character.studio.portfolio.${pkgKey}.${shot.key}`;
-    setPortfolioPromptEditor({ pkgKey, shotKey: shot.key, promptId, label: `${pkg.label} — ${shot.label}`, draft: "", loading: true, error: "" });
-    try {
-      const tpl = await getLivePromptTemplate(promptId, "promptTemplates");
-      const fallback = findPromptTemplate(buildDefaultAppConfig(), promptId, "promptTemplatesCharacterStudio") || tpl || {};
-      setPortfolioPromptEditor({ pkgKey, shotKey: shot.key, promptId, label: `${pkg.label} — ${shot.label}`, draft: tpl?.user || fallback.user || "", loading: false, error: "" });
-    } catch (e) {
-      const fallback = findPromptTemplate(buildDefaultAppConfig(), promptId, "promptTemplatesCharacterStudio") || {};
-      setPortfolioPromptEditor({ pkgKey, shotKey: shot.key, promptId, label: `${pkg.label} — ${shot.label}`, draft: fallback.user || "", loading: false, error: e?.message || String(e) });
-    }
-  }, [getLivePromptTemplate, showToast]);
-
-  const savePortfolioPromptEditor = useCallback(async () => {
-    const ed = portfolioPromptEditor;
-    if (!ed?.promptId) return;
-    const draft = String(ed.draft || "");
-    const pkg = MODEL_PORTFOLIO_PACKAGES[ed.pkgKey];
-    const shot = pkg?.shots?.find(s => s.key === ed.shotKey);
-    const defaultRow = findPromptTemplate(buildDefaultAppConfig(), ed.promptId, "promptTemplatesCharacterStudio") || {};
-    const localRow = findPromptTemplate(appConfig, ed.promptId, "promptTemplatesCharacterStudio") || findPromptTemplate(appConfig, ed.promptId) || {};
-    const fallbackRow = enrichPromptTemplateRow({
-      ...defaultRow,
-      ...localRow,
-      id: ed.promptId,
-      area: "Characters",
-      tab: "Characters",
-      subtab: "Studio",
-      feature: "Model Portfolio",
-      action: localRow.action || defaultRow.action || `${pkg?.label || "Model Portfolio"} — ${shot?.label || ed.shotKey}`,
-      name: localRow.name || defaultRow.name || `Model Portfolio — ${pkg?.label || ed.pkgKey} — ${shot?.label || ed.shotKey}`,
-      system: localRow.system || defaultRow.system || "You create one photorealistic model-portfolio image prompt from character identity data. Output goes directly to an image model, so write camera-visible direction only.",
-      user: draft,
-      maxTokens: localRow.maxTokens || defaultRow.maxTokens || 12000,
-      temperature: localRow.temperature || defaultRow.temperature || 0.65,
-      json: localRow.json || defaultRow.json || "FALSE",
-      active: localRow.active || defaultRow.active || "TRUE",
-      version: Number(localRow.version || defaultRow.version || 3),
-      sort: localRow.sort || defaultRow.sort || 9999,
-      notes: localRow.notes || defaultRow.notes || "Characters → Art Studio → Model Portfolio. This row controls the exact prompt for this package shot.",
-    }, 0);
-
-    try {
-      setPortfolioPromptSaving(true);
-      setConfigError("");
-      const access = await prepareConfigSheetAccess(`portfolio prompt:${ed.promptId}`);
-      if (!access.ok) throw new Error(access.message || "No config spreadsheet connected");
-      const result = await ConfigSheets.upsertPromptTemplateUserCell("promptTemplatesCharacterStudio", ed.promptId, draft, fallbackRow);
-
-      const nextRows = (() => {
-        const rows = appConfig?.promptTemplatesCharacterStudio || [];
-        const exists = rows.some(r => r.id === ed.promptId);
-        return exists ? rows.map(r => r.id === ed.promptId ? { ...r, user: draft } : r) : [...rows, fallbackRow];
-      })();
-      const nextCfg = commitLiveAppConfig({ ...appConfig, promptTemplatesCharacterStudio: nextRows });
-      cacheAppConfig(nextCfg);
-      showToast(`Prompt saved to ${result.range}`, "success");
-      setPortfolioPromptEditor(null);
-    } catch (e) {
-      const msg = e?.message || String(e);
-      setConfigError(msg);
-      showToast(`Prompt save failed: ${msg}`, "error");
-      setPortfolioPromptEditor(prev => prev ? { ...prev, error: msg } : prev);
-    } finally {
-      setPortfolioPromptSaving(false);
-    }
-  }, [portfolioPromptEditor, appConfig, prepareConfigSheetAccess, commitLiveAppConfig, showToast]);
-
   // ─── MODEL PORTFOLIO GENERATOR ───
-  // Produces an agency-style set from text only, or a single selected shot when `shotKey` is set.
-  // Every shot receives the full identity, wardrobe, package, shot, and realism prompt. We deliberately
-  // do NOT feed generated images back as image-to-image references because visual anchoring can copy
-  // artifacts or drift away from the written character bible.
-  const generateModelPortfolio = useCallback(async (char, pkgKey, wardrobeOverride, shotKey = "all") => {
+  // Produces a full agency-style set of consistent shots from text only. Every shot receives the full
+  // identity, wardrobe, package, shot, and realism prompt. We deliberately do NOT feed the first image
+  // back as an image-to-image reference because visual anchoring can copy artifacts or drift away from
+  // the written character bible. Each shot is a separate full-resolution image, captioned and saved as one portfolio.
+  const generateModelPortfolio = useCallback(async (char, pkgKey, wardrobeOverride) => {
     if (!settings.apiKey) { showToast("Add an API key in Settings first", "error"); return; }
     const pkg = MODEL_PORTFOLIO_PACKAGES[pkgKey];
     if (!pkg) return;
-    const selectedShots = shotKey && shotKey !== "all" ? pkg.shots.filter(s => s.key === shotKey) : pkg.shots;
-    if (!selectedShots.length) { showToast("Pick a valid portfolio shot", "error"); return; }
     const identity = buildEditorialIdentityBase(char);
     const wardrobe = (wardrobeOverride || "").trim() || charWardrobe(char);
     // Shared photoreal contract applied to every shot in the set.
@@ -17835,12 +17691,10 @@ Rules:
       return await getLivePromptTemplate(exactId) || livePortfolioTpl;
     };
     const portfolioId = uid();
-    const total = selectedShots.length;
-    const isSingleShot = total === 1 && selectedShots.length !== pkg.shots.length;
-    const portfolioLabel = isSingleShot ? `${pkg.label} — ${selectedShots[0].label}` : pkg.label;
+    const total = pkg.shots.length;
     const portfolioCreatedAt = new Date().toISOString();
-    setPortfolioBusy({ charId: char.id, pkg: pkgKey, done: 0, total, label: selectedShots[0].label, shotKey: shotKey || "all" });
-    showToast(`Generating ${portfolioLabel} — ${total} shot${total === 1 ? "" : "s"}…`, "info");
+    setPortfolioBusy({ charId: char.id, pkg: pkgKey, done: 0, total, label: pkg.shots[0].label });
+    showToast(`Generating ${pkg.label} — ${total} shots…`, "info");
     const results = [];
 
     // Stream each finished portfolio shot into the character immediately.
@@ -17857,8 +17711,8 @@ Rules:
             const otherPortfolios = existingPortfolios.filter(pf => pf.id !== portfolioId);
             const nextPortfolio = currentPortfolio
               ? { ...currentPortfolio, updatedAt: new Date().toISOString(), shots: [...(currentPortfolio.shots || []), shotItem] }
-              : { id: portfolioId, pkg: pkgKey, label: portfolioLabel, selectedShotKey: isSingleShot ? selectedShots[0].key : "all", createdAt: portfolioCreatedAt, updatedAt: new Date().toISOString(), shots: [shotItem] };
-            const moodItem = { ...shotItem, caption: `${portfolioLabel}: ${shotItem.caption}` };
+              : { id: portfolioId, pkg: pkgKey, label: pkg.label, createdAt: portfolioCreatedAt, updatedAt: new Date().toISOString(), shots: [shotItem] };
+            const moodItem = { ...shotItem, caption: `${pkg.label}: ${shotItem.caption}` };
             return {
               ...c,
               modelPortfolios: [nextPortfolio, ...otherPortfolios],
@@ -17870,9 +17724,9 @@ Rules:
     };
 
     try {
-      for (let i = 0; i < selectedShots.length; i++) {
-        const shot = selectedShots[i];
-        setPortfolioBusy({ charId: char.id, pkg: pkgKey, done: i, total, label: shot.label, shotKey: shot.key });
+      for (let i = 0; i < pkg.shots.length; i++) {
+        const shot = pkg.shots[i];
+        setPortfolioBusy({ charId: char.id, pkg: pkgKey, done: i, total, label: shot.label });
         const fallbackPrompt = `Photorealistic photograph of ${char.name || "a person"} — ${identity}${wardrobe ? `, wearing ${wardrobe}` : ""}. ` +
           `${pkg.style} ${shot.direction} ` +
           `SAME-PERSON LOCK: Keep the exact same written identity across this portfolio set using the text above only: face structure, hair, skin tone, body, wardrobe, and distinguishing details must remain consistent; only angle, framing, pose, and expression change. ` +
@@ -17889,15 +17743,15 @@ Rules:
         let img = null;
         try { img = await _genSingleImageRef.current(prompt, shot.framing, null); } catch { img = null; }
         if (img) {
-          const shotItem = { id: uid(), data: img, caption: shot.label, shotKey: shot.key, addedAt: new Date().toISOString(), genKind: `portfolio:${pkgKey}`, genPrompt: prompt, aspectRatio: shot.framing, portfolioId, qa: _lastImageQaRef.current };
+          const shotItem = { id: uid(), data: img, caption: shot.label, shotKey: shot.key, addedAt: new Date().toISOString(), genKind: `portfolio:${pkgKey}`, genPrompt: prompt, aspectRatio: shot.framing, portfolioId };
           results.push(shotItem);
           appendPortfolioShot(shotItem);
-          setPortfolioBusy({ charId: char.id, pkg: pkgKey, done: i + 1, total, label: selectedShots[i + 1]?.label || shot.label, shotKey: selectedShots[i + 1]?.key || shot.key });
-          showToast(`${portfolioLabel}: ${shot.label} added (${i + 1}/${total})`, "success");
+          setPortfolioBusy({ charId: char.id, pkg: pkgKey, done: i + 1, total, label: pkg.shots[i + 1]?.label || shot.label });
+          showToast(`${pkg.label}: ${shot.label} added (${i + 1}/${total})`, "success");
         }
       }
       if (results.length > 0) {
-        showToast(`${portfolioLabel} ready — ${results.length}/${total} shot${total === 1 ? "" : "s"}`, "success");
+        showToast(`${pkg.label} ready — ${results.length}/${total} shots`, "success");
       } else {
         showToast("Portfolio generation failed", "error");
       }
@@ -17938,11 +17792,11 @@ Rules:
             if (c.id !== charId) return c;
             return {
               ...c,
-              moodBoard: (Array.isArray(c.moodBoard) ? c.moodBoard : []).map(img => img.id === imageId ? { ...img, data: nextImg, redoneAt, qa: _lastImageQaRef.current } : img),
+              moodBoard: (Array.isArray(c.moodBoard) ? c.moodBoard : []).map(img => img.id === imageId ? { ...img, data: nextImg, redoneAt } : img),
               modelPortfolios: (Array.isArray(c.modelPortfolios) ? c.modelPortfolios : []).map(pf => ({
                 ...pf,
                 updatedAt: (pf.shots || []).some(img => img.id === imageId) ? redoneAt : pf.updatedAt,
-                shots: (pf.shots || []).map(img => img.id === imageId ? { ...img, data: nextImg, redoneAt, qa: _lastImageQaRef.current } : img),
+                shots: (pf.shots || []).map(img => img.id === imageId ? { ...img, data: nextImg, redoneAt } : img),
               })),
             };
           }),
@@ -18006,7 +17860,7 @@ ${liveStyleRefTpl?.user ? renderConfigTemplate(liveStyleRefTpl.user, { character
       if (img) {
         const prev = char.moodBoard || [];
         const parentId = prev.length ? prev[prev.length - 1].id : null;
-        updateCharById(char.id, "moodBoard", [...prev, { id: uid(), data: img, caption: "Editorial Studio", addedAt: new Date().toISOString(), genKind: "editorial-studio", genPrompt: prompt, parentId, aspectRatio: ratio, sceneChapterIdx: activeChapterIdx, qa: _lastImageQaRef.current }]);
+        updateCharById(char.id, "moodBoard", [...prev, { id: uid(), data: img, caption: "Editorial Studio", addedAt: new Date().toISOString(), genKind: "editorial-studio", genPrompt: prompt, parentId, aspectRatio: ratio, sceneChapterIdx: activeChapterIdx }]);
         showToast("Editorial image added to mood board", "success");
         setEditorialChar(null);
       }
@@ -20055,169 +19909,51 @@ CRITICAL: Every sentence must describe something visible. If a detail cannot be 
   useEffect(() => () => { if (gdriveSyncTimerRef.current) clearInterval(gdriveSyncTimerRef.current); }, []);
 
   const _generateSingleImage = useCallback(async (prompt, aspectRatio = null, referenceImages = null) => {
-    _lastImageQaRef.current = null;
-    const IMAGE_REVIEW_MODEL = "google/gemini-2.5-flash";
-    const QUALITY_MAX_ATTEMPTS = 3;
-    const NETWORK_MAX_RETRIES = 6;
-
+    // referenceImages: optional array of image URLs / data URLs to use as visual base (image-to-image).
+    // When present, the prompt + images are sent as a multimodal user message so the model
+    // renders the scene INTO / CONSISTENT WITH the supplied images.
     const refs = (Array.isArray(referenceImages) ? referenceImages : [])
       .filter(u => typeof u === "string" && (u.startsWith("data:") || u.startsWith("http")))
       .slice(0, 4);
-
-    const extractImageUrl = (data) => {
-      const message = data?.choices?.[0]?.message;
-      if (message?.images && Array.isArray(message.images)) {
-        for (const img of message.images) {
-          if (img?.image_url?.url) return img.image_url.url;
+    const userContent = refs.length > 0
+      ? [
+          { type: "text", text: prompt.trim() },
+          ...refs.map(url => ({ type: "image_url", image_url: { url } })),
+        ]
+      : prompt.trim();
+    const body = {
+      model: settings.imageModel || "google/gemini-3.1-flash-image-preview",
+      messages: [{ role: "user", content: userContent }],
+      modalities: ["image", "text"],
+      max_tokens: 12000,
+    };
+    if (aspectRatio) body.image_config = { aspect_ratio: aspectRatio };
+    const maxRetries = 6;
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "Authorization": `Bearer ${settings.apiKey}`, "HTTP-Referer": window.location.origin, "X-Title": "NovelForge" },
+          body: JSON.stringify(body),
+        });
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          throw new Error(errData.error?.message || `HTTP ${res.status}`);
         }
-      }
-      return null;
-    };
-
-    const parseJsonLoose = (raw) => {
-      if (raw == null) return null;
-      const txt = stripThinkingTokens(String(raw || "")).trim();
-      if (!txt) return null;
-      try { return JSON.parse(txt); } catch { /* fall through */ }
-      const match = txt.match(/\{[\s\S]*\}/);
-      if (!match) return null;
-      try { return JSON.parse(match[0]); } catch { return null; }
-    };
-
-    const generateCandidate = async (effectivePrompt) => {
-      const userContent = refs.length > 0
-        ? [
-            { type: "text", text: effectivePrompt.trim() },
-            ...refs.map(url => ({ type: "image_url", image_url: { url } })),
-          ]
-        : effectivePrompt.trim();
-      const body = {
-        model: settings.imageModel || "google/gemini-3.1-flash-image-preview",
-        messages: [{ role: "user", content: userContent }],
-        modalities: ["image", "text"],
-        max_tokens: 12000,
-      };
-      if (aspectRatio) body.image_config = { aspect_ratio: aspectRatio };
-
-      for (let attempt = 0; attempt < NETWORK_MAX_RETRIES; attempt++) {
-        try {
-          const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-            method: "POST",
-            headers: { "Content-Type": "application/json", "Authorization": `Bearer ${settings.apiKey}`, "HTTP-Referer": window.location.origin, "X-Title": "NovelForge" },
-            body: JSON.stringify(body),
-          });
-          if (!res.ok) {
-            const errData = await res.json().catch(() => ({}));
-            throw new Error(errData.error?.message || `HTTP ${res.status}`);
+        const data = await res.json();
+        const message = data.choices?.[0]?.message;
+        if (message?.images && Array.isArray(message.images)) {
+          for (const img of message.images) {
+            if (img.image_url?.url) return img.image_url.url;
           }
-          const data = await res.json();
-          const imageUrl = extractImageUrl(data);
-          if (imageUrl) return imageUrl;
-          if (attempt < NETWORK_MAX_RETRIES - 1) await new Promise(r => setTimeout(r, 2000 * (attempt + 1)));
-        } catch (err) {
-          if (attempt >= NETWORK_MAX_RETRIES - 1) throw err;
-          await new Promise(r => setTimeout(r, 2000 * (attempt + 1)));
         }
-      }
-      return null;
-    };
-
-    const reviewCandidate = async (imageUrl) => {
-      const reviewPrompt = [
-        "You are a strict but practical QA reviewer for AI-generated images.",
-        "Your job is to decide whether the image is passable for the original prompt or whether it needs a redo.",
-        "Pass if the image broadly and recognizably satisfies the prompt's main subject, identity, composition/framing, wardrobe, environment, and any explicit text requirements.",
-        "Fail only when there are material mismatches, missing core elements, wrong identity, wrong count of people, obviously wrong pose/composition, obviously wrong wardrobe, or clear contradiction of the prompt.",
-        "Do not fail for tiny stylistic deviations.",
-        aspectRatio ? `Requested aspect ratio: ${aspectRatio}.` : null,
-        'Return JSON only with this shape: {"verdict":"pass"|"redo","reason":"short reason","must_fix":"specific correction instructions if redo, else empty string"}.',
-        "Original prompt:",
-        prompt.trim(),
-      ].filter(Boolean).join("\n\n");
-
-      const body = {
-        model: IMAGE_REVIEW_MODEL,
-        response_format: { type: "json_object" },
-        messages: [{
-          role: "user",
-          content: [
-            { type: "text", text: reviewPrompt },
-            { type: "image_url", image_url: { url: imageUrl } },
-          ],
-        }],
-        max_tokens: 600,
-        temperature: 0,
-      };
-
-      for (let attempt = 0; attempt < 2; attempt++) {
-        try {
-          const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-            method: "POST",
-            headers: { "Content-Type": "application/json", "Authorization": `Bearer ${settings.apiKey}`, "HTTP-Referer": window.location.origin, "X-Title": "NovelForge" },
-            body: JSON.stringify(body),
-          });
-          if (!res.ok) {
-            const errData = await res.json().catch(() => ({}));
-            throw new Error(errData.error?.message || `HTTP ${res.status}`);
-          }
-          const data = await res.json();
-          const parsed = parseJsonLoose(data?.choices?.[0]?.message?.content);
-          const verdict = String(parsed?.verdict || parsed?.status || parsed?.decision || "pass").toLowerCase();
-          return {
-            verdict: verdict === "redo" || verdict === "fail" ? "redo" : "pass",
-            reason: String(parsed?.reason || parsed?.notes || parsed?.feedback || "").trim(),
-            mustFix: String(parsed?.must_fix || parsed?.mustFix || parsed?.fix || "").trim(),
-          };
-        } catch (err) {
-          if (attempt >= 1) {
-            console.warn("[NovelForge] Image review failed; allowing candidate through.", err?.message || err);
-            return { verdict: "pass", reason: "Review unavailable", mustFix: "", unavailable: true };
-          }
-          await new Promise(r => setTimeout(r, 1200 * (attempt + 1)));
-        }
-      }
-      return { verdict: "pass", reason: "Review unavailable", mustFix: "", unavailable: true };
-    };
-
-    let lastCandidate = null;
-    let lastReview = { verdict: "redo", reason: "", mustFix: "" };
-
-    for (let qualityAttempt = 0; qualityAttempt < QUALITY_MAX_ATTEMPTS; qualityAttempt++) {
-      const correctiveTail = qualityAttempt > 0 && (lastReview?.mustFix || lastReview?.reason)
-        ? `
-
-IMPORTANT: The previous image failed QA review. Regenerate from scratch and correct these issues while keeping the original prompt faithful:
-${lastReview.mustFix || lastReview.reason}`
-        : "";
-      const effectivePrompt = `${prompt.trim()}${correctiveTail}`;
-      const candidate = await generateCandidate(effectivePrompt);
-      if (!candidate) continue;
-      lastCandidate = candidate;
-      lastReview = await reviewCandidate(candidate);
-      if (lastReview.verdict === "pass") {
-        _lastImageQaRef.current = {
-          status: lastReview.unavailable ? "unavailable" : "passed",
-          attempts: qualityAttempt + 1,
-          maxAttempts: QUALITY_MAX_ATTEMPTS,
-          model: IMAGE_REVIEW_MODEL,
-          reason: lastReview.reason || "",
-          reviewedAt: new Date().toISOString(),
-        };
-        return candidate;
+        if (attempt < maxRetries - 1) await new Promise(r => setTimeout(r, 2000 * (attempt + 1)));
+      } catch (err) {
+        if (attempt >= maxRetries - 1) throw err;
+        await new Promise(r => setTimeout(r, 2000 * (attempt + 1)));
       }
     }
-
-    if (lastCandidate) {
-      _lastImageQaRef.current = {
-        status: "maxed",
-        attempts: QUALITY_MAX_ATTEMPTS,
-        maxAttempts: QUALITY_MAX_ATTEMPTS,
-        model: IMAGE_REVIEW_MODEL,
-        reason: lastReview?.mustFix || lastReview?.reason || "QA requested redo through the final attempt.",
-        reviewedAt: new Date().toISOString(),
-      };
-    }
-    return lastCandidate;
+    return null;
   }, [settings.apiKey, settings.imageModel]);
   useEffect(() => { _genSingleImageRef.current = _generateSingleImage; }, [_generateSingleImage]);
 
@@ -20230,7 +19966,7 @@ ${lastReview.mustFix || lastReview.reason}`
       try {
         const imageUrl = await _generateSingleImage(prompt, aspectRatio, referenceImages);
         if (imageUrl) {
-          setImageGenStatus({ status: "done", imageUrl, images: null, retryCount: 0, error: null, qa: _lastImageQaRef.current });
+          setImageGenStatus({ status: "done", imageUrl, images: null, retryCount: 0, error: null });
         } else {
           setImageGenStatus({ status: "error", imageUrl: null, images: null, retryCount: 0, error: "No image returned after 6 attempts. Adjust the prompt and try again." });
         }
@@ -20268,7 +20004,7 @@ ${lastReview.mustFix || lastReview.reason}`
         setImageGenStatus(prev => {
           if (!prev?.images) return prev;
           const imgs = [...prev.images];
-          imgs[idx] = { ...imgs[idx], imageUrl, qa: _lastImageQaRef.current, status: imageUrl ? "done" : "error", error: imageUrl ? null : "No image returned" };
+          imgs[idx] = { ...imgs[idx], imageUrl, status: imageUrl ? "done" : "error", error: imageUrl ? null : "No image returned" };
           const allDone = imgs.every(i => i.status === "done" || i.status === "error");
           return { ...prev, images: imgs, status: allDone ? "done" : "generating" };
         });
@@ -25439,30 +25175,13 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                   ) : (
                     <>
                     <input id={`pfwardrobe-${editingCharId}`} placeholder="Optional outfit for this set (else uses saved wardrobe)" className="nf-input" style={{ width: "100%", fontSize: 11, padding: "3px 8px", marginBottom: 6 }} />
-                    <div style={{ display: "grid", gap: 6 }}>
-                      {Object.entries(MODEL_PORTFOLIO_PACKAGES).map(([key, pkg]) => {
-                        const selKey = `${editingCharId}:${key}`;
-                        const selectedShot = portfolioShotSelections[selKey] || "all";
-                        const selectedLabel = selectedShot === "all" ? `All ${pkg.shots.length} shots` : (pkg.shots.find(s => s.key === selectedShot)?.label || "Selected shot");
-                        return (
-                          <div key={key} style={{ display: "grid", gridTemplateColumns: "minmax(160px, 1fr) minmax(140px, 190px) auto auto", gap: 6, alignItems: "center" }}>
-                            <button onClick={() => { const w = document.getElementById(`pfwardrobe-${editingCharId}`)?.value.trim(); generateModelPortfolio(editingChar, key, w, selectedShot); }} disabled={!!portfolioBusy}
-                              className="nf-btn-micro" style={{ fontSize: 11, opacity: portfolioBusy ? 0.5 : 1, justifyContent: "flex-start" }} title={pkg.blurb}>
-                              {pkg.label} · {selectedLabel}
-                            </button>
-                            <select value={selectedShot} onChange={e => setPortfolioShotSelections(prev => ({ ...prev, [selKey]: e.target.value }))} className="nf-input" style={{ fontSize: 11, padding: "3px 8px" }} title="Render all shots or one specific shot">
-                              <option value="all">All shots</option>
-                              {pkg.shots.map(shot => <option key={shot.key} value={shot.key}>{shot.label}</option>)}
-                            </select>
-                            <button onClick={() => { const shot = selectedShot === "all" ? pkg.shots[0]?.key : selectedShot; if (shot) openPortfolioPromptEditor(key, shot); }} className="nf-btn-micro" style={{ fontSize: 10, padding: "2px 6px" }} title="Edit the selected shot prompt in Google Sheets">✎</button>
-                            <div style={{ display: "flex", gap: 3, flexWrap: "wrap" }}>
-                              {pkg.shots.map(shot => (
-                                <button key={shot.key} onClick={() => openPortfolioPromptEditor(key, shot.key)} className="nf-btn-micro" style={{ fontSize: 8, padding: "1px 4px", opacity: selectedShot === shot.key ? 1 : 0.62 }} title={`Edit prompt: ${shot.label}`}>✎ {shot.key}</button>
-                              ))}
-                            </div>
-                          </div>
-                        );
-                      })}
+                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                      {Object.entries(MODEL_PORTFOLIO_PACKAGES).map(([key, pkg]) => (
+                        <button key={key} onClick={() => { const w = document.getElementById(`pfwardrobe-${editingCharId}`)?.value.trim(); generateModelPortfolio(editingChar, key, w); }} disabled={!!portfolioBusy}
+                          className="nf-btn-micro" style={{ fontSize: 11, opacity: portfolioBusy ? 0.5 : 1 }} title={pkg.blurb}>
+                          {pkg.label} ({pkg.shots.length})
+                        </button>
+                      ))}
                     </div>
                     </>
                   )}
@@ -25480,25 +25199,12 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                           <div key={s.id} style={{ display: "flex", flexDirection: "column", gap: 2 }}>
                             <div style={{ position: "relative", aspectRatio: "3/4", borderRadius: 2, overflow: "hidden", border: "1px solid var(--nf-border)", background: "var(--nf-bg-surface)" }}>
                               <img loading="lazy" src={s.data} alt={s.caption} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
-                              {s.qa && (
-                                <div title={s.qa.reason || "Image QA"} style={{ position: "absolute", left: 3, bottom: 3, maxWidth: "calc(100% - 6px)", padding: "2px 4px", borderRadius: 2, background: "rgba(0,0,0,0.64)", border: "1px solid rgba(255,255,255,0.16)", color: "rgba(255,255,255,0.86)", fontSize: 8, lineHeight: 1.1, fontFamily: "var(--nf-font-mono)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                                  {s.qa.status === "unavailable" ? "QA unavailable" : s.qa.status === "maxed" ? `QA maxed ${s.qa.attempts || "?"}/${s.qa.maxAttempts || 3}` : `QA passed ${s.qa.attempts || 1}/${s.qa.maxAttempts || 3}`}
-                                </div>
-                              )}
                               {s.genPrompt && (
                                 <button onClick={() => redoGeneratedCharacterImage(editingCharId, s.id, s)} disabled={!!imageRedoBusy}
                                   className="nf-btn-micro"
                                   style={{ position: "absolute", top: 3, left: 3, fontSize: 9, padding: "1px 5px", background: "rgba(0,0,0,0.62)", color: "#fff", borderColor: "rgba(255,255,255,0.22)", cursor: imageRedoBusy ? "wait" : "pointer" }}
                                   title="Redo this generated image from its saved text prompt only">
                                   {imageRedoBusy === s.id ? "…" : "↻"}
-                                </button>
-                              )}
-                              {s.shotKey && (
-                                <button onClick={() => openPortfolioPromptEditor(pf.pkg || String(s.genKind || "").replace("portfolio:", ""), s.shotKey)}
-                                  className="nf-btn-micro"
-                                  style={{ position: "absolute", top: 3, right: 3, fontSize: 9, padding: "1px 5px", background: "rgba(0,0,0,0.62)", color: "#fff", borderColor: "rgba(255,255,255,0.22)" }}
-                                  title="Edit this shot's prompt template in Google Sheets">
-                                  ✎
                                 </button>
                               )}
                             </div>
@@ -26605,7 +26311,14 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                                     if (!settings.apiKey || !item.name) { showToast("Name the org and set API key first", "error"); return; }
                                     showToast("Generating logo...", "info");
                                     try {
-                                      const img = await _genSingleImageRef.current(`Create a simple, clean logo/emblem/crest for an organization called "${item?.name || "unnamed"}". ${item.orgPurpose ? `Purpose: ${item.orgPurpose}. ` : ""}Style: minimalist Japandi aesthetic, clean lines, muted earth tones, on a plain dark background. Square format, icon-only, no text.`, "1:1", null);
+                                      const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+                                        method: "POST",
+                                        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${settings.apiKey}`, "HTTP-Referer": window.location.origin, "X-Title": "NovelForge" },
+                                        body: JSON.stringify({ model: settings.imageModel || "google/gemini-3.1-flash-image-preview", messages: [{ role: "user", content: `Create a simple, clean logo/emblem/crest for an organization called "${item?.name || "unnamed"}". ${item.orgPurpose ? `Purpose: ${item.orgPurpose}. ` : ""}Style: minimalist Japandi aesthetic, clean lines, muted earth tones, on a plain dark background. Square format, icon-only, no text.` }], modalities: ["image", "text"], temperature: 0.8, max_tokens: 12000 }),
+                                      });
+                                      if (!res.ok) { const errData = await res.json().catch(() => ({})); throw new Error(errData.error?.message || `API error (${res.status})`); }
+                                      const data = await res.json();
+                                      const img = data.choices?.[0]?.message?.images?.[0]?.image_url?.url;
                                       if (img) { updateProject({ worldBuilding: items.map(it => it.id === item.id ? { ...it, logoImage: img } : it) }); showToast("Logo generated", "success"); }
                                       else showToast("No image returned", "error");
                                     } catch (e) { showToast(`Failed: ${e.message?.replace(/sk-[a-zA-Z0-9]+/g, "sk-***") || "Unknown error"}`, "error"); }
@@ -26631,7 +26344,10 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                                             <button onClick={async () => {
                                               showToast("Re-rendering...", "info");
                                               try {
-                                                const img = await _genSingleImageRef.current(item.orgGroupPhotoPrompt, "4:3", null);
+                                                const res = await fetch("https://openrouter.ai/api/v1/chat/completions", { method: "POST", headers: { "Content-Type": "application/json", "Authorization": `Bearer ${settings.apiKey}`, "HTTP-Referer": window.location.origin, "X-Title": "NovelForge" }, body: JSON.stringify({ model: settings.imageModel || "google/gemini-3.1-flash-image-preview", messages: [{ role: "user", content: item.orgGroupPhotoPrompt }], modalities: ["image", "text"], temperature: 0.8, max_tokens: 12000 }) });
+                                                if (!res.ok) throw new Error(`API error (${res.status})`);
+                                                const data = await res.json();
+                                                const img = data.choices?.[0]?.message?.images?.[0]?.image_url?.url;
                                                 if (img) { updateProject({ worldBuilding: items.map(it => it.id === item.id ? { ...it, orgGroupPhoto: img } : it) }); showToast("Photo regenerated", "success"); }
                                               } catch (e) { showToast(`Failed: ${e.message}`, "error"); }
                                             }} className="nf-btn-micro" style={{ fontSize: 11 }}><Icons.Sparkle /> Re-render</button>
@@ -26658,7 +26374,10 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                                       {item.orgGroupPhotoPrompt && <button onClick={async () => {
                                         showToast("Rendering...", "info");
                                         try {
-                                          const img = await _genSingleImageRef.current(item.orgGroupPhotoPrompt, "4:3", null);
+                                          const res = await fetch("https://openrouter.ai/api/v1/chat/completions", { method: "POST", headers: { "Content-Type": "application/json", "Authorization": `Bearer ${settings.apiKey}`, "HTTP-Referer": window.location.origin, "X-Title": "NovelForge" }, body: JSON.stringify({ model: settings.imageModel || "google/gemini-3.1-flash-image-preview", messages: [{ role: "user", content: item.orgGroupPhotoPrompt }], modalities: ["image", "text"], temperature: 0.8, max_tokens: 12000 }) });
+                                          if (!res.ok) { const errData = await res.json().catch(() => ({})); throw new Error(errData.error?.message || `API error (${res.status})`); }
+                                          const data = await res.json();
+                                          const img = data.choices?.[0]?.message?.images?.[0]?.image_url?.url;
                                           if (img) { updateProject({ worldBuilding: items.map(it => it.id === item.id ? { ...it, orgGroupPhoto: img } : it) }); showToast("Photo rendered", "success"); }
                                           else showToast("No image", "error");
                                         } catch (e) { showToast(`Failed: ${e.message?.replace(/sk-[a-zA-Z0-9]+/g, "sk-***") || "Unknown error"}`, "error"); }
@@ -31940,36 +31659,6 @@ Speech pattern: ${char.speechPattern || ""}` },
             finally { setLineageRegenBusy(null); }
           }} />}
         {editorialChar && <EditorialStudioModal char={editorialChar} isGenerating={editorialBusy} onGenerate={handleEditorialGenerate} onClose={() => setEditorialChar(null)} />}
-        {portfolioPromptEditor && (
-          <div onClick={() => !portfolioPromptSaving && setPortfolioPromptEditor(null)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", zIndex: 9300, display: "flex", alignItems: "flex-start", justifyContent: "center", paddingTop: "8vh" }}>
-            <div onClick={e => e.stopPropagation()} style={{ width: "min(760px, 94vw)", maxHeight: "84vh", overflow: "auto", background: "var(--nf-bg-raised)", border: "1px solid var(--nf-border)", borderRadius: 8, boxShadow: "0 18px 60px rgba(0,0,0,0.45)" }}>
-              <div style={{ padding: "12px 16px", borderBottom: "1px solid var(--nf-border)", display: "flex", gap: 10, alignItems: "center" }}>
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: "var(--nf-text)" }}>Edit portfolio shot prompt</div>
-                  <div style={{ fontSize: 10, color: "var(--nf-text-muted)", marginTop: 2 }}>{portfolioPromptEditor.label} · {portfolioPromptEditor.promptId}</div>
-                </div>
-                <button onClick={() => setPortfolioPromptEditor(null)} disabled={portfolioPromptSaving} className="nf-btn-icon" aria-label="Close"><Icons.X /></button>
-              </div>
-              <div style={{ padding: 16, display: "grid", gap: 10 }}>
-                <div style={{ fontSize: 11, color: "var(--nf-text-muted)", lineHeight: 1.5 }}>
-                  This edits the <strong>user</strong> cell for this exact row in <strong>CharacterStudioPrompts</strong>. Keep placeholders like <code>{"{{identity}}"}</code>, <code>{"{{wardrobe}}"}</code>, <code>{"{{shotDirection}}"}</code>, and <code>{"{{realismContract}}"}</code> unless you mean to remove them.
-                </div>
-                {portfolioPromptEditor.error && <div style={{ fontSize: 11, color: "var(--nf-accent)", padding: "6px 8px", border: "1px solid var(--nf-accent)", background: "var(--nf-accent-glow)", borderRadius: 2 }}>{portfolioPromptEditor.error}</div>}
-                {portfolioPromptEditor.loading ? (
-                  <div style={{ fontSize: 12, color: "var(--nf-text-muted)", display: "flex", alignItems: "center", gap: 8 }}><Spinner /> Loading prompt…</div>
-                ) : (
-                  <textarea value={portfolioPromptEditor.draft || ""} onChange={e => setPortfolioPromptEditor(prev => prev ? { ...prev, draft: e.target.value } : prev)} className="nf-textarea" rows={18} style={{ fontSize: 11, fontFamily: "var(--nf-font-mono)", lineHeight: 1.45 }} placeholder="Prompt template" autoFocus />
-                )}
-                <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", alignItems: "center" }}>
-                  <button onClick={() => setPortfolioPromptEditor(null)} disabled={portfolioPromptSaving} className="nf-btn nf-btn-ghost" style={{ fontSize: 12 }}>Cancel</button>
-                  <button onClick={savePortfolioPromptEditor} disabled={portfolioPromptSaving || portfolioPromptEditor.loading} className="nf-btn nf-btn-primary" style={{ fontSize: 12 }}>
-                    {portfolioPromptSaving ? <><Spinner /> Saving to Sheet…</> : "Save to Google Sheets"}
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
         {showLineup && <ScaleLineup characters={project?.characters} onClose={() => setShowLineup(false)} />}
         {renameDialog && (
           <div onClick={() => setRenameDialog(null)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", zIndex: 9100, display: "flex", alignItems: "flex-start", justifyContent: "center", paddingTop: "16vh" }}>
