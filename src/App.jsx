@@ -20066,10 +20066,26 @@ CRITICAL: Every sentence must describe something visible. If a detail cannot be 
 
     const extractImageUrl = (data) => {
       const message = data?.choices?.[0]?.message;
+      const pickUrl = (obj) => {
+        if (!obj) return null;
+        if (typeof obj === "string" && (obj.startsWith("data:image") || obj.startsWith("http"))) return obj;
+        return obj?.image_url?.url || obj?.imageUrl || obj?.url || obj?.source?.url || obj?.data || null;
+      };
       if (message?.images && Array.isArray(message.images)) {
         for (const img of message.images) {
-          if (img?.image_url?.url) return img.image_url.url;
+          const url = pickUrl(img);
+          if (url) return url;
         }
+      }
+      if (Array.isArray(message?.content)) {
+        for (const part of message.content) {
+          const url = pickUrl(part) || pickUrl(part?.image_url) || pickUrl(part?.image) || pickUrl(part?.source);
+          if (url && (String(url).startsWith("data:image") || String(url).startsWith("http"))) return url;
+        }
+      }
+      if (typeof message?.content === "string") {
+        const m = message.content.match(/data:image\/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=]+|https?:\/\/\S+?(?:png|jpe?g|webp)(?:\?\S*)?/i);
+        if (m?.[0]) return m[0];
       }
       return null;
     };
@@ -24886,30 +24902,13 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                       const prompt = livePortraitTpl?.user
                         ? renderConfigTemplate(livePortraitTpl.user, { character: editingChar, characterName: editingChar.name || "the character", subjectDescription, lookAlikeLock, wardrobe })
                         : fallbackPortraitPrompt;
-                      const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${settings.apiKey}`, "HTTP-Referer": window.location.origin, "X-Title": "NovelForge" },
-                        body: JSON.stringify({
-                          model: settings.imageModel || "google/gemini-3.1-flash-image-preview",
-                          messages: [{ role: "user", content: prompt }],
-                          modalities: ["image", "text"],
-                          temperature: 0.8, max_tokens: 12000,
-                        }),
-                      });
-                      if (!res.ok) { const errData = await res.json().catch(() => ({})); throw new Error(errData.error?.message || `API error (${res.status})`); }
-                      const data = await res.json();
-                      const message = data.choices?.[0]?.message;
-                      let imageUrl = null;
-                      if (message?.images && Array.isArray(message.images)) {
-                        for (const img of message.images) {
-                          if (img.image_url?.url) { imageUrl = img.image_url.url; break; }
-                        }
-                      }
+                      const imageUrl = await _genSingleImageRef.current(prompt, "3:4", null);
                       if (imageUrl) {
                         updateCharById(editingCharId, "image", imageUrl);
-                        showToast("Portrait generated", "success");
+                        const qa = _lastImageQaRef.current;
+                        showToast(qa?.status ? `Portrait generated · QA ${qa.status}` : "Portrait generated", "success");
                       } else {
-                        showToast("No image returned — try again", "error");
+                        throw new Error("No image returned after retries");
                       }
                     } catch (e) { showToast(`Portrait failed: ${e.message?.replace(/sk-[a-zA-Z0-9]+/g, "sk-***") || "Unknown error"}`, "error"); }
                   }} className="nf-btn-micro" disabled={!settings.apiKey}>
@@ -25439,25 +25438,35 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                   ) : (
                     <>
                     <input id={`pfwardrobe-${editingCharId}`} placeholder="Optional outfit for this set (else uses saved wardrobe)" className="nf-input" style={{ width: "100%", fontSize: 11, padding: "3px 8px", marginBottom: 6 }} />
-                    <div style={{ display: "grid", gap: 6 }}>
+                    <div style={{ display: "grid", gap: 8 }}>
                       {Object.entries(MODEL_PORTFOLIO_PACKAGES).map(([key, pkg]) => {
                         const selKey = `${editingCharId}:${key}`;
                         const selectedShot = portfolioShotSelections[selKey] || "all";
-                        const selectedLabel = selectedShot === "all" ? `All ${pkg.shots.length} shots` : (pkg.shots.find(s => s.key === selectedShot)?.label || "Selected shot");
+                        const selectedShotDef = pkg.shots.find(s => s.key === selectedShot);
+                        const selectedLabel = selectedShot === "all" ? `All ${pkg.shots.length} shots` : (selectedShotDef?.label || "Selected shot");
                         return (
-                          <div key={key} style={{ display: "grid", gridTemplateColumns: "minmax(160px, 1fr) minmax(140px, 190px) auto auto", gap: 6, alignItems: "center" }}>
-                            <button onClick={() => { const w = document.getElementById(`pfwardrobe-${editingCharId}`)?.value.trim(); generateModelPortfolio(editingChar, key, w, selectedShot); }} disabled={!!portfolioBusy}
-                              className="nf-btn-micro" style={{ fontSize: 11, opacity: portfolioBusy ? 0.5 : 1, justifyContent: "flex-start" }} title={pkg.blurb}>
-                              {pkg.label} · {selectedLabel}
-                            </button>
-                            <select value={selectedShot} onChange={e => setPortfolioShotSelections(prev => ({ ...prev, [selKey]: e.target.value }))} className="nf-input" style={{ fontSize: 11, padding: "3px 8px" }} title="Render all shots or one specific shot">
-                              <option value="all">All shots</option>
-                              {pkg.shots.map(shot => <option key={shot.key} value={shot.key}>{shot.label}</option>)}
-                            </select>
-                            <button onClick={() => { const shot = selectedShot === "all" ? pkg.shots[0]?.key : selectedShot; if (shot) openPortfolioPromptEditor(key, shot); }} className="nf-btn-micro" style={{ fontSize: 10, padding: "2px 6px" }} title="Edit the selected shot prompt in Google Sheets">✎</button>
-                            <div style={{ display: "flex", gap: 3, flexWrap: "wrap" }}>
+                          <div key={key} className="nf-portfolio-package-card">
+                            <div className="nf-portfolio-package-main">
+                              <button onClick={() => { const w = document.getElementById(`pfwardrobe-${editingCharId}`)?.value.trim(); generateModelPortfolio(editingChar, key, w, selectedShot); }} disabled={!!portfolioBusy}
+                                className="nf-btn-micro nf-portfolio-generate-btn" title={pkg.blurb}>
+                                <Icons.Sparkle />
+                                <span>{pkg.label}</span>
+                                <span className="nf-portfolio-generate-meta">{selectedLabel}</span>
+                              </button>
+                              <select value={selectedShot} onChange={e => setPortfolioShotSelections(prev => ({ ...prev, [selKey]: e.target.value }))} className="nf-input nf-portfolio-shot-select" title="Render all shots or one specific shot">
+                                <option value="all">All shots</option>
+                                {pkg.shots.map(shot => <option key={shot.key} value={shot.key}>{shot.label}</option>)}
+                              </select>
+                              <button onClick={() => { const shot = selectedShot === "all" ? pkg.shots[0]?.key : selectedShot; if (shot) openPortfolioPromptEditor(key, shot); }} className="nf-btn-micro nf-portfolio-edit-selected" title="Edit the selected shot prompt in Google Sheets">
+                                <Icons.Pen /> Prompt
+                              </button>
+                            </div>
+                            <div className="nf-portfolio-shot-chip-row" aria-label={`${pkg.label} shot prompt editors`}>
                               {pkg.shots.map(shot => (
-                                <button key={shot.key} onClick={() => openPortfolioPromptEditor(key, shot.key)} className="nf-btn-micro" style={{ fontSize: 8, padding: "1px 4px", opacity: selectedShot === shot.key ? 1 : 0.62 }} title={`Edit prompt: ${shot.label}`}>✎ {shot.key}</button>
+                                <button key={shot.key} onClick={() => openPortfolioPromptEditor(key, shot.key)} className={`nf-portfolio-shot-chip ${selectedShot === shot.key ? "active" : ""}`} title={`Edit prompt: ${shot.label}`}>
+                                  <span className="nf-portfolio-shot-chip-label">{shot.label}</span>
+                                  <span className="nf-portfolio-shot-chip-icon" aria-hidden="true"><Icons.Pen /></span>
+                                </button>
                               ))}
                             </div>
                           </div>
@@ -25495,10 +25504,10 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                               )}
                               {s.shotKey && (
                                 <button onClick={() => openPortfolioPromptEditor(pf.pkg || String(s.genKind || "").replace("portfolio:", ""), s.shotKey)}
-                                  className="nf-btn-micro"
-                                  style={{ position: "absolute", top: 3, right: 3, fontSize: 9, padding: "1px 5px", background: "rgba(0,0,0,0.62)", color: "#fff", borderColor: "rgba(255,255,255,0.22)" }}
-                                  title="Edit this shot's prompt template in Google Sheets">
-                                  ✎
+                                  className="nf-portfolio-shot-overlay-btn"
+                                  title="Edit this shot's prompt template in Google Sheets"
+                                  aria-label="Edit shot prompt">
+                                  <Icons.Pen />
                                 </button>
                               )}
                             </div>
@@ -30702,6 +30711,27 @@ Speech pattern: ${char.speechPattern || ""}` },
           .nf-btn-micro:active { transform: scale(0.95); transition-duration: 0.06s; }
           .nf-btn-micro:disabled { opacity: 0.3; cursor: default; }
           .nf-btn-micro-danger:hover { color: var(--nf-accent); border-color: var(--nf-accent); }
+          .nf-portfolio-package-card { padding: 8px; border: 1px solid var(--nf-border); border-radius: var(--nf-radius); background: var(--nf-bg-deep); display: grid; gap: 7px; }
+          .nf-portfolio-package-main { display: grid; grid-template-columns: minmax(170px, 1fr) minmax(132px, 180px) auto; gap: 6px; align-items: center; }
+          .nf-portfolio-generate-btn { min-height: 30px; padding: 5px 9px; font-size: 11px; justify-content: flex-start; background: var(--nf-bg-surface); }
+          .nf-portfolio-generate-btn svg { flex-shrink: 0; }
+          .nf-portfolio-generate-meta { margin-left: auto; color: var(--nf-text-muted); font-size: 9px; font-family: var(--nf-font-mono); white-space: nowrap; }
+          .nf-portfolio-shot-select { min-height: 30px; padding: 4px 8px; font-size: 11px; }
+          .nf-portfolio-edit-selected { min-height: 30px; padding: 5px 10px; font-size: 10px; background: var(--nf-bg-raised); white-space: nowrap; }
+          .nf-portfolio-shot-chip-row { display: flex; gap: 4px; flex-wrap: wrap; align-items: center; }
+          .nf-portfolio-shot-chip { min-height: 24px; display: inline-flex; align-items: center; gap: 5px; padding: 3px 7px; border: 1px solid var(--nf-border); border-radius: var(--nf-radius-pill); background: var(--nf-bg-surface); color: var(--nf-text-muted); cursor: pointer; font-size: 9.5px; font-family: var(--nf-font-body); transition: color 0.2s, border-color 0.2s, background 0.2s, transform 0.2s cubic-bezier(0.4,0,0.2,1); }
+          .nf-portfolio-shot-chip:hover { color: var(--nf-text-dim); border-color: var(--nf-accent); background: var(--nf-bg-hover); }
+          .nf-portfolio-shot-chip.active { color: var(--nf-accent); border-color: var(--nf-accent); background: var(--nf-accent-glow); }
+          .nf-portfolio-shot-chip-icon { width: 14px; height: 14px; display: inline-flex; align-items: center; justify-content: center; opacity: 0.68; }
+          .nf-portfolio-shot-chip-icon svg { width: 10px; height: 10px; }
+          .nf-portfolio-shot-overlay-btn { position: absolute; top: 4px; right: 4px; width: 22px; height: 22px; padding: 0; display: inline-flex; align-items: center; justify-content: center; border: 1px solid rgba(255,255,255,0.22); border-radius: 999px; background: rgba(0,0,0,0.58); color: #fff; cursor: pointer; transition: background 0.2s, border-color 0.2s, transform 0.2s; }
+          .nf-portfolio-shot-overlay-btn svg { width: 12px; height: 12px; }
+          .nf-portfolio-shot-overlay-btn:hover { background: rgba(0,0,0,0.78); border-color: rgba(255,255,255,0.42); transform: translateY(-1px); }
+          @media (max-width: 760px) {
+            .nf-portfolio-package-main { grid-template-columns: 1fr; }
+            .nf-portfolio-generate-meta { margin-left: 0; }
+            .nf-portfolio-edit-selected, .nf-portfolio-shot-select { width: 100%; }
+          }
 
           
           /* Physical card interactions — Japandi paper feel */
