@@ -5449,7 +5449,7 @@ const DETAILED_PROMPT_TEMPLATES = [
     "area": "Characters",
     "name": "Art Studio — quick portrait button",
     "system": "You create photorealistic character portraits from NovelForge character data. Output is sent directly to an image model, so write camera-visible image direction only.",
-    "user": "Create a realistic model catalogue portrait of {{characterName}}.\n\nFRAME: Strict upper-body model catalogue portrait. Camera is at eye level, centered on the subject. The subject's head occupies approximately 30% of image height from crown to chin. Shoulders visible below the chin, upper chest visible, crop at mid-torso. No full body. Subject faces directly forward and looks into the camera lens.\n\nEXPRESSION / BODY: Sensual expression with eyes half looking up and mouth half gasping, sweaty with glossy baby oil allover, flexing with one hand behind head and one hand flexing to the navel. Shirtless.\n\nBACKGROUND: Pure solid white (#FFFFFF). No gradients. No shadows on the background. No texture. No color tint. No bokeh. No objects. Flat, even, pure white from edge to edge.\n\nSUBJECT: {{subjectDescription}}\n{{lookAlikeLock}}\n\nPHOTOREAL CONTRACT: lifelike skin with visible pores and natural texture, realistic hair strands. No illustration, no painting, no CGI look.",
+    "user": "Create a realistic model catalogue portrait of {{characterName}}.\n\nFRAME: Strict upper-body model catalogue portrait. Camera is at eye level, centered on the subject. The subject's head occupies approximately 30% of image height from crown to chin. Shoulders visible below the chin, upper chest visible, crop at mid-torso. No full body. Subject faces directly forward and looks into the camera lens.\n\nEXPRESSION / BODY: Natural neutral catalogue expression, relaxed shoulders, simple upright posture, fully clothed unless the saved wardrobe says otherwise.\n\nBACKGROUND: Pure solid white (#FFFFFF). No gradients. No shadows on the background. No texture. No color tint. No bokeh. No objects. Flat, even, pure white from edge to edge.\n\nSUBJECT: {{subjectDescription}}\n{{lookAlikeLock}}\n\nPHOTOREAL CONTRACT: lifelike skin with visible pores and natural texture, realistic hair strands. No illustration, no painting, no CGI look.",
     "maxTokens": 12000,
     "temperature": 0.8,
     "json": "FALSE",
@@ -15505,8 +15505,11 @@ export default function NovelForge() {
   const [editorialBusy, setEditorialBusy] = useState(false);
   const [portfolioBusy, setPortfolioBusy] = useState(null); // { charId, pkg, done, total, label, shotKey } while generating
   const [portfolioShotSelections, setPortfolioShotSelections] = useState({}); // { "charId:pkgKey": "all" | shotKey }
+  const [openPortfolioShotMenu, setOpenPortfolioShotMenu] = useState(null); // "charId:pkgKey" while a shot picker is open
   const [portfolioPromptEditor, setPortfolioPromptEditor] = useState(null); // { pkgKey, shotKey, promptId, label, draft, loading, error }
   const [portfolioPromptSaving, setPortfolioPromptSaving] = useState(false);
+  const [aiActivityFeed, setAiActivityFeed] = useState([]); // visible AI job log: [{id,title,detail,status,createdAt,updatedAt,done,total}]
+  const [aiActivityOpen, setAiActivityOpen] = useState(true);
   const [imageRedoBusy, setImageRedoBusy] = useState(null); // image id while a generated character image is being rerolled from text only
   const [showExportPreview, setShowExportPreview] = useState(false);
   const [showBreathingPauser, setShowBreathingPauser] = useState(false);
@@ -15564,6 +15567,29 @@ export default function NovelForge() {
   const [undoState, undoDispatch] = useReducer(undoReducer, { past: [], future: [] });
 
   const showToast = useCallback((message, type = "info") => setToast({ message, type, key: Date.now() }), []);
+
+  const updateAiActivity = useCallback((id, patch) => {
+    if (!id) return;
+    setAiActivityFeed(prev => {
+      const now = new Date().toISOString();
+      const exists = prev.some(item => item.id === id);
+      const next = exists
+        ? prev.map(item => item.id === id ? { ...item, ...patch, updatedAt: now } : item)
+        : [{ id, status: "working", createdAt: now, updatedAt: now, ...patch }, ...prev];
+      return next.slice(0, 8);
+    });
+    setAiActivityOpen(true);
+  }, []);
+
+  const startAiActivity = useCallback((title, detail = "") => {
+    const id = uid();
+    updateAiActivity(id, { title, detail, status: "working" });
+    return id;
+  }, [updateAiActivity]);
+
+  const finishAiActivity = useCallback((id, status = "done", detail = "") => {
+    updateAiActivity(id, { status, detail: detail || (status === "done" ? "Done" : status === "failed" ? "Failed" : "Stopped") });
+  }, [updateAiActivity]);
 
   const toggleTheme = useCallback(() => setTheme(prev => {
     if (prev === "dark") return "light";
@@ -17712,7 +17738,7 @@ Rules:
   const runCharacterArtJob = useCallback(async (job) => {
     setCharacterArtJobs(prev => ({ ...prev, [job.id]: { ...job, status: "generating", error: "", updatedAt: new Date().toISOString() } }));
     try {
-      const img = await _genSingleImageRef.current(job.prompt, job.ratio, null);
+      const img = await _genSingleImageRef.current(job.prompt, job.ratio, null, { title: job.caption || "Generate character art", detail: "Building character image" });
       if (!img) throw new Error("Image API returned no image");
       const c = (project?.characters || []).find(x => x.id === job.charId) || job.char || {};
       const imageId = uid();
@@ -17887,7 +17913,7 @@ Rules:
           : fallbackPrompt;
         // Text-only identity lock: never pass previous portfolio shots or style images as references.
         let img = null;
-        try { img = await _genSingleImageRef.current(prompt, shot.framing, null); } catch { img = null; }
+        try { img = await _genSingleImageRef.current(prompt, shot.framing, null, { title: `${portfolioLabel} · ${shot.label}`, detail: `Portfolio shot ${i + 1}/${total}` }); } catch { img = null; }
         if (img) {
           const shotItem = { id: uid(), data: img, caption: shot.label, shotKey: shot.key, addedAt: new Date().toISOString(), genKind: `portfolio:${pkgKey}`, genPrompt: prompt, aspectRatio: shot.framing, portfolioId, qa: _lastImageQaRef.current };
           results.push(shotItem);
@@ -17927,7 +17953,7 @@ Rules:
     setImageRedoBusy(imageId);
     showToast("Redoing image from text prompt only…", "info");
     try {
-      const nextImg = await _genSingleImageRef.current(prompt, ratio, null);
+      const nextImg = await _genSingleImageRef.current(prompt, ratio, null, { title: "Redo generated image", detail: "Regenerating from saved text prompt" });
       if (!nextImg) { showToast("Redo failed", "error"); return; }
       const redoneAt = new Date().toISOString();
       setProjects(prev => prev.map(p => {
@@ -20054,7 +20080,7 @@ CRITICAL: Every sentence must describe something visible. If a detail cannot be 
 
   useEffect(() => () => { if (gdriveSyncTimerRef.current) clearInterval(gdriveSyncTimerRef.current); }, []);
 
-  const _generateSingleImage = useCallback(async (prompt, aspectRatio = null, referenceImages = null) => {
+  const _generateSingleImage = useCallback(async (prompt, aspectRatio = null, referenceImages = null, activity = {}) => {
     _lastImageQaRef.current = null;
     const IMAGE_REVIEW_MODEL = "google/gemini-2.5-flash";
     const QUALITY_MAX_ATTEMPTS = 3;
@@ -20063,6 +20089,9 @@ CRITICAL: Every sentence must describe something visible. If a detail cannot be 
     const refs = (Array.isArray(referenceImages) ? referenceImages : [])
       .filter(u => typeof u === "string" && (u.startsWith("data:") || u.startsWith("http")))
       .slice(0, 4);
+    const activityId = activity?.id || startAiActivity(activity?.title || "Generate image", activity?.detail || "Preparing image request");
+    const activityTitle = activity?.title || "Generate image";
+    updateAiActivity(activityId, { title: activityTitle, detail: activity?.detail || "Preparing prompt and image settings", status: "working", done: 0, total: QUALITY_MAX_ATTEMPTS });
 
     const extractImageUrl = (data) => {
       const message = data?.choices?.[0]?.message;
@@ -20117,6 +20146,7 @@ CRITICAL: Every sentence must describe something visible. If a detail cannot be 
 
       for (let attempt = 0; attempt < NETWORK_MAX_RETRIES; attempt++) {
         try {
+          updateAiActivity(activityId, { title: activityTitle, detail: `Calling image model · network try ${attempt + 1}/${NETWORK_MAX_RETRIES}`, status: "working" });
           const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
             method: "POST",
             headers: { "Content-Type": "application/json", "Authorization": `Bearer ${settings.apiKey}`, "HTTP-Referer": window.location.origin, "X-Title": "NovelForge" },
@@ -20128,9 +20158,14 @@ CRITICAL: Every sentence must describe something visible. If a detail cannot be 
           }
           const data = await res.json();
           const imageUrl = extractImageUrl(data);
-          if (imageUrl) return imageUrl;
+          if (imageUrl) {
+            updateAiActivity(activityId, { title: activityTitle, detail: "Image returned · sending to QA review", status: "working" });
+            return imageUrl;
+          }
+          updateAiActivity(activityId, { title: activityTitle, detail: `No image returned · retrying ${attempt + 1}/${NETWORK_MAX_RETRIES}`, status: "working" });
           if (attempt < NETWORK_MAX_RETRIES - 1) await new Promise(r => setTimeout(r, 2000 * (attempt + 1)));
         } catch (err) {
+          updateAiActivity(activityId, { title: activityTitle, detail: `Image call failed · retrying ${attempt + 1}/${NETWORK_MAX_RETRIES}: ${_formatApiError(err)}`, status: "working" });
           if (attempt >= NETWORK_MAX_RETRIES - 1) throw err;
           await new Promise(r => setTimeout(r, 2000 * (attempt + 1)));
         }
@@ -20167,6 +20202,7 @@ CRITICAL: Every sentence must describe something visible. If a detail cannot be 
 
       for (let attempt = 0; attempt < 2; attempt++) {
         try {
+          updateAiActivity(activityId, { title: activityTitle, detail: `QA reviewing image · try ${attempt + 1}/2`, status: "working" });
           const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
             method: "POST",
             headers: { "Content-Type": "application/json", "Authorization": `Bearer ${settings.apiKey}`, "HTTP-Referer": window.location.origin, "X-Title": "NovelForge" },
@@ -20187,6 +20223,7 @@ CRITICAL: Every sentence must describe something visible. If a detail cannot be 
         } catch (err) {
           if (attempt >= 1) {
             console.warn("[NovelForge] Image review failed; allowing candidate through.", err?.message || err);
+            updateAiActivity(activityId, { title: activityTitle, detail: "QA unavailable · accepting image", status: "working" });
             return { verdict: "pass", reason: "Review unavailable", mustFix: "", unavailable: true };
           }
           await new Promise(r => setTimeout(r, 1200 * (attempt + 1)));
@@ -20198,43 +20235,54 @@ CRITICAL: Every sentence must describe something visible. If a detail cannot be 
     let lastCandidate = null;
     let lastReview = { verdict: "redo", reason: "", mustFix: "" };
 
-    for (let qualityAttempt = 0; qualityAttempt < QUALITY_MAX_ATTEMPTS; qualityAttempt++) {
-      const correctiveTail = qualityAttempt > 0 && (lastReview?.mustFix || lastReview?.reason)
-        ? `
+    try {
+      for (let qualityAttempt = 0; qualityAttempt < QUALITY_MAX_ATTEMPTS; qualityAttempt++) {
+        updateAiActivity(activityId, { title: activityTitle, detail: `Rendering candidate ${qualityAttempt + 1}/${QUALITY_MAX_ATTEMPTS}`, status: "working", done: qualityAttempt, total: QUALITY_MAX_ATTEMPTS });
+        const correctiveTail = qualityAttempt > 0 && (lastReview?.mustFix || lastReview?.reason)
+          ? `
 
 IMPORTANT: The previous image failed QA review. Regenerate from scratch and correct these issues while keeping the original prompt faithful:
 ${lastReview.mustFix || lastReview.reason}`
-        : "";
-      const effectivePrompt = `${prompt.trim()}${correctiveTail}`;
-      const candidate = await generateCandidate(effectivePrompt);
-      if (!candidate) continue;
-      lastCandidate = candidate;
-      lastReview = await reviewCandidate(candidate);
-      if (lastReview.verdict === "pass") {
+          : "";
+        const effectivePrompt = `${prompt.trim()}${correctiveTail}`;
+        const candidate = await generateCandidate(effectivePrompt);
+        if (!candidate) continue;
+        lastCandidate = candidate;
+        lastReview = await reviewCandidate(candidate);
+        if (lastReview.verdict === "pass") {
+          _lastImageQaRef.current = {
+            status: lastReview.unavailable ? "unavailable" : "passed",
+            attempts: qualityAttempt + 1,
+            maxAttempts: QUALITY_MAX_ATTEMPTS,
+            model: IMAGE_REVIEW_MODEL,
+            reason: lastReview.reason || "",
+            reviewedAt: new Date().toISOString(),
+          };
+          finishAiActivity(activityId, "done", lastReview.unavailable ? "Image generated · QA unavailable" : `Image generated · QA passed ${qualityAttempt + 1}/${QUALITY_MAX_ATTEMPTS}`);
+          return candidate;
+        }
+        updateAiActivity(activityId, { title: activityTitle, detail: `QA requested redo: ${lastReview.mustFix || lastReview.reason || "material mismatch"}`, status: "working", done: qualityAttempt + 1, total: QUALITY_MAX_ATTEMPTS });
+      }
+
+      if (lastCandidate) {
         _lastImageQaRef.current = {
-          status: lastReview.unavailable ? "unavailable" : "passed",
-          attempts: qualityAttempt + 1,
+          status: "maxed",
+          attempts: QUALITY_MAX_ATTEMPTS,
           maxAttempts: QUALITY_MAX_ATTEMPTS,
           model: IMAGE_REVIEW_MODEL,
-          reason: lastReview.reason || "",
+          reason: lastReview?.mustFix || lastReview?.reason || "QA requested redo through the final attempt.",
           reviewedAt: new Date().toISOString(),
         };
-        return candidate;
+        finishAiActivity(activityId, "done", "Image generated · QA maxed out");
+      } else {
+        finishAiActivity(activityId, "failed", "Image model returned no image after retries");
       }
+      return lastCandidate;
+    } catch (err) {
+      finishAiActivity(activityId, "failed", _formatApiError(err));
+      throw err;
     }
-
-    if (lastCandidate) {
-      _lastImageQaRef.current = {
-        status: "maxed",
-        attempts: QUALITY_MAX_ATTEMPTS,
-        maxAttempts: QUALITY_MAX_ATTEMPTS,
-        model: IMAGE_REVIEW_MODEL,
-        reason: lastReview?.mustFix || lastReview?.reason || "QA requested redo through the final attempt.",
-        reviewedAt: new Date().toISOString(),
-      };
-    }
-    return lastCandidate;
-  }, [settings.apiKey, settings.imageModel]);
+  }, [settings.apiKey, settings.imageModel, startAiActivity, updateAiActivity, finishAiActivity]);
   useEffect(() => { _genSingleImageRef.current = _generateSingleImage; }, [_generateSingleImage]);
 
   const handleGenerateImage = useCallback(async (prompt, use4x = false, aspectRatio = null, referenceImages = null) => {
@@ -24888,21 +24936,24 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                   <button onClick={async () => {
                     if (!settings.apiKey) { showToast("Set API key first", "error"); return; }
                     if (!editingChar.name || !editingChar.appearance) { showToast("Add name and appearance first", "error"); return; }
+                    const portraitActivityId = startAiActivity("Generate AI Portrait", "Loading prompt template from Google Sheets");
                     showToast("Generating portrait...", "info");
                     try {
                       const wardrobe = charWardrobe(editingChar);
                       const subjectDescription = `${_stripFacialClauses(editingChar.appearance) || ""}${editingChar.build ? `, build: ${editingChar.build}` : ""}${wardrobe ? `, wearing ${wardrobe}` : ""}`;
                       const lookAlikeLock = editingChar.lookAlike ? `The face is exactly ${editingChar.lookAlike}'s — unmistakably ${editingChar.lookAlike}'s face. Do not alter or describe individual facial features.` : "";
-                      const fallbackPortraitPrompt = `Create a realistic model catalogue portrait (Frame: Strict upper body model catalogue portrait. Camera is at eye level, centered on the subject. Subject's head occupies approximately 30% of the image height (from crown to chin). Shoulders visible below the chin, showing upper chest. Crop at mid-torso. No full body, only waist-up. Subject faces directly forward, looking into the camera lens. Sensual expression with eyes half looking up and mouth half gasping, sweaty with glossy baby oil allover, flexing with one hand behind head and one hand flexing to the navel. Shirtless.` +
+                      const fallbackPortraitPrompt = `Create a realistic model catalogue portrait (Frame: Strict upper body model catalogue portrait. Camera is at eye level, centered on the subject. Subject's head occupies approximately 30% of the image height from crown to chin. Shoulders visible below the chin, upper chest visible, crop at mid-torso. No full body, only waist-up. Subject faces directly forward, looking into the camera lens. Natural neutral catalogue expression, relaxed shoulders, simple upright posture, fully clothed unless the saved wardrobe says otherwise.` +
                         `Pure solid white (#FFFFFF). No gradients. No shadows on the background. No texture. No color tint. No bokeh. No objects. Just flat, even, pure white from edge to edge. ` +
                         `Subject: ${subjectDescription}.` +
                         `${lookAlikeLock} ` +
                         `Photoreal: lifelike skin with visible pores and natural texture, realistic hair strands. No illustration, no painting, no CGI look.`;
                       const livePortraitTpl = await getLivePromptTemplate("character.studio.quickPortrait");
-                      const prompt = livePortraitTpl?.user
+                      updateAiActivity(portraitActivityId, { title: "Generate AI Portrait", detail: "Prompt loaded · building image request", status: "working" });
+                      const rawPrompt = livePortraitTpl?.user
                         ? renderConfigTemplate(livePortraitTpl.user, { character: editingChar, characterName: editingChar.name || "the character", subjectDescription, lookAlikeLock, wardrobe })
                         : fallbackPortraitPrompt;
-                      const imageUrl = await _genSingleImageRef.current(prompt, "3:4", null);
+                      const prompt = String(rawPrompt || fallbackPortraitPrompt);
+                      const imageUrl = await _genSingleImageRef.current(prompt, "3:4", null, { id: portraitActivityId, title: "Generate AI Portrait", detail: `Portrait for ${editingChar.name || "character"}` });
                       if (imageUrl) {
                         updateCharById(editingCharId, "image", imageUrl);
                         const qa = _lastImageQaRef.current;
@@ -24910,7 +24961,7 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                       } else {
                         throw new Error("No image returned after retries");
                       }
-                    } catch (e) { showToast(`Portrait failed: ${e.message?.replace(/sk-[a-zA-Z0-9]+/g, "sk-***") || "Unknown error"}`, "error"); }
+                    } catch (e) { finishAiActivity(portraitActivityId, "failed", e.message?.replace(/sk-[a-zA-Z0-9]+/g, "sk-***") || "Unknown error"); showToast(`Portrait failed: ${e.message?.replace(/sk-[a-zA-Z0-9]+/g, "sk-***") || "Unknown error"}`, "error"); }
                   }} className="nf-btn-micro" disabled={!settings.apiKey}>
                     <Icons.Wand /> Generate AI Portrait
                   </button>
@@ -25447,27 +25498,36 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                         return (
                           <div key={key} className="nf-portfolio-package-card">
                             <div className="nf-portfolio-package-main">
-                              <button onClick={() => { const w = document.getElementById(`pfwardrobe-${editingCharId}`)?.value.trim(); generateModelPortfolio(editingChar, key, w, selectedShot); }} disabled={!!portfolioBusy}
+                              <button type="button" onClick={() => { const w = document.getElementById(`pfwardrobe-${editingCharId}`)?.value.trim(); setOpenPortfolioShotMenu(null); generateModelPortfolio(editingChar, key, w, selectedShot); }} disabled={!!portfolioBusy}
                                 className="nf-btn-micro nf-portfolio-generate-btn" title={pkg.blurb}>
                                 <Icons.Sparkle />
                                 <span>{pkg.label}</span>
                                 <span className="nf-portfolio-generate-meta">{selectedLabel}</span>
                               </button>
-                              <select value={selectedShot} onChange={e => setPortfolioShotSelections(prev => ({ ...prev, [selKey]: e.target.value }))} className="nf-input nf-portfolio-shot-select" title="Render all shots or one specific shot">
-                                <option value="all">All shots</option>
-                                {pkg.shots.map(shot => <option key={shot.key} value={shot.key}>{shot.label}</option>)}
-                              </select>
-                              <button onClick={() => { const shot = selectedShot === "all" ? pkg.shots[0]?.key : selectedShot; if (shot) openPortfolioPromptEditor(key, shot); }} className="nf-btn-micro nf-portfolio-edit-selected" title="Edit the selected shot prompt in Google Sheets">
-                                <Icons.Pen /> Prompt
-                              </button>
-                            </div>
-                            <div className="nf-portfolio-shot-chip-row" aria-label={`${pkg.label} shot prompt editors`}>
-                              {pkg.shots.map(shot => (
-                                <button key={shot.key} onClick={() => openPortfolioPromptEditor(key, shot.key)} className={`nf-portfolio-shot-chip ${selectedShot === shot.key ? "active" : ""}`} title={`Edit prompt: ${shot.label}`}>
-                                  <span className="nf-portfolio-shot-chip-label">{shot.label}</span>
-                                  <span className="nf-portfolio-shot-chip-icon" aria-hidden="true"><Icons.Pen /></span>
+                              <div className="nf-portfolio-shot-picker">
+                                <button type="button" onClick={() => setOpenPortfolioShotMenu(prev => prev === selKey ? null : selKey)} className="nf-portfolio-shot-trigger" title="Render all shots or one specific shot" aria-haspopup="menu" aria-expanded={openPortfolioShotMenu === selKey}>
+                                  <span>{selectedLabel}</span>
+                                  <Icons.ChevDown />
                                 </button>
-                              ))}
+                                {openPortfolioShotMenu === selKey && (
+                                  <div className="nf-portfolio-shot-menu" role="menu">
+                                    <button type="button" className={`nf-portfolio-shot-menu-row ${selectedShot === "all" ? "active" : ""}`} onClick={() => { setPortfolioShotSelections(prev => ({ ...prev, [selKey]: "all" })); setOpenPortfolioShotMenu(null); }} role="menuitem">
+                                      <span>All shots</span>
+                                      <span className="nf-portfolio-shot-count">{pkg.shots.length}</span>
+                                    </button>
+                                    {pkg.shots.map(shot => (
+                                      <div key={shot.key} className={`nf-portfolio-shot-menu-row ${selectedShot === shot.key ? "active" : ""}`} role="menuitem">
+                                        <button type="button" className="nf-portfolio-shot-menu-label" onClick={() => { setPortfolioShotSelections(prev => ({ ...prev, [selKey]: shot.key })); setOpenPortfolioShotMenu(null); }} title={`Render only ${shot.label}`}>
+                                          <span>{shot.label}</span>
+                                        </button>
+                                        <button type="button" className="nf-portfolio-shot-menu-edit" onClick={(e) => { e.stopPropagation(); openPortfolioPromptEditor(key, shot.key); }} title={`Edit prompt: ${shot.label}`} aria-label={`Edit prompt for ${shot.label}`}>
+                                          <Icons.Pen />
+                                        </button>
+                                      </div>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
                             </div>
                           </div>
                         );
@@ -25500,14 +25560,6 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                                   style={{ position: "absolute", top: 3, left: 3, fontSize: 9, padding: "1px 5px", background: "rgba(0,0,0,0.62)", color: "#fff", borderColor: "rgba(255,255,255,0.22)", cursor: imageRedoBusy ? "wait" : "pointer" }}
                                   title="Redo this generated image from its saved text prompt only">
                                   {imageRedoBusy === s.id ? "…" : "↻"}
-                                </button>
-                              )}
-                              {s.shotKey && (
-                                <button onClick={() => openPortfolioPromptEditor(pf.pkg || String(s.genKind || "").replace("portfolio:", ""), s.shotKey)}
-                                  className="nf-portfolio-shot-overlay-btn"
-                                  title="Edit this shot's prompt template in Google Sheets"
-                                  aria-label="Edit shot prompt">
-                                  <Icons.Pen />
                                 </button>
                               )}
                             </div>
@@ -30712,25 +30764,28 @@ Speech pattern: ${char.speechPattern || ""}` },
           .nf-btn-micro:disabled { opacity: 0.3; cursor: default; }
           .nf-btn-micro-danger:hover { color: var(--nf-accent); border-color: var(--nf-accent); }
           .nf-portfolio-package-card { padding: 8px; border: 1px solid var(--nf-border); border-radius: var(--nf-radius); background: var(--nf-bg-deep); display: grid; gap: 7px; }
-          .nf-portfolio-package-main { display: grid; grid-template-columns: minmax(170px, 1fr) minmax(132px, 180px) auto; gap: 6px; align-items: center; }
+          .nf-portfolio-package-main { display: grid; grid-template-columns: minmax(190px, 1fr) minmax(150px, 220px); gap: 6px; align-items: center; }
           .nf-portfolio-generate-btn { min-height: 30px; padding: 5px 9px; font-size: 11px; justify-content: flex-start; background: var(--nf-bg-surface); }
           .nf-portfolio-generate-btn svg { flex-shrink: 0; }
           .nf-portfolio-generate-meta { margin-left: auto; color: var(--nf-text-muted); font-size: 9px; font-family: var(--nf-font-mono); white-space: nowrap; }
-          .nf-portfolio-shot-select { min-height: 30px; padding: 4px 8px; font-size: 11px; }
-          .nf-portfolio-edit-selected { min-height: 30px; padding: 5px 10px; font-size: 10px; background: var(--nf-bg-raised); white-space: nowrap; }
-          .nf-portfolio-shot-chip-row { display: flex; gap: 4px; flex-wrap: wrap; align-items: center; }
-          .nf-portfolio-shot-chip { min-height: 24px; display: inline-flex; align-items: center; gap: 5px; padding: 3px 7px; border: 1px solid var(--nf-border); border-radius: var(--nf-radius-pill); background: var(--nf-bg-surface); color: var(--nf-text-muted); cursor: pointer; font-size: 9.5px; font-family: var(--nf-font-body); transition: color 0.2s, border-color 0.2s, background 0.2s, transform 0.2s cubic-bezier(0.4,0,0.2,1); }
-          .nf-portfolio-shot-chip:hover { color: var(--nf-text-dim); border-color: var(--nf-accent); background: var(--nf-bg-hover); }
-          .nf-portfolio-shot-chip.active { color: var(--nf-accent); border-color: var(--nf-accent); background: var(--nf-accent-glow); }
-          .nf-portfolio-shot-chip-icon { width: 14px; height: 14px; display: inline-flex; align-items: center; justify-content: center; opacity: 0.68; }
-          .nf-portfolio-shot-chip-icon svg { width: 10px; height: 10px; }
-          .nf-portfolio-shot-overlay-btn { position: absolute; top: 4px; right: 4px; width: 22px; height: 22px; padding: 0; display: inline-flex; align-items: center; justify-content: center; border: 1px solid rgba(255,255,255,0.22); border-radius: 999px; background: rgba(0,0,0,0.58); color: #fff; cursor: pointer; transition: background 0.2s, border-color 0.2s, transform 0.2s; }
-          .nf-portfolio-shot-overlay-btn svg { width: 12px; height: 12px; }
-          .nf-portfolio-shot-overlay-btn:hover { background: rgba(0,0,0,0.78); border-color: rgba(255,255,255,0.42); transform: translateY(-1px); }
+          .nf-portfolio-shot-picker { position: relative; min-width: 0; }
+          .nf-portfolio-shot-trigger { width: 100%; min-height: 30px; padding: 5px 8px; border: 1px solid var(--nf-border); border-radius: 3px; background: var(--nf-bg-surface); color: var(--nf-text-dim); display: flex; align-items: center; justify-content: space-between; gap: 8px; cursor: pointer; font-family: var(--nf-font-body); font-size: 11px; text-align: left; }
+          .nf-portfolio-shot-trigger:hover { border-color: var(--nf-accent); background: var(--nf-bg-hover); color: var(--nf-text); }
+          .nf-portfolio-shot-trigger span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+          .nf-portfolio-shot-trigger svg { flex-shrink: 0; width: 13px; height: 13px; }
+          .nf-portfolio-shot-menu { position: absolute; z-index: 80; top: calc(100% + 4px); right: 0; width: min(290px, 80vw); max-height: 280px; overflow: auto; padding: 5px; border: 1px solid var(--nf-border); border-radius: 6px; background: var(--nf-dialog-bg); box-shadow: var(--nf-shadow-lg); display: grid; gap: 3px; }
+          .nf-portfolio-shot-menu-row { min-height: 28px; border: 1px solid transparent; border-radius: 4px; background: transparent; color: var(--nf-text-dim); display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; align-items: center; padding: 0 4px 0 8px; font-size: 11px; font-family: var(--nf-font-body); }
+          button.nf-portfolio-shot-menu-row { cursor: pointer; text-align: left; width: 100%; }
+          .nf-portfolio-shot-menu-row:hover, .nf-portfolio-shot-menu-row.active { background: var(--nf-bg-hover); border-color: var(--nf-border); color: var(--nf-text); }
+          .nf-portfolio-shot-menu-row.active { border-color: var(--nf-border-focus); color: var(--nf-accent); }
+          .nf-portfolio-shot-menu-label { min-width: 0; border: none; background: transparent; color: inherit; cursor: pointer; padding: 0; text-align: left; font: inherit; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+          .nf-portfolio-shot-menu-edit { width: 22px; height: 22px; border: 1px solid var(--nf-border); border-radius: 999px; background: var(--nf-bg-surface); color: var(--nf-text-muted); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; padding: 0; }
+          .nf-portfolio-shot-menu-edit:hover { border-color: var(--nf-accent); color: var(--nf-accent); background: var(--nf-accent-glow); }
+          .nf-portfolio-shot-menu-edit svg { width: 11px; height: 11px; }
+          .nf-portfolio-shot-count { font-size: 9px; color: var(--nf-text-muted); font-family: var(--nf-font-mono); }
           @media (max-width: 760px) {
             .nf-portfolio-package-main { grid-template-columns: 1fr; }
             .nf-portfolio-generate-meta { margin-left: 0; }
-            .nf-portfolio-edit-selected, .nf-portfolio-shot-select { width: 100%; }
           }
 
           
@@ -30878,6 +30933,41 @@ Speech pattern: ${char.speechPattern || ""}` },
             .nf-utility-label, .nf-utility-shortcut { display: none; }
           }
           
+
+          .nf-ai-activity-panel {
+            position: fixed;
+            right: max(16px, env(safe-area-inset-right, 16px));
+            bottom: max(16px, env(safe-area-inset-bottom, 16px));
+            z-index: 75;
+            width: min(340px, calc(100vw - 32px));
+            border: 1px solid var(--nf-border);
+            border-radius: 12px;
+            background: color-mix(in srgb, var(--nf-bg-raised) 94%, transparent);
+            box-shadow: var(--nf-shadow-lg);
+            backdrop-filter: blur(12px);
+            overflow: hidden;
+          }
+          .nf-ai-activity-head { min-height: 34px; padding: 8px 10px; display: flex; align-items: center; justify-content: space-between; gap: 10px; border-bottom: 1px solid var(--nf-border); }
+          .nf-ai-activity-title { display: flex; align-items: center; gap: 7px; min-width: 0; font-size: 11px; font-weight: 800; color: var(--nf-text); text-transform: uppercase; letter-spacing: 0.08em; }
+          .nf-ai-dot { width: 7px; height: 7px; border-radius: 999px; background: var(--nf-text-muted); }
+          .nf-ai-dot.working { background: var(--nf-accent); animation: nf-pulse 1.1s ease-in-out infinite; }
+          .nf-ai-dot.done { background: var(--nf-success); }
+          .nf-ai-dot.failed { background: var(--nf-accent); }
+          .nf-ai-activity-toggle { border: none; background: transparent; color: var(--nf-text-muted); cursor: pointer; font-size: 11px; font-family: var(--nf-font-body); padding: 2px 4px; }
+          .nf-ai-activity-body { display: grid; gap: 6px; padding: 8px; max-height: 250px; overflow: auto; }
+          .nf-ai-activity-row { padding: 8px 9px; border: 1px solid var(--nf-border); border-radius: 8px; background: var(--nf-bg-deep); display: grid; gap: 5px; }
+          .nf-ai-activity-row-main { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+          .nf-ai-activity-row-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--nf-text); font-size: 11px; font-weight: 700; }
+          .nf-ai-activity-row-status { flex-shrink: 0; color: var(--nf-text-muted); font-size: 9px; font-family: var(--nf-font-mono); text-transform: uppercase; }
+          .nf-ai-activity-row-detail { color: var(--nf-text-muted); font-size: 10.5px; line-height: 1.35; }
+          .nf-ai-activity-progress { height: 3px; border-radius: 999px; overflow: hidden; background: var(--nf-border); }
+          .nf-ai-activity-progress > span { display: block; height: 100%; background: var(--nf-accent); transition: width 0.25s ease; }
+          @keyframes nf-pulse { 0%, 100% { opacity: 0.4; transform: scale(0.82); } 50% { opacity: 1; transform: scale(1); } }
+          @media (max-width: 640px) {
+            .nf-ai-activity-panel { right: 10px; left: 10px; bottom: 56px; width: auto; }
+            .nf-ai-activity-body { max-height: 190px; }
+          }
+
           .nf-write-layout { display: flex; flex: 1; min-height: 0; overflow: hidden; position: relative; }
           .nf-chapter-sidebar { width: 190px; min-width: 190px; border-right: 1px solid var(--nf-border); display: flex; flex-direction: column; background: var(--nf-bg-raised); }
           .nf-chapter-sidebar-header { padding: 10px 12px; border-bottom: 1px solid var(--nf-border); display: flex; justify-content: space-between; align-items: center; }
@@ -31791,6 +31881,34 @@ Speech pattern: ${char.speechPattern || ""}` },
         )}
 
         {toast && <Toast key={toast.key} message={toast.message} type={toast.type} onDone={() => setToast(null)} />}
+        {aiActivityFeed.length > 0 && !cleanView && (
+          <div className="nf-ai-activity-panel" aria-live="polite" aria-label="AI activity">
+            <div className="nf-ai-activity-head">
+              <div className="nf-ai-activity-title">
+                <span className={`nf-ai-dot ${aiActivityFeed.some(a => a.status === "working") ? "working" : aiActivityFeed[0]?.status || "done"}`} />
+                <span>{aiActivityFeed.some(a => a.status === "working") ? "AI working" : "AI activity"}</span>
+              </div>
+              <button type="button" className="nf-ai-activity-toggle" onClick={() => setAiActivityOpen(v => !v)}>{aiActivityOpen ? "Hide" : "Show"}</button>
+            </div>
+            {aiActivityOpen && (
+              <div className="nf-ai-activity-body">
+                {aiActivityFeed.map(item => {
+                  const pct = item.total ? Math.max(4, Math.min(100, Math.round(((item.done || 0) / item.total) * 100))) : (item.status === "done" ? 100 : item.status === "failed" ? 100 : 18);
+                  return (
+                    <div key={item.id} className="nf-ai-activity-row">
+                      <div className="nf-ai-activity-row-main">
+                        <div className="nf-ai-activity-row-title" title={item.title}>{item.title || "AI task"}</div>
+                        <div className="nf-ai-activity-row-status">{item.status || "working"}</div>
+                      </div>
+                      <div className="nf-ai-activity-row-detail">{item.detail || "Working…"}</div>
+                      {(item.status === "working" || item.total) && <div className="nf-ai-activity-progress"><span style={{ width: `${pct}%` }} /></div>}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
         {/* ─── LIVELINESS LAYER ─── ambient motes, time-tint, milestone sparks, and the companion sprite */}
         {project && !cleanView && activeTab === "write" && liveliness !== "off" && (
           <>
