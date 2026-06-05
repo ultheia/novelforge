@@ -7301,7 +7301,7 @@ const FindReplaceModal = memo(({ project, onClose, onUpdate }) => {
 // ─── MULTI-IMAGE GALLERY ───
 // Reusable gallery for mood boards, location refs, signature item illustrations, org logos, etc.
 // Handles upload, preview thumbnails, captions, and removal.
-const MultiImageGallery = memo(({ label, hint, images, onAdd, onRemove, onUpdateCaption, onRegenerate, regenBusyId = null, maxMB = 3, maxCount = 12, compact = false }) => {
+const MultiImageGallery = memo(({ label, hint, images, onAdd, onRemove, onUpdateCaption, maxMB = 3, maxCount = 12, compact = false }) => {
   const inputId = useMemo(() => `nf-mig-${Math.random().toString(36).slice(2, 9)}`, []);
   const imgs = Array.isArray(images) ? images : [];
   const thumbSize = compact ? 88 : 120;
@@ -7356,13 +7356,6 @@ const MultiImageGallery = memo(({ label, hint, images, onAdd, onRemove, onUpdate
               {img.caption && (
                 <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, padding: "4px 6px", fontSize: 11, color: "#fff", background: "linear-gradient(to top, rgba(0,0,0,0.78), transparent)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{img.caption}</div>
               )}
-              {img.genPrompt && onRegenerate && (
-                <button onClick={(e) => { e.stopPropagation(); onRegenerate(img); }} disabled={!!regenBusyId}
-                  style={{ position: "absolute", top: 3, left: 3, padding: "2px 5px", background: "rgba(0,0,0,0.62)", color: "#fff", border: "none", borderRadius: 2, cursor: regenBusyId ? "wait" : "pointer", fontSize: 10, lineHeight: 1, display: "flex", alignItems: "center", gap: 3 }}
-                  title="Redo this generated image from its saved text prompt only" aria-label="Redo generated image">
-                  {regenBusyId === img.id ? "…" : "↻"}
-                </button>
-              )}
               <button onClick={(e) => { e.stopPropagation(); onRemove(img.id); }}
                 style={{ position: "absolute", top: 3, right: 3, padding: 2, background: "rgba(0,0,0,0.55)", color: "#fff", border: "none", borderRadius: 2, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}
                 aria-label="Remove image"><Icons.X /></button>
@@ -7392,13 +7385,6 @@ const MultiImageGallery = memo(({ label, hint, images, onAdd, onRemove, onUpdate
           style={{ position: "fixed", inset: 0, zIndex: 10000, background: "rgba(0,0,0,0.88)", backdropFilter: "blur(4px)", display: "flex", alignItems: "center", justifyContent: "center", animation: "nf-fadeIn 0.12s ease-out" }}>
           <button onClick={() => setViewerIdx(null)} aria-label="Close"
             style={{ position: "absolute", top: 16, right: 16, padding: 8, background: "rgba(255,255,255,0.12)", color: "#fff", border: "none", borderRadius: 4, cursor: "pointer", display: "flex" }}><Icons.X /></button>
-          {viewer.genPrompt && onRegenerate && (
-            <button onClick={(e) => { e.stopPropagation(); onRegenerate(viewer); }} disabled={!!regenBusyId}
-              style={{ position: "absolute", top: 16, right: 58, padding: "7px 10px", background: "rgba(255,255,255,0.12)", color: "#fff", border: "none", borderRadius: 4, cursor: regenBusyId ? "wait" : "pointer", fontSize: 11 }}
-              title="Redo this generated image from its saved text prompt only">
-              {regenBusyId === viewer.id ? "Redoing…" : "↻ Redo"}
-            </button>
-          )}
           {imgs.length > 1 && (
             <button onClick={(e) => { e.stopPropagation(); setViewerIdx(i => (i - 1 + imgs.length) % imgs.length); }} aria-label="Previous image"
               style={{ position: "absolute", left: 16, top: "50%", transform: "translateY(-50%)", padding: "12px 16px", background: "rgba(255,255,255,0.12)", color: "#fff", border: "none", borderRadius: 4, cursor: "pointer", fontSize: 24, lineHeight: 1 }}>‹</button>
@@ -15437,7 +15423,6 @@ export default function NovelForge() {
   const [editorialChar, setEditorialChar] = useState(null); // character whose Editorial Studio is open
   const [editorialBusy, setEditorialBusy] = useState(false);
   const [portfolioBusy, setPortfolioBusy] = useState(null); // { charId, pkg, done, total, label } while generating
-  const [imageRedoBusy, setImageRedoBusy] = useState(null); // image id while a generated character image is being rerolled from text only
   const [showExportPreview, setShowExportPreview] = useState(false);
   const [showBreathingPauser, setShowBreathingPauser] = useState(false);
   const [showChapterCelebration, setShowChapterCelebration] = useState(false);
@@ -17673,10 +17658,10 @@ Rules:
   }, [characterArtJobs, runCharacterArtJob]);
 
   // ─── MODEL PORTFOLIO GENERATOR ───
-  // Produces a full agency-style set of consistent shots from text only. Every shot receives the full
-  // identity, wardrobe, package, shot, and realism prompt. We deliberately do NOT feed the first image
-  // back as an image-to-image reference because visual anchoring can copy artifacts or drift away from
-  // the written character bible. Each shot is a separate full-resolution image, captioned and saved as one portfolio.
+  // Produces a full agency-style set of consistent shots. The professional trick: generate the master
+  // beauty shot first, then feed it back as an image-to-image reference for every other angle so the
+  // face, wardrobe, hair, and lighting stay locked across the whole set (the agency "same session"
+  // principle). Each shot is a separate full-resolution image, captioned and saved as one portfolio.
   const generateModelPortfolio = useCallback(async (char, pkgKey, wardrobeOverride) => {
     if (!settings.apiKey) { showToast("Add an API key in Settings first", "error"); return; }
     const pkg = MODEL_PORTFOLIO_PACKAGES[pkgKey];
@@ -17685,6 +17670,7 @@ Rules:
     const wardrobe = (wardrobeOverride || "").trim() || charWardrobe(char);
     // Shared photoreal contract applied to every shot in the set.
     const realism = "Render as a real human being, photographed, not illustrated: lifelike skin with visible pores, fine texture, subtle imperfections, natural subsurface tones, realistic individual hair strands, true-to-life fabric. Shot on a full-frame camera, 85mm lens. Visuals only; nothing a camera could not capture. No illustration, no painting, no CGI look. Always sweaty with glossy baby oil allover";
+    const styleRef = project?.styleLockImage && project.styleLockImage.startsWith("data:") ? project.styleLockImage : null;
     const livePortfolioTpl = await getLivePromptTemplate("character.studio.portfolioShot");
     const getPortfolioShotTemplate = async (shot) => {
       const exactId = `character.studio.portfolio.${pkgKey}.${shot.key}`;
@@ -17695,6 +17681,7 @@ Rules:
     const portfolioCreatedAt = new Date().toISOString();
     setPortfolioBusy({ charId: char.id, pkg: pkgKey, done: 0, total, label: pkg.shots[0].label });
     showToast(`Generating ${pkg.label} — ${total} shots…`, "info");
+    let masterImg = null;
     const results = [];
 
     // Stream each finished portfolio shot into the character immediately.
@@ -17729,20 +17716,22 @@ Rules:
         setPortfolioBusy({ charId: char.id, pkg: pkgKey, done: i, total, label: shot.label });
         const fallbackPrompt = `Photorealistic photograph of ${char.name || "a person"} — ${identity}${wardrobe ? `, wearing ${wardrobe}` : ""}. ` +
           `${pkg.style} ${shot.direction} ` +
-          `SAME-PERSON LOCK: Keep the exact same written identity across this portfolio set using the text above only: face structure, hair, skin tone, body, wardrobe, and distinguishing details must remain consistent; only angle, framing, pose, and expression change. ` +
+          (masterImg ? "CRITICAL: this is the SAME person as the reference image — keep the exact same face, bone structure, hair, skin, and wardrobe; only the angle, framing, pose, and expression change. " : "") +
           realism;
         const shotTpl = await getPortfolioShotTemplate(shot);
         const prompt = shotTpl?.user
           ? renderConfigTemplate(shotTpl.user, {
               character: char, characterName: char.name || "a person", identity, wardrobe,
               wardrobePhrase: wardrobe ? `, wearing ${wardrobe}` : "", package: pkg, packageKey: pkgKey, packageStyle: pkg.style,
-              shot, shotKey: shot.key, shotLabel: shot.label, shotDirection: shot.direction, samePersonLock: "Keep the exact same written identity across this portfolio set using the text above only: face structure, hair, skin tone, body, wardrobe, and distinguishing details must remain consistent; only angle, framing, pose, and expression change.", realismContract: realism
+              shot, shotKey: shot.key, shotLabel: shot.label, shotDirection: shot.direction, samePersonLock: masterImg ? "CRITICAL: this is the SAME person as the reference image — keep the exact same face, bone structure, hair, skin, and wardrobe; only the angle, framing, pose, and expression change. " : "", realismContract: realism
             })
           : fallbackPrompt;
-        // Text-only identity lock: never pass previous portfolio shots or style images as references.
+        // Identity lock: once we have the master shot, pass it (plus optional style ref) as references.
+        const refs = masterImg ? [masterImg, ...(styleRef ? [styleRef] : [])].slice(0, 4) : (styleRef ? [styleRef] : null);
         let img = null;
-        try { img = await _genSingleImageRef.current(prompt, shot.framing, null); } catch { img = null; }
+        try { img = await _genSingleImageRef.current(prompt, shot.framing, refs); } catch { img = null; }
         if (img) {
+          if (!masterImg) masterImg = img; // first successful shot becomes the identity anchor
           const shotItem = { id: uid(), data: img, caption: shot.label, shotKey: shot.key, addedAt: new Date().toISOString(), genKind: `portfolio:${pkgKey}`, genPrompt: prompt, aspectRatio: shot.framing, portfolioId };
           results.push(shotItem);
           appendPortfolioShot(shotItem);
@@ -17760,55 +17749,7 @@ Rules:
     } finally {
       setPortfolioBusy(null);
     }
-  }, [settings.apiKey, getLivePromptTemplate, showToast, activeProjectId, setProjects, charWardrobe]);
-
-  // Redo a generated character image in-place from its saved text prompt only.
-  // Works for normal Character Art mood-board images and Model Portfolio shots. Portfolio shots are
-  // stored twice with the same id (inside the saved portfolio and inside the mood board), so both
-  // copies are replaced together.
-  const redoGeneratedCharacterImage = useCallback(async (charId, imageId, sourceImg = {}) => {
-    if (!settings.apiKey) { showToast("Add an API key in Settings first", "error"); return; }
-    const char = (project?.characters || []).find(c => c.id === charId);
-    if (!char) return;
-    const portfolioShot = (char.modelPortfolios || [])
-      .flatMap(pf => pf.shots || [])
-      .find(img => img.id === imageId);
-    const moodShot = (char.moodBoard || []).find(img => img.id === imageId);
-    const target = sourceImg?.genPrompt ? sourceImg : (portfolioShot || moodShot || {});
-    const prompt = target.genPrompt;
-    if (!prompt) { showToast("This image has no saved prompt to redo", "error"); return; }
-    const ratio = target.aspectRatio || "3:4";
-    setImageRedoBusy(imageId);
-    showToast("Redoing image from text prompt only…", "info");
-    try {
-      const nextImg = await _genSingleImageRef.current(prompt, ratio, null);
-      if (!nextImg) { showToast("Redo failed", "error"); return; }
-      const redoneAt = new Date().toISOString();
-      setProjects(prev => prev.map(p => {
-        if (p.id !== activeProjectId) return p;
-        return {
-          ...p,
-          characters: (p.characters || []).map(c => {
-            if (c.id !== charId) return c;
-            return {
-              ...c,
-              moodBoard: (Array.isArray(c.moodBoard) ? c.moodBoard : []).map(img => img.id === imageId ? { ...img, data: nextImg, redoneAt } : img),
-              modelPortfolios: (Array.isArray(c.modelPortfolios) ? c.modelPortfolios : []).map(pf => ({
-                ...pf,
-                updatedAt: (pf.shots || []).some(img => img.id === imageId) ? redoneAt : pf.updatedAt,
-                shots: (pf.shots || []).map(img => img.id === imageId ? { ...img, data: nextImg, redoneAt } : img),
-              })),
-            };
-          }),
-        };
-      }));
-      showToast("Image redone", "success");
-    } catch (e) {
-      showToast("Redo failed", "error");
-    } finally {
-      setImageRedoBusy(null);
-    }
-  }, [settings.apiKey, project?.characters, activeProjectId, setProjects, showToast]);
+  }, [settings.apiKey, getLivePromptTemplate, showToast, project?.styleLockImage, activeProjectId, setProjects, charWardrobe]);
 
   // Editorial Studio: build the base photoreal prompt, append the structured studio fragments,
   // and run a single image generation. Aspect ratio adapts to whether water/full-body framing is on.
@@ -25159,10 +25100,10 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                 <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid var(--nf-border)" }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
                     <span style={{ fontSize: 12, fontWeight: 600, color: "var(--nf-text)" }}>📸 Model Portfolio</span>
-                    <span style={{ fontSize: 10, color: "var(--nf-text-muted)" }}>text-only multi-angle set, like a modeling agency package</span>
+                    <span style={{ fontSize: 10, color: "var(--nf-text-muted)" }}>consistent multi-angle set, like a modeling agency package</span>
                   </div>
                   <div style={{ fontSize: 11, color: "var(--nf-text-muted)", marginBottom: 8, lineHeight: 1.5 }}>
-                    Generates a full set of separate, hyperreal shots from many angles. Every shot uses the full written identity and wardrobe prompt only — no previous generated image is used as a visual reference. Use ↻ Redo on any shot that misses the character.
+                    Generates a full set of separate, hyperreal shots from many angles. The first beauty shot becomes the identity anchor — every other angle is rendered to match it, so the face, hair, and wardrobe stay consistent across the whole set (the agency "same session" principle).
                   </div>
                   {portfolioBusy && portfolioBusy.charId === editingCharId ? (
                     <div style={{ padding: "10px 12px", background: "var(--nf-bg-deep)", border: "1px solid var(--nf-accent)", borderRadius: 2 }}>
@@ -25197,16 +25138,8 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(80px, 1fr))", gap: 6 }}>
                         {pf.shots.map(s => (
                           <div key={s.id} style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-                            <div style={{ position: "relative", aspectRatio: "3/4", borderRadius: 2, overflow: "hidden", border: "1px solid var(--nf-border)", background: "var(--nf-bg-surface)" }}>
+                            <div style={{ aspectRatio: "3/4", borderRadius: 2, overflow: "hidden", border: "1px solid var(--nf-border)", background: "var(--nf-bg-surface)" }}>
                               <img loading="lazy" src={s.data} alt={s.caption} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
-                              {s.genPrompt && (
-                                <button onClick={() => redoGeneratedCharacterImage(editingCharId, s.id, s)} disabled={!!imageRedoBusy}
-                                  className="nf-btn-micro"
-                                  style={{ position: "absolute", top: 3, left: 3, fontSize: 9, padding: "1px 5px", background: "rgba(0,0,0,0.62)", color: "#fff", borderColor: "rgba(255,255,255,0.22)", cursor: imageRedoBusy ? "wait" : "pointer" }}
-                                  title="Redo this generated image from its saved text prompt only">
-                                  {imageRedoBusy === s.id ? "…" : "↻"}
-                                </button>
-                              )}
                             </div>
                             <span style={{ fontSize: 9, color: "var(--nf-text-muted)", textAlign: "center", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.caption}</span>
                           </div>
@@ -25243,8 +25176,6 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                 onAdd={(img) => updateCharById(editingCharId, "moodBoard", [...(editingChar.moodBoard || []), img])}
                 onRemove={(id) => updateCharById(editingCharId, "moodBoard", (editingChar.moodBoard || []).filter(i => i.id !== id))}
                 onUpdateCaption={(id, caption) => updateCharById(editingCharId, "moodBoard", (editingChar.moodBoard || []).map(i => i.id === id ? { ...i, caption } : i))}
-                onRegenerate={(img) => redoGeneratedCharacterImage(editingCharId, img.id, img)}
-                regenBusyId={imageRedoBusy}
                 maxCount={16}
               />
             </div>
