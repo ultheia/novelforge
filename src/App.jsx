@@ -788,6 +788,68 @@ const Spinner = memo(() => (
   </svg>
 ));
 
+
+const EditablePromptDropdown = memo(({
+  value = "",
+  options = [],
+  placeholder = "Select…",
+  onChange,
+  onEditPrompt,
+  disabled = false,
+  className = "",
+  triggerClassName = "",
+  style = null,
+  menuWidth = "min(340px, 86vw)",
+  title = "",
+  ariaLabel = "Prompt selector",
+}) => {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef(null);
+  const selected = (options || []).find(o => String(o.value) === String(value));
+  const selectedLabel = selected?.label || placeholder;
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e) => { if (rootRef.current && !rootRef.current.contains(e.target)) setOpen(false); };
+    const onKey = (e) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => { document.removeEventListener("mousedown", onDown); document.removeEventListener("keydown", onKey); };
+  }, [open]);
+
+  return (
+    <div ref={rootRef} className={`nf-prompt-picker ${className || ""}`} style={style || undefined}>
+      <button type="button" disabled={disabled} onClick={() => setOpen(v => !v)} className={`nf-prompt-trigger ${triggerClassName || ""}`} title={title} aria-label={ariaLabel} aria-haspopup="menu" aria-expanded={open}>
+        <span>{selectedLabel}</span>
+        <Icons.ChevDown />
+      </button>
+      {open && (
+        <div className="nf-prompt-menu" style={{ width: menuWidth }} role="menu">
+          {(options || []).map(opt => {
+            const active = String(opt.value) === String(value);
+            const canEdit = !!(onEditPrompt && opt.promptId && opt.editable !== false);
+            return (
+              <div key={`${opt.value}:${opt.promptId || ""}`} className={`nf-prompt-menu-row ${active ? "active" : ""}`} role="menuitem">
+                <button type="button" className="nf-prompt-menu-label" disabled={opt.disabled} onClick={() => { if (opt.disabled) return; onChange?.(opt.value, opt); if (opt.closeOnSelect !== false) setOpen(false); }} title={opt.title || opt.label}>
+                  <span className="nf-prompt-menu-text">{opt.label}</span>
+                  {opt.meta && <span className="nf-prompt-menu-meta">{opt.meta}</span>}
+                </button>
+                {canEdit && (
+                  <button type="button" className="nf-prompt-menu-edit" onClick={(e) => { e.preventDefault(); e.stopPropagation(); onEditPrompt(opt); }} title={`Edit prompt: ${opt.label}`} aria-label={`Edit prompt for ${opt.label}`}>
+                    <Icons.Pen />
+                  </button>
+                )}
+              </div>
+            );
+          })}
+          {(!options || options.length === 0) && <div className="nf-prompt-menu-empty">No prompt rows found</div>}
+        </div>
+      )}
+    </div>
+  );
+});
+EditablePromptDropdown.displayName = "EditablePromptDropdown";
+
 // ─── UTILITIES ───
 // G7: Stronger UID — use crypto.randomUUID if available, otherwise timestamp + longer random
 const uid = () => {
@@ -6756,6 +6818,49 @@ const ConfigSheets = {
     }
     return raw;
   },
+  async upsertConfigFieldCell(tableKey, rowId, fieldName, value, fallbackRow = {}, idColumn = "id") {
+    const id = this.getSpreadsheetId();
+    if (!id) throw new Error("No config spreadsheet connected");
+    const meta = CONFIG_TABLES[tableKey];
+    if (!meta) throw new Error(`Unknown config table: ${tableKey}`);
+    await this.ensureTabs();
+
+    const tab = meta.tab;
+    const data = await this.request(`spreadsheets/${id}/values/${encodeURIComponent(`${tab}!A:Z`)}`);
+    let values = data.values || [];
+    const headers = values[0]?.length ? values[0] : (meta.headers || []);
+
+    if (!values.length) {
+      await this.request(`spreadsheets/${id}/values/${encodeURIComponent(`${tab}!A1`)}`, {
+        method: "PUT",
+        body: JSON.stringify({ values: [headers] }),
+      });
+      values = [headers];
+    }
+
+    const idIdx = headers.findIndex(h => String(h).trim() === idColumn);
+    const fieldIdx = headers.findIndex(h => String(h).trim() === fieldName);
+    if (idIdx < 0 || fieldIdx < 0) throw new Error(`${tab} is missing ${idColumn}/${fieldName} columns`);
+
+    const rowIndex = values.findIndex((row, idx) => idx > 0 && String(row[idIdx] || "").trim() === String(rowId || "").trim());
+    if (rowIndex === -1) {
+      const row = { ...fallbackRow, [idColumn]: rowId, [fieldName]: value, active: fallbackRow.active || "TRUE" };
+      const rowValues = headers.map(h => row[h] ?? "");
+      await this.request(`spreadsheets/${id}/values/${encodeURIComponent(`${tab}!A:Z`)}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`, {
+        method: "POST",
+        body: JSON.stringify({ values: [rowValues] }),
+      });
+      return { appended: true, range: `${tab}!${_sheetA1Col(fieldIdx)}:new`, tab, field: fieldName };
+    }
+
+    const cell = `${_sheetA1Tab(tab)}!${_sheetA1Col(fieldIdx)}${rowIndex + 1}`;
+    await this.request(`spreadsheets/${id}/values/${encodeURIComponent(cell)}?valueInputOption=RAW`, {
+      method: "PUT",
+      body: JSON.stringify({ values: [[value]] }),
+    });
+    return { appended: false, range: `${tab}!${_sheetA1Col(fieldIdx)}${rowIndex + 1}`, tab, field: fieldName };
+  },
+
   async upsertPromptTemplateUserCell(tableKey, promptId, userPrompt, fallbackRow = {}) {
     const id = this.getSpreadsheetId();
     if (!id) throw new Error("No config spreadsheet connected");
@@ -12804,7 +12909,7 @@ const RichTextToolbar = memo(({ editorRef, onContentChange }) => {
 
 // ─── TAB AI CHAT ───
 // Fix #13, #14, #15: Smart tab-specific context with entity awareness
-const TabAIChat = memo(({ project, settings, appConfig, appConfigLiveLoader = null, tabName, tabContext, placeholder, onAutoFill, messages, setMessages, chapterIdx = 0, editingEntityId = null }) => {
+const TabAIChat = memo(({ project, settings, appConfig, appConfigLiveLoader = null, tabName, tabContext, placeholder, onAutoFill, messages, setMessages, chapterIdx = 0, editingEntityId = null, onEditPromptTemplate = null }) => {
   const [input, setInput] = useState("");
   const [isGenerating, setIsGenerating] = useState(false);
   const chatEndRef = useRef(null);
@@ -13226,7 +13331,63 @@ Return structured JSON wrapped in { "type": "relationships", "data": { ... } }.`
           <span style={{ fontSize: 11, fontWeight: 700, color: "var(--nf-text-dim)", textTransform: "uppercase", letterSpacing: "0.08em" }}>AI</span>
           {messages.length > 0 && <span style={{ fontSize: 11, color: "var(--nf-text-muted)" }}>({messages.length})</span>}
         </div>
-        {messages.length > 0 && <button onClick={() => setMessages([])} className="nf-btn-micro"><Icons.Trash /> Clear</button>}
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          {onEditPromptTemplate && (
+            <EditablePromptDropdown
+              value=""
+              placeholder="Prompt"
+              options={[
+                {
+                  value: `tab.chat.${tabName}`,
+                  label: `${tabContext || tabName} chat prompt`,
+                  meta: `tab.chat.${tabName}`,
+                  promptId: `tab.chat.${tabName}`,
+                  tableKey: tabName === "characters" ? "promptTemplatesCharacters" : tabName === "world" ? "promptTemplatesWorld" : tabName === "plot" ? "promptTemplatesPlot" : tabName === "relationships" ? "promptTemplatesRelationships" : "promptTemplatesHelp",
+                  fieldName: "user",
+                  fallbackPatch: {
+                    area: tabName === "characters" ? "Characters" : tabName === "world" ? "World" : tabName === "plot" ? "Plot" : tabName === "relationships" ? "Relationships" : "Help",
+                    tab: tabName,
+                    feature: "Tab AI Chat",
+                    action: "chat",
+                    name: `Tab chat — ${tabName}`,
+                    system: "You are an expert fiction writing assistant for this NovelForge tab. Use the supplied tab context and respond with practical, field-aware help.",
+                    user: `User message:
+{{message}}
+
+Tab context:
+{{tabContext}}
+
+Project/tab data:
+{{contextInfo}}
+
+Answer or return structured JSON when useful.`,
+                    maxTokens: 12000,
+                    temperature: 0.8,
+                    json: "FALSE",
+                    active: "TRUE",
+                    version: 1,
+                    notes: "Inline prompt editor for this tab's AI chat panel.",
+                  },
+                },
+                {
+                  value: "tab.chat",
+                  label: "Shared tab chat fallback",
+                  meta: "tab.chat",
+                  promptId: "tab.chat",
+                  tableKey: "promptTemplatesHelp",
+                  fieldName: "user",
+                  fallbackPatch: { area: "Help", tab: "All", feature: "Tab AI Chat", action: "fallback", name: "Shared tab chat fallback", active: "TRUE", version: 1 },
+                },
+              ]}
+              onChange={() => {}}
+              onEditPrompt={opt => onEditPromptTemplate(opt.tableKey, opt.promptId, opt.label, opt.fallbackPatch || {}, opt.fieldName || "user")}
+              triggerClassName="nf-prompt-trigger-micro"
+              menuWidth="min(420px, 86vw)"
+              ariaLabel="Edit tab AI prompt"
+            />
+          )}
+          {messages.length > 0 && <button onClick={() => setMessages([])} className="nf-btn-micro"><Icons.Trash /> Clear</button>}
+        </div>
       </div>
       {quickActions.length > 0 && (
         <div style={{ padding: "6px 10px", borderBottom: "1px solid var(--nf-border)", display: "flex", gap: 4, flexWrap: "wrap" }}>
@@ -15506,7 +15667,7 @@ export default function NovelForge() {
   const [portfolioBusy, setPortfolioBusy] = useState(null); // { charId, pkg, done, total, label, shotKey } while generating
   const [portfolioShotSelections, setPortfolioShotSelections] = useState({}); // { "charId:pkgKey": "all" | shotKey }
   const [openPortfolioShotMenu, setOpenPortfolioShotMenu] = useState(null); // "charId:pkgKey" while a shot picker is open
-  const [portfolioPromptEditor, setPortfolioPromptEditor] = useState(null); // { pkgKey, shotKey, promptId, label, draft, loading, error }
+  const [portfolioPromptEditor, setPortfolioPromptEditor] = useState(null); // generic prompt editor: { tableKey, promptId, fieldName, label, draft, loading, error, fallbackPatch }
   const [portfolioPromptSaving, setPortfolioPromptSaving] = useState(false);
   const [aiActivityFeed, setAiActivityFeed] = useState([]); // visible AI job log: [{id,title,detail,status,createdAt,updatedAt,done,total}]
   const [aiActivityOpen, setAiActivityOpen] = useState(true);
@@ -16241,18 +16402,24 @@ export default function NovelForge() {
     return () => document.removeEventListener("visibilitychange", handleVisibility);
   }, [settings?.sessionDecompression, sessionStartedAt, decompressionOpen]);
 
-  // ─── UNIVERSAL AI FILL: works for characters, world entries, relationships ───
+  // ─── UNIVERSAL AI FILL: works for characters, world entries, plot entries, and relationships ───
   const handleUniversalFill = useCallback(async (type, entityId) => {
     if (!settings.apiKey || !project) return;
-    let entity, fields, contextInfo, prompt;
+    const isEmptyValue = (v) => v == null || v === "" || (Array.isArray(v) && v.length === 0);
+    const compactFilled = (fields, obj) => fields.filter(f => !isEmptyValue(obj[f])).map(f => `${f}: ${Array.isArray(obj[f]) ? obj[f].join(", ") : obj[f]}`);
+
+    let entity, fields, contextInfo, fallbackPrompt, promptId, promptKind, modelKey, promptVars = {};
     if (type === "character") {
       entity = project.characters?.find(c => c.id === entityId);
       if (!entity?.name) { showToast("Name the character first", "error"); return; }
       fields = [...CHARACTER_TEXT_FIELDS];
       contextInfo = ContextEngine.buildTabContext(project, activeChapterIdx, "characters", entityId);
-      const emptyFields = fields.filter(f => !entity[f]);
-      const filledFields = fields.filter(f => entity[f]).map(f => `${f}: ${entity[f]}`);
-      prompt = `Fill in ONLY these empty fields for character "${entity.name}" (${entity.role || "role unset"}): ${emptyFields.join(", ")}.
+      const emptyFields = fields.filter(f => isEmptyValue(entity[f]));
+      const filledFields = compactFilled(fields, entity);
+      promptId = "character.autopilot";
+      promptKind = "promptTemplatesCharacters";
+      modelKey = "characters";
+      fallbackPrompt = `Fill in ONLY these empty fields for character "${entity.name}" (${entity.role || "role unset"}): ${emptyFields.join(", ")}.
 
 Already filled:
 ${filledFields.join("\n")}
@@ -16266,15 +16433,19 @@ CRITICAL REQUIREMENTS:
 - Look at <organizations> and <locations> in the context. If this character's occupation matches an existing org or location, reference it in 'allegiances', 'backstory', or 'canonNotes' by exact name.
 - NEVER include deprecated fields: introducedInChapter, meetsInChapter, backstoryRevealChapter, firstAppearanceChapter, or any date/chapter number fields.
 - Return ONLY a JSON object with the field names as keys. Do NOT include fields that already have content. Do NOT return nested objects for string fields. Be creative, genre-appropriate (${project.genre || "fiction"}), and consistent.`;
+      promptVars = { project, character: entity, entity, contextInfo, emptyFields: emptyFields.join(", "), filledFields: filledFields.join("\n"), allowedFields: fields.join(", "), focus: "foundation", focusGuide: "Fill only missing character fields. Preserve manually-entered anchors.", existing: JSON.stringify(entity, null, 2) };
     } else if (type === "world") {
       entity = project.worldBuilding?.find(w => w.id === entityId);
       if (!entity?.name) { showToast("Name the entry first", "error"); return; }
       const cat = entity.category || "Location";
       fields = worldFieldsForCategory(cat);
       contextInfo = ContextEngine.buildTabContext(project, activeChapterIdx, "world", entityId);
-      const emptyFields = fields.filter(f => !entity[f]);
-      const filledFields = fields.filter(f => entity[f]).map(f => `${f}: ${entity[f]}`);
-      prompt = `Fill in ONLY these empty fields for world entry "${entity.name}" (category: ${cat}): ${emptyFields.join(", ")}.
+      const emptyFields = fields.filter(f => isEmptyValue(entity[f]));
+      const filledFields = compactFilled(fields, entity);
+      promptId = "world.autofillEntry";
+      promptKind = "promptTemplatesWorld";
+      modelKey = "world";
+      fallbackPrompt = `Fill in ONLY these empty fields for world entry "${entity.name}" (category: ${cat}): ${emptyFields.join(", ")}.
 
 Already filled:
 ${filledFields.join("\n")}
@@ -16285,6 +16456,24 @@ CRITICAL REQUIREMENTS:
 - Do NOT output fields from other categories (e.g. don't output 'magicSource' on a Location entry).
 - Do NOT return nested objects for string fields. All values must be strings.
 - Return ONLY a JSON object with field names as keys. Be creative and consistent with the world.`;
+      promptVars = { project, world: entity, entry: entity, entity, contextInfo, category: cat, emptyFields: emptyFields.join(", "), filledFields: filledFields.join("\n"), allowedFields: fields.join(", "), existing: JSON.stringify(entity, null, 2) };
+    } else if (type === "plot") {
+      entity = project.plotOutline?.find(pl => pl.id === entityId);
+      if (!entity) return;
+      fields = ["title","summary","beats","sceneType","pov","date","characters","locations","tensionLevel","sensoryPalette","subtextNotes","hooks","unresolvedThreads"];
+      contextInfo = ContextEngine.buildTabContext(project, activeChapterIdx, "plot", entityId);
+      const emptyFields = fields.filter(f => isEmptyValue(entity[f]));
+      const filledFields = compactFilled(fields, entity);
+      promptId = "plot.autofillEntry";
+      promptKind = "promptTemplatesPlot";
+      modelKey = "plot";
+      fallbackPrompt = `Fill in ONLY these empty plot-outline fields for chapter ${entity.chapter || "?"}: ${emptyFields.join(", ")}.
+
+Already filled:
+${filledFields.join("\n")}
+
+Return ONLY a JSON object using only the requested field keys. Keep character/location arrays as arrays of existing IDs when possible. Be specific, scene-forward, and consistent with the project.`;
+      promptVars = { project, plot: entity, entry: entity, entity, contextInfo, emptyFields: emptyFields.join(", "), filledFields: filledFields.join("\n"), allowedFields: fields.join(", "), existing: JSON.stringify(entity, null, 2) };
     } else if (type === "relationship") {
       entity = project.relationships?.find(r => r.id === entityId);
       if (!entity) return;
@@ -16292,22 +16481,38 @@ CRITICAL REQUIREMENTS:
       const c2 = project.characters?.find(c => c.id === entity.char2);
       fields = RELATIONSHIP_TEXT_FIELDS;
       contextInfo = ContextEngine.buildTabContext(project, activeChapterIdx, "relationships", entityId);
-      const emptyFields = fields.filter(f => !entity[f]);
-      const filledFields = fields.filter(f => entity[f]).map(f => `${f}: ${entity[f]}`);
-      prompt = `Fill in ONLY these empty fields for the relationship between "${c1?.name || "?"}" and "${c2?.name || "?"}" (${entity.category}, ${entity.status}): ${emptyFields.join(", ")}.\n\nAlready filled:\n${filledFields.join("\n")}\n\nReturn ONLY a JSON object. Be creative and consistent.`;
+      const emptyFields = fields.filter(f => isEmptyValue(entity[f]));
+      const filledFields = compactFilled(fields, entity);
+      promptId = "relationships.singleDraft";
+      promptKind = "promptTemplatesRelationships";
+      modelKey = "relationships";
+      fallbackPrompt = `Fill in ONLY these empty fields for the relationship between "${c1?.name || "?"}" and "${c2?.name || "?"}" (${entity.category}, ${entity.status}): ${emptyFields.join(", ")}.
+
+Already filled:
+${filledFields.join("\n")}
+
+Return ONLY a JSON object. Be creative and consistent.`;
+      promptVars = { project, relationship: entity, rel: entity, entity, char1: c1, char2: c2, c1, c2, contextInfo, emptyFields: emptyFields.join(", "), filledFields: filledFields.join("\n"), allowedFields: fields.join(", "), existing: JSON.stringify(entity, null, 2) };
     } else return;
+
+    if (!fields?.some(f => isEmptyValue(entity[f]))) { showToast("No empty fields to fill", "info"); return; }
     showToast("AI is filling empty fields...", "info");
     try {
+      const liveTpl = await getLivePromptTemplate(promptId, promptKind);
+      const systemContent = liveTpl?.system
+        ? renderConfigTemplate(liveTpl.system, promptVars)
+        : `You are a fiction writing assistant. Fill empty fields with creative, genre-appropriate content.\n\n${contextInfo || ""}\n\nRULES:\n- Return ONLY valid JSON — no markdown, no backticks, no explanation.\n- Only include fields that are currently empty.\n- Be creative and specific.\n- Make content consistent with existing filled fields.`;
+      const userContent = liveTpl?.user ? renderConfigTemplate(liveTpl.user, promptVars) : fallbackPrompt;
       const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
         method: "POST",
         headers: { "Content-Type": "application/json", "Authorization": `Bearer ${settings.apiKey}`, "HTTP-Referer": window.location.origin, "X-Title": "NovelForge" },
         body: JSON.stringify({
-          model: settings.tabModels?.[type === "character" ? "characters" : type === "world" ? "world" : "relationships"] || settings.model,
+          model: settings.tabModels?.[modelKey] || settings.model,
           messages: [
-            { role: "system", content: `You are a fiction writing assistant. Fill empty fields with creative, genre-appropriate content.\n\n${contextInfo || ""}\n\nRULES:\n- Return ONLY valid JSON — no markdown, no backticks, no explanation.\n- Only include fields that are currently empty.\n- Be creative and specific.\n- Make content consistent with existing filled fields.` },
-            { role: "user", content: prompt },
+            { role: "system", content: systemContent },
+            { role: "user", content: userContent },
           ],
-        max_tokens: 12000, temperature: 0.85,
+          max_tokens: Number(liveTpl?.maxTokens || 12000), temperature: Number(liveTpl?.temperature || 0.85),
         }),
       });
       if (!res.ok) { const errData = await res.json().catch(() => ({})); throw new Error(errData.error?.message || `API error (${res.status})`); }
@@ -16315,7 +16520,8 @@ CRITICAL REQUIREMENTS:
       let content = stripThinkingTokens(data.choices?.[0]?.message?.content || "").trim();
       content = content.replace(/^```json?\s*/i, "").replace(/\s*```$/i, "").trim();
       let proposed; try { proposed = JSON.parse(content); } catch { proposed = null; }
-      if (typeof proposed !== "object" || proposed === null) throw new Error("Invalid response");
+      if (proposed && typeof proposed === "object" && !Array.isArray(proposed) && proposed.updates && typeof proposed.updates === "object") proposed = proposed.updates;
+      if (typeof proposed !== "object" || proposed === null || Array.isArray(proposed)) throw new Error("Invalid response");
       // Strip deprecated fields from AI response before processing
       const DEPRECATED = DEPRECATED_AI_FIELDS;
       const reviewFields = [];
@@ -16347,7 +16553,7 @@ CRITICAL REQUIREMENTS:
       if (reviewFields.length === 0) { showToast("AI found nothing to fill", "info"); return; }
       setFillReview({ type, entityId, fields: reviewFields });
     } catch (e) { showToast(`Fill failed: ${e.message}`, "error"); }
-  }, [settings, project, activeChapterIdx, showToast]);
+  }, [settings, project, activeChapterIdx, showToast, getLivePromptTemplate]);
 
   const editingChar = useMemo(() => {
     if (!editingCharId || !project?.characters) return null;
@@ -16636,7 +16842,7 @@ Return a JSON object with only these allowed keys: ${allowedFields.join(", ")}.`
       c.secrets && `secrets: ${c.secrets}`,
     ].filter(Boolean).join("; ");
     const opts = (arr) => arr.map(o => o.value).join(", ");
-    const prompt = `Develop the FULL relationship between "${c1.name}" and "${c2.name}" for a ${project?.genre || "fiction"} novel. Rewrite every field below from scratch into a vivid, specific, internally-consistent dynamic — do not hedge, do not leave anything generic.
+    const fallbackPrompt = `Develop the FULL relationship between "${c1.name}" and "${c2.name}" for a ${project?.genre || "fiction"} novel. Rewrite every field below from scratch into a vivid, specific, internally-consistent dynamic — do not hedge, do not leave anything generic.
 
 CHARACTER 1 — ${profile(c1)}
 CHARACTER 2 — ${profile(c2)}
@@ -16664,16 +16870,33 @@ Return ONLY a JSON object with these keys (all strings unless noted):
 - "category","status","tension","tensionType","powerDynamic","trustLevel": pick the BEST-FITTING allowed value for each
 
 Be consistent with the characters' personalities and any context provided. No markdown, no backticks, no prose outside the JSON.`;
+    const liveTpl = await getLivePromptTemplate("relationships.singleDraft", "promptTemplatesRelationships");
+    const templateVars = {
+      project, relationship: rel, rel, char1: c1, char2: c2, c1, c2, contextInfo,
+      relationshipJSON: JSON.stringify(rel, null, 2),
+      char1Profile: profile(c1), char2Profile: profile(c2),
+      allowedRelationshipFields: RELATIONSHIP_TEXT_FIELDS.join(", "),
+      allowedCategories: opts(RELATIONSHIP_CATEGORY_OPTIONS),
+      allowedStatuses: opts(RELATIONSHIP_STATUS_OPTIONS),
+      allowedTensions: opts(TENSION_OPTIONS),
+      allowedTensionTypes: opts(TENSION_TYPE_OPTIONS),
+      allowedPowerDynamics: opts(POWER_DYNAMIC_OPTIONS),
+      allowedTrustLevels: opts(TRUST_LEVEL_OPTIONS),
+    };
+    const systemContent = liveTpl?.system
+      ? renderConfigTemplate(liveTpl.system, templateVars)
+      : `You are a fiction relationship architect. You write specific, character-grounded relationship dynamics.\n\n${contextInfo || ""}\n\nReturn ONLY valid JSON.`;
+    const userContent = liveTpl?.user ? renderConfigTemplate(liveTpl.user, templateVars) : fallbackPrompt;
     const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
       headers: { "Content-Type": "application/json", "Authorization": `Bearer ${settings.apiKey}`, "HTTP-Referer": window.location.origin, "X-Title": "NovelForge" },
       body: JSON.stringify({
         model: settings.tabModels?.relationships || settings.model,
         messages: [
-          { role: "system", content: `You are a fiction relationship architect. You write specific, character-grounded relationship dynamics.\n\n${contextInfo || ""}\n\nReturn ONLY valid JSON.` },
-          { role: "user", content: prompt },
+          { role: "system", content: systemContent },
+          { role: "user", content: userContent },
         ],
-        max_tokens: 12000, temperature: 0.85,
+        max_tokens: Number(liveTpl?.maxTokens || 12000), temperature: Number(liveTpl?.temperature || 0.85),
       }),
     });
     if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error?.message || `API error (${res.status})`); }
@@ -16704,7 +16927,7 @@ Be consistent with the characters' personalities and any context provided. No ma
       if (v) patch[key] = v;
     }
     return Object.keys(patch).length ? patch : null;
-  }, [project, activeChapterIdx, settings]);
+  }, [project, activeChapterIdx, settings, getLivePromptTemplate]);
 
   const handleAutoDraftRelationship = useCallback(async (relId) => {
     if (!settings.apiKey) { showToast("Add an API key in Settings first", "error"); return; }
@@ -17769,64 +17992,79 @@ Rules:
     runCharacterArtJob(retryJob);
   }, [characterArtJobs, runCharacterArtJob]);
 
+  const openPromptTemplateEditor = useCallback(async (tableKey, promptId, label = "Prompt", fallbackPatch = {}, fieldName = "user") => {
+    if (!promptId) { showToast("Missing prompt id", "error"); return; }
+    const resolvedTableKey = tableKey || promptTemplateTableKeyForRow({ id: promptId, ...fallbackPatch });
+    const fetchKind = resolvedTableKey === "imagePromptTemplates" ? "imagePromptTemplates" : "promptTemplates";
+    setPortfolioPromptEditor({ tableKey: resolvedTableKey, promptId, fieldName, label, draft: "", loading: true, error: "", fallbackPatch });
+    try {
+      const tpl = await getLivePromptTemplate(promptId, fetchKind);
+      const defaults = buildDefaultAppConfig();
+      const fallback = findPromptTemplate(defaults, promptId, resolvedTableKey) || findPromptTemplate(defaults, promptId, fetchKind) || findPromptTemplate(defaults, promptId) || tpl || {};
+      setPortfolioPromptEditor({ tableKey: resolvedTableKey, promptId, fieldName, label, draft: tpl?.[fieldName] || fallback[fieldName] || "", loading: false, error: "", fallbackPatch });
+    } catch (e) {
+      const defaults = buildDefaultAppConfig();
+      const fallback = findPromptTemplate(defaults, promptId, resolvedTableKey) || findPromptTemplate(defaults, promptId, fetchKind) || findPromptTemplate(defaults, promptId) || {};
+      setPortfolioPromptEditor({ tableKey: resolvedTableKey, promptId, fieldName, label, draft: fallback[fieldName] || "", loading: false, error: e?.message || String(e), fallbackPatch });
+    }
+  }, [getLivePromptTemplate, showToast]);
+
   const openPortfolioPromptEditor = useCallback(async (pkgKey, shotKey) => {
     const pkg = MODEL_PORTFOLIO_PACKAGES[pkgKey];
     const shot = pkg?.shots?.find(s => s.key === shotKey);
     if (!pkg || !shot) { showToast("Pick a valid portfolio shot", "error"); return; }
     const promptId = `character.studio.portfolio.${pkgKey}.${shot.key}`;
-    setPortfolioPromptEditor({ pkgKey, shotKey: shot.key, promptId, label: `${pkg.label} — ${shot.label}`, draft: "", loading: true, error: "" });
-    try {
-      const tpl = await getLivePromptTemplate(promptId, "promptTemplates");
-      const fallback = findPromptTemplate(buildDefaultAppConfig(), promptId, "promptTemplatesCharacterStudio") || tpl || {};
-      setPortfolioPromptEditor({ pkgKey, shotKey: shot.key, promptId, label: `${pkg.label} — ${shot.label}`, draft: tpl?.user || fallback.user || "", loading: false, error: "" });
-    } catch (e) {
-      const fallback = findPromptTemplate(buildDefaultAppConfig(), promptId, "promptTemplatesCharacterStudio") || {};
-      setPortfolioPromptEditor({ pkgKey, shotKey: shot.key, promptId, label: `${pkg.label} — ${shot.label}`, draft: fallback.user || "", loading: false, error: e?.message || String(e) });
-    }
-  }, [getLivePromptTemplate, showToast]);
-
-  const savePortfolioPromptEditor = useCallback(async () => {
-    const ed = portfolioPromptEditor;
-    if (!ed?.promptId) return;
-    const draft = String(ed.draft || "");
-    const pkg = MODEL_PORTFOLIO_PACKAGES[ed.pkgKey];
-    const shot = pkg?.shots?.find(s => s.key === ed.shotKey);
-    const defaultRow = findPromptTemplate(buildDefaultAppConfig(), ed.promptId, "promptTemplatesCharacterStudio") || {};
-    const localRow = findPromptTemplate(appConfig, ed.promptId, "promptTemplatesCharacterStudio") || findPromptTemplate(appConfig, ed.promptId) || {};
-    const fallbackRow = enrichPromptTemplateRow({
-      ...defaultRow,
-      ...localRow,
-      id: ed.promptId,
+    return openPromptTemplateEditor("promptTemplatesCharacterStudio", promptId, `${pkg.label} — ${shot.label}`, {
       area: "Characters",
       tab: "Characters",
       subtab: "Studio",
       feature: "Model Portfolio",
-      action: localRow.action || defaultRow.action || `${pkg?.label || "Model Portfolio"} — ${shot?.label || ed.shotKey}`,
-      name: localRow.name || defaultRow.name || `Model Portfolio — ${pkg?.label || ed.pkgKey} — ${shot?.label || ed.shotKey}`,
-      system: localRow.system || defaultRow.system || "You create one photorealistic model-portfolio image prompt from character identity data. Output goes directly to an image model, so write camera-visible direction only.",
-      user: draft,
-      maxTokens: localRow.maxTokens || defaultRow.maxTokens || 12000,
-      temperature: localRow.temperature || defaultRow.temperature || 0.65,
-      json: localRow.json || defaultRow.json || "FALSE",
-      active: localRow.active || defaultRow.active || "TRUE",
-      version: Number(localRow.version || defaultRow.version || 3),
-      sort: localRow.sort || defaultRow.sort || 9999,
-      notes: localRow.notes || defaultRow.notes || "Characters → Art Studio → Model Portfolio. This row controls the exact prompt for this package shot.",
+      action: `${pkg.label} — ${shot.label}`,
+      name: `Model Portfolio — ${pkg.label} — ${shot.label}`,
+      system: "You create one photorealistic model-portfolio image prompt from character identity data. Output goes directly to an image model, so write camera-visible direction only.",
+      maxTokens: 12000,
+      temperature: 0.65,
+      json: "FALSE",
+      active: "TRUE",
+      version: 3,
+      sort: 9999,
+      notes: "Characters → Art Studio → Model Portfolio. This row controls the exact prompt for this package shot.",
+    });
+  }, [openPromptTemplateEditor, showToast]);
+
+  const savePromptTemplateEditor = useCallback(async () => {
+    const ed = portfolioPromptEditor;
+    if (!ed?.promptId) return;
+    const draft = String(ed.draft || "");
+    const defaultRow = findPromptTemplate(buildDefaultAppConfig(), ed.promptId, ed.tableKey) || findPromptTemplate(buildDefaultAppConfig(), ed.promptId) || {};
+    const localRow = findPromptTemplate(appConfig, ed.promptId, ed.tableKey) || findPromptTemplate(appConfig, ed.promptId) || {};
+    const fallbackRow = enrichPromptTemplateRow({
+      ...defaultRow,
+      ...localRow,
+      ...(ed.fallbackPatch || {}),
+      id: ed.promptId,
+      [ed.fieldName || "user"]: draft,
+      active: localRow.active || defaultRow.active || ed.fallbackPatch?.active || "TRUE",
     }, 0);
+    const tableKey = ed.tableKey || promptTemplateTableKeyForRow(fallbackRow);
 
     try {
       setPortfolioPromptSaving(true);
       setConfigError("");
-      const access = await prepareConfigSheetAccess(`portfolio prompt:${ed.promptId}`);
+      const access = await prepareConfigSheetAccess(`prompt:${ed.promptId}`);
       if (!access.ok) throw new Error(access.message || "No config spreadsheet connected");
-      const result = await ConfigSheets.upsertPromptTemplateUserCell("promptTemplatesCharacterStudio", ed.promptId, draft, fallbackRow);
+      const fieldName = ed.fieldName || "user";
+      const result = fieldName === "user"
+        ? await ConfigSheets.upsertPromptTemplateUserCell(tableKey, ed.promptId, draft, fallbackRow)
+        : await ConfigSheets.upsertConfigFieldCell(tableKey, ed.promptId, fieldName, draft, fallbackRow);
 
       const nextRows = (() => {
-        const rows = appConfig?.promptTemplatesCharacterStudio || [];
+        const rows = appConfig?.[tableKey] || [];
         const exists = rows.some(r => r.id === ed.promptId);
-        return exists ? rows.map(r => r.id === ed.promptId ? { ...r, user: draft } : r) : [...rows, fallbackRow];
+        const fieldName = ed.fieldName || "user";
+        return exists ? rows.map(r => r.id === ed.promptId ? { ...r, [fieldName]: draft } : r) : [...rows, fallbackRow];
       })();
-      const nextCfg = commitLiveAppConfig({ ...appConfig, promptTemplatesCharacterStudio: nextRows });
+      const nextCfg = commitLiveAppConfig({ ...appConfig, [tableKey]: nextRows });
       cacheAppConfig(nextCfg);
       showToast(`Prompt saved to ${result.range}`, "success");
       setPortfolioPromptEditor(null);
@@ -22347,21 +22585,30 @@ The FIRST attached image is the master photograph of this exact room. ${WALL_REF
             {aiBlockedReason ? aiBlockedReason : sceneDirectionUsed ? "Uses scene direction" : "Ignores scene direction"}
           </div>
         </div>
-        <div className="nf-writer-mode-grid" role="list" aria-label="AI writing modes">
-          {Object.keys(writerModeMeta).map(m => (
-            <Tooltip key={m} text={MODE_TOOLTIPS[m]}>
-              <button onClick={() => {
-                // A4: Clear stale selection when switching away from rewrite mode
-                if (genMode === "rewrite" && m !== "rewrite") {
-                  setSelectedText(""); setSelectionRange(null);
-                }
-                setGenMode(m);
-              }} className={`nf-mode-btn ${m === genMode ? "active" : ""}`} role="listitem">
-                {writerModeMeta[m].label}
-              </button>
-            </Tooltip>
-          ))}
-        </div>
+        <EditablePromptDropdown
+          value={genMode}
+          onChange={(m) => {
+            if (genMode === "rewrite" && m !== "rewrite") {
+              setSelectedText(""); setSelectionRange(null);
+            }
+            setGenMode(m);
+          }}
+          options={Object.keys(writerModeMeta).map(m => ({
+            value: m,
+            label: writerModeMeta[m].label,
+            meta: `write.mode.${m}`,
+            promptId: `write.mode.${m}`,
+            tableKey: "promptTemplatesWrite",
+            fieldName: "user",
+            title: MODE_TOOLTIPS[m],
+            fallbackPatch: { area: "Write", tab: "Write", feature: "AI Writer", action: m, name: `Mode prompt — ${writerModeMeta[m].label}`, active: "TRUE", version: 2 },
+          }))}
+          onEditPrompt={opt => openPromptTemplateEditor(opt.tableKey, opt.promptId, opt.label, opt.fallbackPatch || {}, opt.fieldName || "user")}
+          className="nf-writer-mode-dropdown"
+          menuWidth="min(360px, 84vw)"
+          title="Choose writing mode"
+          ariaLabel="AI writing mode"
+        />
       </div>
 
       {selectedText && (
@@ -24689,7 +24936,17 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                     <button onClick={() => setCharToolsOpen(false)} className="nf-btn-micro" style={{ fontSize: 10 }}>Close</button>
                   </div>
                   <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 10 }}>
-                    {settings.apiKey && editingChar.name && <button onClick={() => handleUniversalFill("character", editingCharId)} className="nf-btn-micro" style={{ fontSize: 11 }}><Icons.Wand /> AI Complete Missing</button>}
+                    {settings.apiKey && editingChar.name && (
+                      <EditablePromptDropdown
+                        value=""
+                        placeholder="AI Complete Missing"
+                        options={[{ value: "fill", label: "AI Complete Missing", meta: "character.autopilot", promptId: "character.autopilot", tableKey: "promptTemplatesCharacters", fieldName: "user", fallbackPatch: { area: "Characters", tab: "Characters", feature: "Character Autopilot", action: "fill empty", name: "Character Autopilot — complete missing fields", active: "TRUE", version: 2 } }]}
+                        onChange={() => handleUniversalFill("character", editingCharId)}
+                        onEditPrompt={opt => openPromptTemplateEditor(opt.tableKey, opt.promptId, opt.label, opt.fallbackPatch || {}, opt.fieldName || "user")}
+                        triggerClassName="nf-prompt-trigger-micro"
+                        menuWidth="min(360px, 84vw)"
+                      />
+                    )}
                     {settings.apiKey && <button onClick={() => scrollToCharPanel("art")} className="nf-btn-micro" style={{ fontSize: 11 }}><Icons.Image /> Art Studio</button>}
                     <button onClick={() => scrollToCharPanel("connections")} className="nf-btn-micro" style={{ fontSize: 11 }}>Connections</button>
                     <button onClick={deleteEditingCharacter} className="nf-btn-micro nf-btn-micro-danger" style={{ fontSize: 11 }}><Icons.Trash /> Delete</button>
@@ -24760,15 +25017,22 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                       </div>
                     </div>
                     <div style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "flex-end" }}>
-                      <button onClick={() => handleCharacterAIMaintain(editingCharId, "foundation")} disabled={!settings.apiKey || !!charAiBusy} className="nf-btn-micro" style={{ fontSize: 11 }} title="Fill empty story, psychology, voice, goal, arc, and canon fields without overwriting anchors.">
-                        {charAiBusy === "foundation" ? <Spinner /> : <Icons.Wand />} Build Missing
-                      </button>
-                      <button onClick={() => handleCharacterAIMaintain(editingCharId, "living")} disabled={!settings.apiKey || !!charAiBusy} className="nf-btn-micro" style={{ fontSize: 11 }} title="Refresh current emotional state, obligations, and knowledge from recent chapters.">
-                        {charAiBusy === "living" ? <Spinner /> : "↻"} Living State
-                      </button>
-                      <button onClick={() => handleCharacterAIMaintain(editingCharId, "visual")} disabled={!settings.apiKey || !!charAiBusy} className="nf-btn-micro" style={{ fontSize: 11 }} title="Fill empty visual and wardrobe fields for reference art.">
-                        {charAiBusy === "visual" ? <Spinner /> : <Icons.Image />} Visual Brief
-                      </button>
+                      <EditablePromptDropdown
+                        value=""
+                        placeholder={charAiBusy ? "AI working…" : "Run Autopilot"}
+                        disabled={!settings.apiKey || !!charAiBusy}
+                        options={[
+                          { value: "foundation", label: "Build Missing", meta: "character.autopilot", promptId: "character.autopilot", tableKey: "promptTemplatesCharacters", fieldName: "user", title: "Fill empty story, psychology, voice, goal, arc, and canon fields without overwriting anchors.", fallbackPatch: { area: "Characters", tab: "Characters", feature: "Character Autopilot", action: "foundation", name: "Character Autopilot — complete missing fields", active: "TRUE", version: 2 } },
+                          { value: "living", label: "Living State", meta: "character.autopilot.living", promptId: "character.autopilot.living", tableKey: "promptTemplatesCharacters", fieldName: "user", title: "Refresh current emotional state, obligations, and knowledge from recent chapters.", fallbackPatch: { area: "Characters", tab: "Characters", feature: "Character Autopilot", action: "living", name: "Character Autopilot — living state", active: "TRUE", version: 1 } },
+                          { value: "visual", label: "Visual Brief", meta: "character.autopilot.visual", promptId: "character.autopilot.visual", tableKey: "promptTemplatesCharacters", fieldName: "user", title: "Fill empty visual and wardrobe fields for reference art.", fallbackPatch: { area: "Characters", tab: "Characters", feature: "Character Autopilot", action: "visual", name: "Character Autopilot — visual/art fields", active: "TRUE", version: 1 } },
+                        ]}
+                        onChange={focus => handleCharacterAIMaintain(editingCharId, focus)}
+                        onEditPrompt={opt => openPromptTemplateEditor(opt.tableKey, opt.promptId, opt.label, opt.fallbackPatch || {}, opt.fieldName || "user")}
+                        triggerClassName="nf-prompt-trigger-micro"
+                        menuWidth="min(390px, 84vw)"
+                        title="Run or edit Character Autopilot prompts"
+                        ariaLabel="Character Autopilot action"
+                      />
                     </div>
                   </div>
                   <div style={{ display: "flex", gap: 5, flexWrap: "wrap", marginTop: 8 }}>
@@ -24933,38 +25197,45 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
               <div style={{ flex: 1 }}>
                 <CharSectionLabel title="Portrait" />
                 <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
-                  <button onClick={async () => {
-                    if (!settings.apiKey) { showToast("Set API key first", "error"); return; }
-                    if (!editingChar.name || !editingChar.appearance) { showToast("Add name and appearance first", "error"); return; }
-                    const portraitActivityId = startAiActivity("Generate AI Portrait", "Loading prompt template from Google Sheets");
-                    showToast("Generating portrait...", "info");
-                    try {
-                      const wardrobe = charWardrobe(editingChar);
-                      const subjectDescription = `${_stripFacialClauses(editingChar.appearance) || ""}${editingChar.build ? `, build: ${editingChar.build}` : ""}${wardrobe ? `, wearing ${wardrobe}` : ""}`;
-                      const lookAlikeLock = editingChar.lookAlike ? `The face is exactly ${editingChar.lookAlike}'s — unmistakably ${editingChar.lookAlike}'s face. Do not alter or describe individual facial features.` : "";
-                      const fallbackPortraitPrompt = `Create a realistic model catalogue portrait (Frame: Strict upper body model catalogue portrait. Camera is at eye level, centered on the subject. Subject's head occupies approximately 30% of the image height from crown to chin. Shoulders visible below the chin, upper chest visible, crop at mid-torso. No full body, only waist-up. Subject faces directly forward, looking into the camera lens. Natural neutral catalogue expression, relaxed shoulders, simple upright posture, fully clothed unless the saved wardrobe says otherwise.` +
-                        `Pure solid white (#FFFFFF). No gradients. No shadows on the background. No texture. No color tint. No bokeh. No objects. Just flat, even, pure white from edge to edge. ` +
-                        `Subject: ${subjectDescription}.` +
-                        `${lookAlikeLock} ` +
-                        `Photoreal: lifelike skin with visible pores and natural texture, realistic hair strands. No illustration, no painting, no CGI look.`;
-                      const livePortraitTpl = await getLivePromptTemplate("character.studio.quickPortrait");
-                      updateAiActivity(portraitActivityId, { title: "Generate AI Portrait", detail: "Prompt loaded · building image request", status: "working" });
-                      const rawPrompt = livePortraitTpl?.user
-                        ? renderConfigTemplate(livePortraitTpl.user, { character: editingChar, characterName: editingChar.name || "the character", subjectDescription, lookAlikeLock, wardrobe })
-                        : fallbackPortraitPrompt;
-                      const prompt = String(rawPrompt || fallbackPortraitPrompt);
-                      const imageUrl = await _genSingleImageRef.current(prompt, "3:4", null, { id: portraitActivityId, title: "Generate AI Portrait", detail: `Portrait for ${editingChar.name || "character"}` });
-                      if (imageUrl) {
-                        updateCharById(editingCharId, "image", imageUrl);
-                        const qa = _lastImageQaRef.current;
-                        showToast(qa?.status ? `Portrait generated · QA ${qa.status}` : "Portrait generated", "success");
-                      } else {
-                        throw new Error("No image returned after retries");
-                      }
-                    } catch (e) { finishAiActivity(portraitActivityId, "failed", e.message?.replace(/sk-[a-zA-Z0-9]+/g, "sk-***") || "Unknown error"); showToast(`Portrait failed: ${e.message?.replace(/sk-[a-zA-Z0-9]+/g, "sk-***") || "Unknown error"}`, "error"); }
-                  }} className="nf-btn-micro" disabled={!settings.apiKey}>
-                    <Icons.Wand /> Generate AI Portrait
-                  </button>
+                  <EditablePromptDropdown
+                    value=""
+                    placeholder="Generate AI Portrait"
+                    disabled={!settings.apiKey}
+                    options={[{ value: "quickPortrait", label: "Generate AI Portrait", meta: "character.studio.quickPortrait", promptId: "character.studio.quickPortrait", tableKey: "promptTemplatesCharacterStudio", fieldName: "user", fallbackPatch: { area: "Characters", tab: "Characters", subtab: "Studio", feature: "Art Studio", action: "quick portrait", name: "Art Studio — quick portrait button", active: "TRUE", version: 1 } }]}
+                    onChange={async () => {
+                      if (!settings.apiKey) { showToast("Set API key first", "error"); return; }
+                      if (!editingChar.name || !editingChar.appearance) { showToast("Add name and appearance first", "error"); return; }
+                      const portraitActivityId = startAiActivity("Generate AI Portrait", "Loading prompt template from Google Sheets");
+                      showToast("Generating portrait...", "info");
+                      try {
+                        const wardrobe = charWardrobe(editingChar);
+                        const subjectDescription = `${_stripFacialClauses(editingChar.appearance) || ""}${editingChar.build ? `, build: ${editingChar.build}` : ""}${wardrobe ? `, wearing ${wardrobe}` : ""}`;
+                        const lookAlikeLock = editingChar.lookAlike ? `The face is exactly ${editingChar.lookAlike}'s — unmistakably ${editingChar.lookAlike}'s face. Do not alter or describe individual facial features.` : "";
+                        const fallbackPortraitPrompt = `Create a realistic model catalogue portrait (Frame: Strict upper body model catalogue portrait. Camera is at eye level, centered on the subject. Subject's head occupies approximately 30% of the image height from crown to chin. Shoulders visible below the chin, upper chest visible, crop at mid-torso. No full body, only waist-up. Subject faces directly forward, looking into the camera lens. Natural neutral catalogue expression, relaxed shoulders, simple upright posture, fully clothed unless the saved wardrobe says otherwise.` +
+                          `Pure solid white (#FFFFFF). No gradients. No shadows on the background. No texture. No color tint. No bokeh. No objects. Just flat, even, pure white from edge to edge. ` +
+                          `Subject: ${subjectDescription}.` +
+                          `${lookAlikeLock} ` +
+                          `Photoreal: lifelike skin with visible pores and natural texture, realistic hair strands. No illustration, no painting, no CGI look.`;
+                        const livePortraitTpl = await getLivePromptTemplate("character.studio.quickPortrait", "promptTemplatesCharacterStudio");
+                        updateAiActivity(portraitActivityId, { title: "Generate AI Portrait", detail: "Prompt loaded · building image request", status: "working" });
+                        const rawPrompt = livePortraitTpl?.user
+                          ? renderConfigTemplate(livePortraitTpl.user, { character: editingChar, characterName: editingChar.name || "the character", subjectDescription, lookAlikeLock, wardrobe })
+                          : fallbackPortraitPrompt;
+                        const prompt = String(rawPrompt || fallbackPortraitPrompt);
+                        const imageUrl = await _genSingleImageRef.current(prompt, "3:4", null, { id: portraitActivityId, title: "Generate AI Portrait", detail: `Portrait for ${editingChar.name || "character"}` });
+                        if (imageUrl) {
+                          updateCharById(editingCharId, "image", imageUrl);
+                          const qa = _lastImageQaRef.current;
+                          showToast(qa?.status ? `Portrait generated · QA ${qa.status}` : "Portrait generated", "success");
+                        } else {
+                          throw new Error("No image returned after retries");
+                        }
+                      } catch (e) { finishAiActivity(portraitActivityId, "failed", e.message?.replace(/sk-[a-zA-Z0-9]+/g, "sk-***") || "Unknown error"); showToast(`Portrait failed: ${e.message?.replace(/sk-[a-zA-Z0-9]+/g, "sk-***") || "Unknown error"}`, "error"); }
+                    }}
+                    onEditPrompt={opt => openPromptTemplateEditor(opt.tableKey, opt.promptId, opt.label, opt.fallbackPatch || {}, opt.fieldName || "user")}
+                    triggerClassName="nf-prompt-trigger-micro"
+                    menuWidth="min(380px, 84vw)"
+                  />
                   <label className="nf-btn-micro" style={{ cursor: "pointer" }}>
                     <Icons.Export /> Upload
                     <input type="file" accept="image/*" style={{ display: "none" }} onChange={e => {
@@ -25424,15 +25695,30 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
                   <button onClick={() => generateCharVariant(editingChar, "portrait")} className="nf-btn-micro" style={{ fontSize: 11 }}>Portrait</button>
                   <button onClick={() => generateCharVariant(editingChar, "model-sheet")} className="nf-btn-micro" style={{ fontSize: 11 }} title="Front / side / back turnaround">Turnaround</button>
-                  <select onChange={e => { if (e.target.value) { generateCharVariant(editingChar, `relight:${e.target.value}`); e.target.value = ""; } }}
-                    defaultValue="" className="nf-input" style={{ fontSize: 11, padding: "3px 8px" }} title="Relight a portrait">
-                    <option value="">Relight…</option>
-                    {cfgOptions("characterArt.relight", ["harsh midday sun", "warm candlelight", "cool moonlight", "neon city glow", "soft overcast", "golden hour"]).map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-                  </select>
-                  <select onChange={e => { if (e.target.value) { generateCharVariant(editingChar, `expr:${e.target.value}`); e.target.value = ""; } }} defaultValue="" className="nf-input" style={{ fontSize: 11, padding: "3px 8px" }} title="Portrait with a specific emotion">
-                    <option value="">Expression…</option>
-                    {cfgOptions("characterArt.expression", ["angry", "joyful", "grieving", "afraid", "determined", "surprised"]).map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-                  </select>
+                  <EditablePromptDropdown
+                    value=""
+                    placeholder="Relight…"
+                    onChange={v => { if (v) generateCharVariant(editingChar, `relight:${v}`); }}
+                    options={cfgOptions("characterArt.relight", ["harsh midday sun", "warm candlelight", "cool moonlight", "neon city glow", "soft overcast", "golden hour"]).map(o => ({ ...o, promptId: "character.studio.artVariant", tableKey: "promptTemplatesCharacterStudio", meta: "prompt" }))}
+                    onEditPrompt={() => openPromptTemplateEditor("promptTemplatesCharacterStudio", "character.studio.artVariant", "Character Studio — Art Variant")}
+                    style={{ minWidth: 124 }}
+                    triggerClassName="nf-prompt-trigger-micro"
+                    menuWidth="min(320px, 82vw)"
+                    title="Relight a portrait"
+                    ariaLabel="Relight prompt selector"
+                  />
+                  <EditablePromptDropdown
+                    value=""
+                    placeholder="Expression…"
+                    onChange={v => { if (v) generateCharVariant(editingChar, `expr:${v}`); }}
+                    options={cfgOptions("characterArt.expression", ["angry", "joyful", "grieving", "afraid", "determined", "surprised"]).map(o => ({ ...o, promptId: "character.studio.artVariant", tableKey: "promptTemplatesCharacterStudio", meta: "prompt" }))}
+                    onEditPrompt={() => openPromptTemplateEditor("promptTemplatesCharacterStudio", "character.studio.artVariant", "Character Studio — Art Variant")}
+                    style={{ minWidth: 124 }}
+                    triggerClassName="nf-prompt-trigger-micro"
+                    menuWidth="min(320px, 82vw)"
+                    title="Portrait with a specific emotion"
+                    ariaLabel="Expression prompt selector"
+                  />
                 </div>
                 {/* Age + one-off outfit override (doesn't change the saved wardrobe) */}
                 <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8 }}>
@@ -25871,7 +26157,7 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
             chapterIdx={activeChapterIdx}
             editingEntityId={editingCharId}
             messages={getTabMessages("characters")}
-            setMessages={setTabMessages("characters")} />
+            setMessages={setTabMessages("characters")} onEditPromptTemplate={openPromptTemplateEditor} />
         )}
         {isMobile && settings.apiKey && (
           <>
@@ -25891,7 +26177,7 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                       chapterIdx={activeChapterIdx}
                       editingEntityId={editingCharId}
                       messages={getTabMessages("characters")}
-                      setMessages={setTabMessages("characters")} />
+                      setMessages={setTabMessages("characters")} onEditPromptTemplate={openPromptTemplateEditor} />
                   </div>
                 </div>
               </div>
@@ -26702,20 +26988,37 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                                     </div>
                                   ) : (
                                     <div style={{ display: "flex", gap: 4, flexWrap: "wrap", alignItems: "center" }}>
-                                      <button onClick={async () => {
-                                        if (!settings.apiKey) { showToast("Set API key", "error"); return; }
-                                        showToast("Generating group photo prompt...", "info");
-                                        try {
-                                          const members = item.orgHierarchy.filter(p => p.charId).map(p => { const ch = (project?.characters || []).find(c => c.id === p.charId); if (!ch || ch.isBulk) return null; return { name: ch.name, role: p.name, appearance: ch.appearance || "", lookAlike: ch.lookAlike || "", gender: ch.gender || "", build: ch.build || "" }; }).filter(Boolean);
-                                          if (!members.length) { showToast("No non-bulk members", "error"); return; }
-                                          const memberDescs = members.map(m => `- ${m.name} (${m.role}): face is exactly ${m.lookAlike || "unspecified"}'s face (do not describe facial features)${m.build ? `, ${m.build} build` : ""}${_stripFacialClauses(m.appearance) ? `, ${_stripFacialClauses(m.appearance)}` : ""}`).join("\n");
-                                          const res = await fetch("https://openrouter.ai/api/v1/chat/completions", { method: "POST", headers: { "Content-Type": "application/json", "Authorization": `Bearer ${settings.apiKey}`, "HTTP-Referer": window.location.origin, "X-Title": "NovelForge" }, body: JSON.stringify({ model: settings.model, messages: [{ role: "system", content: "Create a COMPLETE image generation prompt for a formal group portrait. Every person fully described. Output ONLY the prompt." }, { role: "user", content: `Group photo for "${item?.name || "unnamed"}".\nMembers:\n${memberDescs || ""}\n\nFormal group portrait, higher ranks center/front, appropriate setting.` }], max_tokens: 12000, temperature: 0.8 }) });
-                                          if (!res.ok) { const errData = await res.json().catch(() => ({})); throw new Error(errData.error?.message || `API error (${res.status})`); }
-                                          const data = await res.json();
-                                          const prompt = stripThinkingTokens(data.choices?.[0]?.message?.content || "").trim();
-                                          if (prompt) { updateProject({ worldBuilding: items.map(it => it.id === item.id ? { ...it, orgGroupPhotoPrompt: prompt } : it) }); showToast("Prompt ready — review and click Render", "success"); }
-                                        } catch (e) { showToast(`Failed: ${e.message?.replace(/sk-[a-zA-Z0-9]+/g, "sk-***") || "Unknown error"}`, "error"); }
-                                      }} className="nf-btn-micro" style={{ fontSize: 11 }}><Icons.Wand /> {item.orgGroupPhotoPrompt ? "Regen Prompt" : "Group Photo"}</button>
+                                      <EditablePromptDropdown
+                                        value=""
+                                        placeholder={item.orgGroupPhotoPrompt ? "Regen Prompt" : "Group Photo"}
+                                        disabled={!settings.apiKey}
+                                        options={[{ value: "orgGroup", label: item.orgGroupPhotoPrompt ? "Regenerate group photo prompt" : "Generate group photo prompt", meta: "world.orgGroupPhotoPrompt", promptId: "world.orgGroupPhotoPrompt", tableKey: "promptTemplatesWorld", fieldName: "user", fallbackPatch: { area: "World", tab: "World", subtab: "Organizations", feature: "Organization group photo", action: "write image prompt", name: "World — organization group photo prompt", active: "TRUE", version: 1 } }]}
+                                        onChange={async () => {
+                                          if (!settings.apiKey) { showToast("Set API key", "error"); return; }
+                                          showToast("Generating group photo prompt...", "info");
+                                          try {
+                                            const members = item.orgHierarchy.filter(p => p.charId).map(p => { const ch = (project?.characters || []).find(c => c.id === p.charId); if (!ch || ch.isBulk) return null; return { name: ch.name, role: p.name, appearance: ch.appearance || "", lookAlike: ch.lookAlike || "", gender: ch.gender || "", build: ch.build || "" }; }).filter(Boolean);
+                                            if (!members.length) { showToast("No non-bulk members", "error"); return; }
+                                            const memberDescs = members.map(m => `- ${m.name} (${m.role}): face is exactly ${m.lookAlike || "unspecified"}'s face (do not describe facial features)${m.build ? `, ${m.build} build` : ""}${_stripFacialClauses(m.appearance) ? `, ${_stripFacialClauses(m.appearance)}` : ""}`).join("\n");
+                                            const liveTpl = await getLivePromptTemplate("world.orgGroupPhotoPrompt", "promptTemplatesWorld");
+                                            const vars = { project, world: item, organization: item, item, members, memberDescs, orgName: item?.name || "unnamed" };
+                                            const systemContent = liveTpl?.system ? renderConfigTemplate(liveTpl.system, vars) : "Create a COMPLETE image generation prompt for a formal group portrait. Every person fully described. Output ONLY the prompt.";
+                                            const userContent = liveTpl?.user ? renderConfigTemplate(liveTpl.user, vars) : `Group photo for "${item?.name || "unnamed"}".
+Members:
+${memberDescs || ""}
+
+Formal group portrait, higher ranks center/front, appropriate setting.`;
+                                            const res = await fetch("https://openrouter.ai/api/v1/chat/completions", { method: "POST", headers: { "Content-Type": "application/json", "Authorization": `Bearer ${settings.apiKey}`, "HTTP-Referer": window.location.origin, "X-Title": "NovelForge" }, body: JSON.stringify({ model: settings.model, messages: [{ role: "system", content: systemContent }, { role: "user", content: userContent }], max_tokens: Number(liveTpl?.maxTokens || 12000), temperature: Number(liveTpl?.temperature || 0.8) }) });
+                                            if (!res.ok) { const errData = await res.json().catch(() => ({})); throw new Error(errData.error?.message || `API error (${res.status})`); }
+                                            const data = await res.json();
+                                            const prompt = stripThinkingTokens(data.choices?.[0]?.message?.content || "").trim();
+                                            if (prompt) { updateProject({ worldBuilding: items.map(it => it.id === item.id ? { ...it, orgGroupPhotoPrompt: prompt } : it) }); showToast("Prompt ready — review and click Render", "success"); }
+                                          } catch (e) { showToast(`Failed: ${e.message?.replace(/sk-[a-zA-Z0-9]+/g, "sk-***") || "Unknown error"}`, "error"); }
+                                        }}
+                                        onEditPrompt={opt => openPromptTemplateEditor(opt.tableKey, opt.promptId, opt.label, opt.fallbackPatch || {}, opt.fieldName || "user")}
+                                        triggerClassName="nf-prompt-trigger-micro"
+                                        menuWidth="min(390px, 84vw)"
+                                      />
                                       {item.orgGroupPhotoPrompt && <button onClick={async () => {
                                         showToast("Rendering...", "info");
                                         try {
@@ -27017,15 +27320,16 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                             <div style={{ fontSize: 11, fontWeight: 500, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--nf-text-muted)", fontFamily: "var(--nf-font-body)" }}>
                               Room Views (4 walls — upload images or copy prompts)
                             </div>
-                            <button
-                              onClick={() => handleGenerateImagePrompts(item.id)}
+                            <EditablePromptDropdown
+                              value=""
+                              placeholder={item._generatingPrompts ? "Generating…" : (Object.values(item.imagePrompts || {}).some(p => p) ? "Regenerate" : "Generate Prompts")}
                               disabled={!settings.apiKey || !item.description || item._generatingPrompts}
-                              className="nf-btn-micro"
-                              style={{ borderColor: "var(--nf-accent)", color: "var(--nf-accent)", fontSize: 11 }}>
-                              {item._generatingPrompts
-                                ? <><Spinner /> Generating...</>
-                                : <><Icons.Wand /> {Object.values(item.imagePrompts || {}).some(p => p) ? "Regenerate" : "Generate Prompts"}</>}
-                            </button>
+                              options={[{ value: "roomPrompts", label: Object.values(item.imagePrompts || {}).some(p => p) ? "Regenerate room prompts" : "Generate room prompts", meta: "world.roomImagePrompts", promptId: "world.roomImagePrompts", tableKey: "promptTemplatesWorld", fieldName: "user", fallbackPatch: { area: "World", tab: "World", feature: "Room Views", action: "generate room image prompts", name: "World — room wall image prompts", active: "TRUE", version: 1 } }]}
+                              onChange={() => handleGenerateImagePrompts(item.id)}
+                              onEditPrompt={opt => openPromptTemplateEditor(opt.tableKey, opt.promptId, opt.label, opt.fallbackPatch || {}, opt.fieldName || "user")}
+                              triggerClassName="nf-prompt-trigger-micro"
+                              menuWidth="min(390px, 84vw)"
+                            />
                             {Object.values(item.imagePrompts || {}).some(p => p) && (
                               <button
                                 onClick={() => handleRenderAllWallsChained(item.id)}
@@ -27248,7 +27552,16 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                       )}
                       </div>
                       {settings.apiKey && item.name && (
-                        <button onClick={() => handleUniversalFill("world", item.id)} className="nf-btn-icon" style={{ marginTop: 24, color: "var(--nf-accent-2)" }} aria-label="Fill empty fields"><Icons.Wand /></button>
+                        <EditablePromptDropdown
+                          value=""
+                          placeholder="AI"
+                          options={[{ value: "fill", label: "Fill empty fields", meta: "world.autofillEntry", promptId: "world.autofillEntry", tableKey: "promptTemplatesWorld", fieldName: "user", fallbackPatch: { area: "World", tab: "World", feature: "World Entry", action: "fill empty", name: "World — fill empty entry fields", active: "TRUE", version: 1 } }]}
+                          onChange={() => handleUniversalFill("world", item.id)}
+                          onEditPrompt={opt => openPromptTemplateEditor(opt.tableKey, opt.promptId, opt.label, opt.fallbackPatch || {}, opt.fieldName || "user")}
+                          triggerClassName="nf-prompt-trigger-icon"
+                          menuWidth="min(340px, 84vw)"
+                          ariaLabel="World AI prompt selector"
+                        />
                       )}
                       <button onClick={() => setConfirmDialog({
                         message: `Delete "${item.name || "this entry"}"? This will also remove it from all plot entry locations.`,
@@ -27279,7 +27592,7 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
             tabContext="world-building — create locations, rules, cultures, magic systems"
             onAutoFill={handleWorldAutoFill}
             chapterIdx={activeChapterIdx}
-            messages={getTabMessages("world")} setMessages={setTabMessages("world")} />
+            messages={getTabMessages("world")} setMessages={setTabMessages("world")} onEditPromptTemplate={openPromptTemplateEditor} />
         )}
         {isMobile && settings.apiKey && (
           <>
@@ -27295,7 +27608,7 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                     <TabAIChat project={project} settings={settings} appConfig={appConfig} appConfigLiveLoader={getLiveConfigForAction} tabName="world"
                       tabContext="world-building — create locations, rules, cultures, magic systems"
                       onAutoFill={handleWorldAutoFill} chapterIdx={activeChapterIdx}
-                      messages={getTabMessages("world")} setMessages={setTabMessages("world")} />
+                      messages={getTabMessages("world")} setMessages={setTabMessages("world")} onEditPromptTemplate={openPromptTemplateEditor} />
                   </div>
                 </div>
               </div>
@@ -27721,7 +28034,17 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                         {hasMatchingChapter && (
                           <button type="button" onClick={() => { setActiveTab("write"); setActiveChapterIdx(chIdx); forceRepopulateEditor(); }} className="nf-btn-micro" style={{ fontSize: 11 }}>Open draft</button>
                         )}
-                        {settings.apiKey && <button type="button" onClick={() => handleUniversalFill("plot", p.id)} className="nf-btn-micro" style={{ fontSize: 11, borderColor: "var(--nf-accent-2)", color: "var(--nf-accent-2)" }}><Icons.Wand /> Fill empty</button>}
+                        {settings.apiKey && (
+                          <EditablePromptDropdown
+                            value=""
+                            placeholder="Fill empty"
+                            options={[{ value: "fill", label: "Fill empty plot fields", meta: "plot.autofillEntry", promptId: "plot.autofillEntry", tableKey: "promptTemplatesPlot", fieldName: "user", fallbackPatch: { area: "Plot", tab: "Plot", feature: "Plot Outline", action: "fill empty", name: "Plot — fill empty outline fields", active: "TRUE", version: 1 } }]}
+                            onChange={() => handleUniversalFill("plot", p.id)}
+                            onEditPrompt={opt => openPromptTemplateEditor(opt.tableKey, opt.promptId, opt.label, opt.fallbackPatch || {}, opt.fieldName || "user")}
+                            triggerClassName="nf-prompt-trigger-micro"
+                            menuWidth="min(350px, 84vw)"
+                          />
+                        )}
                       </div>
                     </div>
                     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 8 }}>
@@ -27990,7 +28313,7 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
             onAutoFill={handlePlotAutoFill}
             chapterIdx={activeChapterIdx}
             editingEntityId={expandedPlotIds.size === 1 ? [...expandedPlotIds][0] : null}
-            messages={getTabMessages("plot")} setMessages={setTabMessages("plot")} />
+            messages={getTabMessages("plot")} setMessages={setTabMessages("plot")} onEditPromptTemplate={openPromptTemplateEditor} />
         )}
         {isMobile && settings.apiKey && (
           <>
@@ -28007,7 +28330,7 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                       tabContext="plot outline — plan chapters, structure arcs, develop beats"
                       onAutoFill={handlePlotAutoFill} chapterIdx={activeChapterIdx}
                       editingEntityId={expandedPlotIds.size === 1 ? [...expandedPlotIds][0] : null}
-                      messages={getTabMessages("plot")} setMessages={setTabMessages("plot")} />
+                      messages={getTabMessages("plot")} setMessages={setTabMessages("plot")} onEditPromptTemplate={openPromptTemplateEditor} />
                   </div>
                 </div>
               </div>
@@ -28256,10 +28579,22 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                 <button onClick={() => setShowRelWeb(true)} className="nf-btn nf-btn-ghost"><Icons.Users /> Open Web</button>
                 {settings.apiKey && (
-                  <button onClick={handleSyncRelationshipsFromStory} disabled={relDraftBusy} className="nf-btn nf-btn-ghost"><Icons.Wand /> {relDraftBusy === "storySync" ? "Syncing story…" : "Sync Whole Tab from Story"}</button>
-                )}
-                {settings.apiKey && rels.some(relHasNames) && (
-                  <button onClick={handleAutoDraftAllRelationships} disabled={relDraftBusy} className="nf-btn nf-btn-ghost"><Icons.Wand /> {relDraftBusy === "all" ? "Drafting…" : "Draft All with AI"}</button>
+                  <EditablePromptDropdown
+                    value=""
+                    placeholder={relDraftBusy ? (relDraftBusy === "storySync" ? "Syncing story…" : "Drafting…") : "Relationship AI"}
+                    disabled={!!relDraftBusy}
+                    options={[
+                      { value: "syncStory", label: "Sync Whole Tab from Story", meta: "relationships.syncStory", promptId: "relationships.syncStory", tableKey: "promptTemplatesRelationships", fieldName: "user", fallbackPatch: { area: "Relationships", tab: "Relationships", feature: "Relationship Tools", action: "sync story", name: "Relationships — sync from story", active: "TRUE", version: 1 } },
+                      ...(rels.some(relHasNames) ? [{ value: "draftAll", label: "Draft All with AI", meta: "relationships.singleDraft", promptId: "relationships.singleDraft", tableKey: "promptTemplatesRelationships", fieldName: "user", fallbackPatch: { area: "Relationships", tab: "Relationships", feature: "Relationship Tools", action: "draft all", name: "Relationships — draft one/all relationship", active: "TRUE", version: 1 } }] : []),
+                    ]}
+                    onChange={v => {
+                      if (v === "syncStory") handleSyncRelationshipsFromStory();
+                      else if (v === "draftAll") handleAutoDraftAllRelationships();
+                    }}
+                    onEditPrompt={opt => openPromptTemplateEditor(opt.tableKey, opt.promptId, opt.label, opt.fallbackPatch || {}, opt.fieldName || "user")}
+                    triggerClassName="nf-prompt-trigger-soft"
+                    menuWidth="min(420px, 84vw)"
+                  />
                 )}
                 {rels.length > 1 && (
                   <button onClick={() => setExpandedRelIds(prev => prev.size === rels.length ? new Set() : new Set(rels.map(r => r.id)))} className="nf-btn nf-btn-ghost">
@@ -28537,12 +28872,24 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                       <Field label="Notes" value={r.notes} onChange={v => updateProject({ relationships: rels.map(re => re.id === r.id ? { ...re, notes: v } : re) })} multiline placeholder="History, turning points..." small />
                     </div>
                     <div style={{ display: "flex", justifyContent: "flex-end", gap: 6, flexWrap: "wrap" }}>
-                      {settings.apiKey && r.char1 && r.char2 && (
-                        <button onClick={() => handleAutoDraftRelationship(r.id)} disabled={relDraftBusy} className="nf-btn-micro" style={{ borderColor: "var(--nf-accent-2)", background: "var(--nf-accent-glow-2)", color: "var(--nf-accent-2)" }} title="AI rewrites the whole relationship (dynamic, chemistry, conflict, both perspectives, arc, and the structured fields). Applied instantly — undo from the banner up top.">
-                          <Icons.Wand /> {relDraftBusy === r.id ? "Drafting…" : "Draft (AI)"}
-                        </button>
+                      {settings.apiKey && (
+                        <EditablePromptDropdown
+                          value=""
+                          placeholder={relDraftBusy === r.id ? "Drafting…" : "Relationship AI"}
+                          disabled={!!relDraftBusy}
+                          options={[
+                            ...(r.char1 && r.char2 ? [{ value: "draft", label: "Draft whole relationship", meta: "relationships.singleDraft", promptId: "relationships.singleDraft", tableKey: "promptTemplatesRelationships", fieldName: "user", fallbackPatch: { area: "Relationships", tab: "Relationships", feature: "Relationship Editor", action: "draft relationship", name: "Relationships — draft one relationship", active: "TRUE", version: 1 } }] : []),
+                            { value: "fill", label: "Fill empty fields", meta: "relationships.singleDraft", promptId: "relationships.singleDraft", tableKey: "promptTemplatesRelationships", fieldName: "user", fallbackPatch: { area: "Relationships", tab: "Relationships", feature: "Relationship Editor", action: "fill empty", name: "Relationships — fill empty relationship fields", active: "TRUE", version: 1 } },
+                          ]}
+                          onChange={v => {
+                            if (v === "draft") handleAutoDraftRelationship(r.id);
+                            else if (v === "fill") handleUniversalFill("relationship", r.id);
+                          }}
+                          onEditPrompt={opt => openPromptTemplateEditor(opt.tableKey, opt.promptId, opt.label, opt.fallbackPatch || {}, opt.fieldName || "user")}
+                          triggerClassName="nf-prompt-trigger-micro"
+                          menuWidth="min(380px, 84vw)"
+                        />
                       )}
-                      {settings.apiKey && <button onClick={() => handleUniversalFill("relationship", r.id)} className="nf-btn-micro" style={{ borderColor: "var(--nf-border)", color: "var(--nf-text-muted)" }} title="Gentler: fills only empty fields, with a review step."><Icons.Wand /> Fill Empty</button>}
                       <button onClick={() => updateProject({ relationships: rels.filter(re => re.id !== r.id) })} className="nf-btn-micro nf-btn-micro-danger"><Icons.Trash /> Remove</button>
                     </div>
                     </div>
@@ -28559,7 +28906,7 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
             tabContext="relationship dynamics — develop chemistry, tension arcs"
             onAutoFill={handleRelAutoFill}
             chapterIdx={activeChapterIdx}
-            messages={getTabMessages("relationships")} setMessages={setTabMessages("relationships")} />
+            messages={getTabMessages("relationships")} setMessages={setTabMessages("relationships")} onEditPromptTemplate={openPromptTemplateEditor} />
         )}
         {isMobile && settings.apiKey && (
           <>
@@ -28575,7 +28922,7 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                     <TabAIChat project={project} settings={settings} appConfig={appConfig} appConfigLiveLoader={getLiveConfigForAction} tabName="relationships"
                       tabContext="relationship dynamics — develop chemistry, tension arcs"
                       onAutoFill={handleRelAutoFill} chapterIdx={activeChapterIdx}
-                      messages={getTabMessages("relationships")} setMessages={setTabMessages("relationships")} />
+                      messages={getTabMessages("relationships")} setMessages={setTabMessages("relationships")} onEditPromptTemplate={openPromptTemplateEditor} />
                   </div>
                 </div>
               </div>
@@ -30252,9 +30599,25 @@ Speech pattern: ${char.speechPattern || ""}` },
               return (
                 <div style={{ display: "grid", gap: 10 }}>
                   <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-                    <select value={selected?.id || ""} onChange={e => setConfigPromptId(e.target.value)} className="nf-select" style={{ maxWidth: 360, fontSize: 12 }}>
-                      {rows.map(r => <option key={r.id} value={r.id}>{r.name || r.label || r.id}</option>)}
-                    </select>
+                    <EditablePromptDropdown
+                      value={selected?.id || ""}
+                      onChange={v => setConfigPromptId(v)}
+                      placeholder="Select prompt…"
+                      options={rows.map(r => ({
+                        value: r.id,
+                        label: r.name || r.label || r.id,
+                        meta: r.id,
+                        promptId: r.id,
+                        tableKey: kind,
+                        fieldName: isTextPromptTable ? "user" : "promptTemplate",
+                        editable: isTextPromptTable || kind === "imagePromptTemplates",
+                      }))}
+                      onEditPrompt={opt => openPromptTemplateEditor(opt.tableKey, opt.promptId, opt.label, {}, opt.fieldName || "user")}
+                      className="nf-config-prompt-picker"
+                      menuWidth="min(520px, 88vw)"
+                      title="Select a prompt row"
+                      ariaLabel="Select prompt row"
+                    />
                     <button onClick={() => addConfigPromptRow(kind)} className="nf-btn nf-btn-primary">+ Add prompt</button>
                     <span style={{ fontSize: 11, color: "var(--nf-text-muted)", padding: "5px 8px", border: "1px solid var(--nf-border)", borderRadius: 999 }}>Sheet: {CONFIG_TABLES[kind]?.tab || kind} · {(rows || []).length} rows</span>
                     {selected && <button onClick={() => updateConfigPromptRow(kind, selected.id, { active: cfgBool(selected.active, true) ? "FALSE" : "TRUE" })} className="nf-btn nf-btn-ghost">{cfgBool(selected.active, true) ? "Active" : "Hidden"}</button>}
@@ -30768,6 +31131,30 @@ Speech pattern: ${char.speechPattern || ""}` },
           .nf-portfolio-generate-btn { min-height: 30px; padding: 5px 9px; font-size: 11px; justify-content: flex-start; background: var(--nf-bg-surface); }
           .nf-portfolio-generate-btn svg { flex-shrink: 0; }
           .nf-portfolio-generate-meta { margin-left: auto; color: var(--nf-text-muted); font-size: 9px; font-family: var(--nf-font-mono); white-space: nowrap; }
+          .nf-prompt-picker { position: relative; min-width: 0; display: inline-block; }
+          .nf-prompt-trigger { width: 100%; min-height: 30px; padding: 5px 8px; border: 1px solid var(--nf-border); border-radius: 3px; background: var(--nf-bg-surface); color: var(--nf-text-dim); display: flex; align-items: center; justify-content: space-between; gap: 8px; cursor: pointer; font-family: var(--nf-font-body); font-size: 11px; text-align: left; }
+          .nf-prompt-trigger:hover { border-color: var(--nf-accent); background: var(--nf-bg-hover); color: var(--nf-text); }
+          .nf-prompt-trigger:disabled { opacity: 0.55; cursor: not-allowed; }
+          .nf-prompt-trigger span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+          .nf-prompt-trigger svg { flex-shrink: 0; width: 13px; height: 13px; }
+          .nf-prompt-trigger-micro { min-height: 26px; padding: 3px 8px; font-size: 11px; }
+          .nf-prompt-trigger-soft { min-height: 34px; padding: 7px 10px; border-radius: 8px; background: var(--nf-bg-raised); color: var(--nf-text); }
+          .nf-prompt-trigger-icon { width: auto; min-width: 34px; height: 28px; min-height: 28px; padding: 0 7px; border-radius: 999px; justify-content: center; color: var(--nf-accent-2); margin-top: 24px; }
+          .nf-prompt-trigger-icon span { display: inline; font-size: 10px; font-weight: 800; letter-spacing: 0.02em; }
+          .nf-prompt-trigger-icon svg { width: 10px; height: 10px; }
+          .nf-prompt-menu { position: absolute; z-index: 90; top: calc(100% + 4px); left: 0; max-height: 320px; overflow: auto; padding: 5px; border: 1px solid var(--nf-border); border-radius: 6px; background: var(--nf-dialog-bg); box-shadow: var(--nf-shadow-lg); display: grid; gap: 3px; }
+          .nf-config-prompt-picker { width: min(360px, 100%); }
+          .nf-config-prompt-picker .nf-prompt-menu { left: 0; right: auto; }
+          .nf-prompt-menu-row { min-height: 28px; border: 1px solid transparent; border-radius: 4px; background: transparent; color: var(--nf-text-dim); display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; align-items: center; padding: 0 4px 0 8px; font-size: 11px; font-family: var(--nf-font-body); }
+          .nf-prompt-menu-row:hover, .nf-prompt-menu-row.active { background: var(--nf-bg-hover); border-color: var(--nf-border); color: var(--nf-text); }
+          .nf-prompt-menu-row.active { border-color: var(--nf-border-focus); color: var(--nf-accent); }
+          .nf-prompt-menu-label { min-width: 0; border: none; background: transparent; color: inherit; cursor: pointer; padding: 0; text-align: left; font: inherit; overflow: hidden; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: center; }
+          .nf-prompt-menu-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+          .nf-prompt-menu-meta { font-size: 9px; color: var(--nf-text-muted); font-family: var(--nf-font-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 160px; }
+          .nf-prompt-menu-edit { width: 22px; height: 22px; border: 1px solid var(--nf-border); border-radius: 999px; background: var(--nf-bg-surface); color: var(--nf-text-muted); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; padding: 0; }
+          .nf-prompt-menu-edit:hover { border-color: var(--nf-accent); color: var(--nf-accent); background: var(--nf-accent-glow); }
+          .nf-prompt-menu-edit svg { width: 11px; height: 11px; }
+          .nf-prompt-menu-empty { padding: 8px; font-size: 11px; color: var(--nf-text-muted); }
           .nf-portfolio-shot-picker { position: relative; min-width: 0; }
           .nf-portfolio-shot-trigger { width: 100%; min-height: 30px; padding: 5px 8px; border: 1px solid var(--nf-border); border-radius: 3px; background: var(--nf-bg-surface); color: var(--nf-text-dim); display: flex; align-items: center; justify-content: space-between; gap: 8px; cursor: pointer; font-family: var(--nf-font-body); font-size: 11px; text-align: left; }
           .nf-portfolio-shot-trigger:hover { border-color: var(--nf-accent); background: var(--nf-bg-hover); color: var(--nf-text); }
@@ -32093,14 +32480,14 @@ Speech pattern: ${char.speechPattern || ""}` },
             <div onClick={e => e.stopPropagation()} style={{ width: "min(760px, 94vw)", maxHeight: "84vh", overflow: "auto", background: "var(--nf-bg-raised)", border: "1px solid var(--nf-border)", borderRadius: 8, boxShadow: "0 18px 60px rgba(0,0,0,0.45)" }}>
               <div style={{ padding: "12px 16px", borderBottom: "1px solid var(--nf-border)", display: "flex", gap: 10, alignItems: "center" }}>
                 <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: "var(--nf-text)" }}>Edit portfolio shot prompt</div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: "var(--nf-text)" }}>Edit prompt</div>
                   <div style={{ fontSize: 10, color: "var(--nf-text-muted)", marginTop: 2 }}>{portfolioPromptEditor.label} · {portfolioPromptEditor.promptId}</div>
                 </div>
                 <button onClick={() => setPortfolioPromptEditor(null)} disabled={portfolioPromptSaving} className="nf-btn-icon" aria-label="Close"><Icons.X /></button>
               </div>
               <div style={{ padding: 16, display: "grid", gap: 10 }}>
                 <div style={{ fontSize: 11, color: "var(--nf-text-muted)", lineHeight: 1.5 }}>
-                  This edits the <strong>user</strong> cell for this exact row in <strong>CharacterStudioPrompts</strong>. Keep placeholders like <code>{"{{identity}}"}</code>, <code>{"{{wardrobe}}"}</code>, <code>{"{{shotDirection}}"}</code>, and <code>{"{{realismContract}}"}</code> unless you mean to remove them.
+                  This edits the <strong>{portfolioPromptEditor.fieldName || "user"}</strong> cell for this exact row in <strong>{CONFIG_TABLES[portfolioPromptEditor.tableKey]?.tab || portfolioPromptEditor.tableKey || "Prompt sheet"}</strong>. Keep any <code>{"{{placeholders}}"}</code> that the prompt uses unless you mean to remove them.
                 </div>
                 {portfolioPromptEditor.error && <div style={{ fontSize: 11, color: "var(--nf-accent)", padding: "6px 8px", border: "1px solid var(--nf-accent)", background: "var(--nf-accent-glow)", borderRadius: 2 }}>{portfolioPromptEditor.error}</div>}
                 {portfolioPromptEditor.loading ? (
@@ -32110,7 +32497,7 @@ Speech pattern: ${char.speechPattern || ""}` },
                 )}
                 <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", alignItems: "center" }}>
                   <button onClick={() => setPortfolioPromptEditor(null)} disabled={portfolioPromptSaving} className="nf-btn nf-btn-ghost" style={{ fontSize: 12 }}>Cancel</button>
-                  <button onClick={savePortfolioPromptEditor} disabled={portfolioPromptSaving || portfolioPromptEditor.loading} className="nf-btn nf-btn-primary" style={{ fontSize: 12 }}>
+                  <button onClick={savePromptTemplateEditor} disabled={portfolioPromptSaving || portfolioPromptEditor.loading} className="nf-btn nf-btn-primary" style={{ fontSize: 12 }}>
                     {portfolioPromptSaving ? <><Spinner /> Saving to Sheet…</> : "Save to Google Sheets"}
                   </button>
                 </div>
@@ -32364,6 +32751,10 @@ Speech pattern: ${char.speechPattern || ""}` },
                   } else if (fillReview.type === "relationship") {
                     const rels = project.relationships.map(r => r.id === fillReview.entityId ? { ...r, ...accepted } : r);
                     updateProject({ relationships: rels });
+                    showToast(`Applied ${Object.keys(accepted).length} field(s)`, "success");
+                  } else if (fillReview.type === "plot") {
+                    const plotOutline = (project.plotOutline || []).map(pl => pl.id === fillReview.entityId ? { ...pl, ...accepted } : pl);
+                    updateProject({ plotOutline });
                     showToast(`Applied ${Object.keys(accepted).length} field(s)`, "success");
                   }
                   setFillReview(null);
