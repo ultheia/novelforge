@@ -1,6 +1,6 @@
-// APP_UPDATE_TIMESTAMP: 20260606_223000_Jakarta
-// FILE_NAME: App_mod_live_sheet_autosave_verified_v11_20260606.jsx
-// FIX_MARKER: live-sheet-prompt-autosave-verified-v11
+// APP_UPDATE_TIMESTAMP: 20260606_235900_Jakarta
+// FILE_NAME: App_mod_all_dropdown_image_prompt_sync_v14_20260606.jsx
+// FIX_MARKER: all-dropdown-image-prompt-sync-v14
 import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, useReducer, memo, createContext, useContext, Fragment } from "react";
 import { createPortal } from "react-dom";
 
@@ -5369,7 +5369,7 @@ const CONFIG_PROMPT_EDITOR_TABLES = [
 ];
 const CONFIG_TEXT_PROMPT_TABLE_KEYS = new Set(PROMPT_TEMPLATE_TABLE_KEYS);
 const CONFIG_SCHEMA_VERSION = "4";
-const PROMPT_STRUCTURE_RELEASE = "live-sheet-prompt-autosave-verified-v11-2026-06-06";
+const PROMPT_STRUCTURE_RELEASE = "all-dropdown-image-prompt-sync-v14-2026-06-06";
 const USER_EDITED_PROMPT_NOTE = "USER_EDITED_IN_APP_DO_NOT_AUTOREPAIR";
 const isUserEditedPromptRow = (row = {}) => String(row?.notes || "").includes(USER_EDITED_PROMPT_NOTE);
 const markPromptRowUserEdited = (row = {}) => ({
@@ -11256,6 +11256,109 @@ const buildPortfolioShotPromptUser = (pkg = {}, shot = {}, pkgKey = "portfolio")
   timeOfDay: "studio session time; use the selected package lighting direction",
   cameraAngle: `${shot.label || "Portfolio shot"}. ${shot.direction || ""}\n\nSAME-PERSON LOCK: ${portfolioSamePersonLockText}\n\nREALISM CONTRACT: ${portfolioRealismContractText}`,
 });
+
+const PORTFOLIO_DROPDOWN_SYNC_NOTE = "SYNCED_FROM_PORTFOLIO_DROPDOWN_OPTIONS";
+const IMAGE_DROPDOWN_SYNC_NOTE = "SYNCED_FROM_IMAGE_DROPDOWN_OPTIONS";
+const portfolioShotPackageKeyFromGroup = (group = "") => {
+  const prefix = "characterStudio.portfolioShot.";
+  const g = String(group || "");
+  return g.startsWith(prefix) ? g.slice(prefix.length) : "";
+};
+const portfolioPromptIdForShot = (pkgKey = "portfolio", shotKey = "shot") => `character.studio.portfolio.${pkgKey}.${shotKey}`;
+const isCustomPortfolioPromptProtected = (row = {}) => {
+  const notes = String(row?.notes || "");
+  return isUserEditedPromptRow(row) && !notes.includes(PORTFOLIO_DROPDOWN_SYNC_NOTE);
+};
+const buildPortfolioPromptRowFromPackageShot = (config = {}, pkgKey = "", shotKey = "", existingRow = {}) => {
+  const packages = modelPortfolioPackagesFromConfig(config);
+  const pkg = packages?.[pkgKey];
+  const shot = (pkg?.shots || []).find(s => String(s.key || "") === String(shotKey || ""));
+  if (!pkg || !shot) return null;
+  const promptId = portfolioPromptIdForShot(pkgKey, shot.key);
+  const baseNotes = String(existingRow?.notes || "Characters → Art Studio → Model Portfolio. Synced from DropdownOptions package/shot settings.").trim();
+  const notes = baseNotes.includes(PORTFOLIO_DROPDOWN_SYNC_NOTE) ? baseNotes : `${baseNotes} ${PORTFOLIO_DROPDOWN_SYNC_NOTE}`.trim();
+  const row = enrichPromptTemplateRow({
+    ...existingRow,
+    id: promptId,
+    area: "Characters",
+    tab: "Characters",
+    subtab: "Studio",
+    feature: "Model Portfolio",
+    action: `${pkg.label} — ${shot.label}`,
+    name: `Model Portfolio — ${pkg.label} — ${shot.label}`,
+    system: existingRow?.system || "You create one photorealistic model-portfolio image prompt from character identity data. Output goes directly to an image model, so write camera-visible direction only.",
+    user: buildPortfolioShotPromptUser(pkg, shot, pkgKey),
+    maxTokens: existingRow?.maxTokens || 12000,
+    temperature: existingRow?.temperature || 0.65,
+    json: existingRow?.json || "FALSE",
+    active: existingRow?.active || "TRUE",
+    version: existingRow?.version || 3,
+    sort: existingRow?.sort || 9999,
+    notes,
+  }, 0);
+  return structurePromptTemplateRowForImageCreation(markPromptRowUserEdited(row));
+};
+const syncPortfolioPromptRowsForDropdownOptionEdit = (config = {}, editedDropdownRow = {}) => {
+  const group = String(editedDropdownRow?.group || "");
+  const synced = [];
+  const syncedRows = [];
+  const skipped = [];
+  let targets = [];
+  const pkgKeyFromShotGroup = portfolioShotPackageKeyFromGroup(group);
+  const packages = modelPortfolioPackagesFromConfig(config);
+
+  if (group === MODEL_PORTFOLIO_PACKAGE_GROUP) {
+    const pkgKey = dropdownValueSlug(editedDropdownRow?.value || editedDropdownRow?.label || "");
+    const pkg = packages?.[pkgKey];
+    targets = (pkg?.shots || []).map(shot => ({ pkgKey, shotKey: shot.key }));
+  } else if (pkgKeyFromShotGroup) {
+    const shotKey = dropdownValueSlug(editedDropdownRow?.value || editedDropdownRow?.label || "");
+    targets = shotKey ? [{ pkgKey: pkgKeyFromShotGroup, shotKey }] : [];
+  }
+
+  if (!targets.length) return { config, synced, syncedRows, skipped };
+  const rows = [...(config.promptTemplatesCharacterStudio || [])];
+  for (const target of targets) {
+    const promptId = portfolioPromptIdForShot(target.pkgKey, target.shotKey);
+    const idx = rows.findIndex(r => String(r.id || "") === promptId);
+    const existing = idx >= 0 ? rows[idx] : {};
+    if (idx >= 0 && isCustomPortfolioPromptProtected(existing)) {
+      skipped.push(promptId);
+      continue;
+    }
+    const nextRow = buildPortfolioPromptRowFromPackageShot(config, target.pkgKey, target.shotKey, existing);
+    if (!nextRow) continue;
+    if (idx >= 0) rows[idx] = nextRow;
+    else rows.push(nextRow);
+    synced.push(promptId);
+    syncedRows.push({ tableKey: "promptTemplatesCharacterStudio", row: nextRow, fields: ["user", "name", "action", "notes", "active"] });
+  }
+  if (!synced.length) return { config, synced, syncedRows, skipped };
+  return {
+    config: {
+      ...config,
+      promptTemplatesCharacterStudio: rows.sort((a, b) => Number(a.sort || 0) - Number(b.sort || 0)),
+    },
+    synced,
+    syncedRows,
+    skipped,
+  };
+};
+
+// Single sync entry point for dropdowns that feed generated image prompts.
+// Portfolio packages/shots currently have mirrored prompt rows in CharacterStudioPrompts.
+// Other image dropdowns (relight/expression/aspect ratio) feed runtime variables into one generic
+// prompt row, so there is no per-option prompt row to rebuild; their DropdownOptions row is the source of truth.
+const syncImagePromptRowsForDropdownOptionEdit = (config = {}, editedDropdownRow = {}) => {
+  const portfolioSync = syncPortfolioPromptRowsForDropdownOptionEdit(config, editedDropdownRow);
+  return {
+    config: portfolioSync.config || config,
+    synced: portfolioSync.synced || [],
+    syncedRows: portfolioSync.syncedRows || [],
+    skipped: portfolioSync.skipped || [],
+    runtimeOnly: (portfolioSync.synced?.length || portfolioSync.skipped?.length) ? [] : [String(editedDropdownRow?.group || "")].filter(Boolean),
+  };
+};
 
 const EDITORIAL_STUDIO_DEFAULTS = {
   enabled: false,
@@ -20574,8 +20677,24 @@ If no relationship changes, respond "No relationship updates needed."` },
       if (!GDrive.isConnected()) await GDrive.authenticate(false);
       ConfigSheets.setSpreadsheetId(configSheetId.trim());
       const saved = await ConfigSheets.save(appConfig);
-      setAppConfig(saved); cacheAppConfig(saved); setConfigDirty(false); setConfigLastSync(new Date());
-      showToast("App config saved to Google Sheets", "success");
+      let syncedConfig = saved;
+      const syncRowMap = new Map();
+      for (const dropdownRow of (saved.dropdowns || [])) {
+        const syncResult = syncImagePromptRowsForDropdownOptionEdit(syncedConfig, dropdownRow);
+        syncedConfig = syncResult.config || syncedConfig;
+        for (const item of (syncResult.syncedRows || [])) {
+          if (item?.tableKey && item?.row?.id) syncRowMap.set(`${item.tableKey}:${item.row.id}`, item);
+        }
+      }
+      const syncRanges = [];
+      for (const item of syncRowMap.values()) {
+        const syncWrite = await ConfigSheets.upsertConfigRow(item.tableKey, item.row.id, item.row);
+        await ConfigSheets.verifyConfigRowWrite(item.tableKey, item.row.id, item.row, item.fields || ["user", "notes", "active"]);
+        syncRanges.push(syncWrite.range);
+      }
+      const finalConfig = syncRowMap.size ? normalizeAppConfig(syncedConfig) : saved;
+      setAppConfig(finalConfig); cacheAppConfig(finalConfig); setConfigDirty(false); setConfigLastSync(new Date());
+      showToast(syncRowMap.size ? `App config saved. Direct-synced ${syncRowMap.size} image prompt row${syncRowMap.size === 1 ? "" : "s"}.` : "App config saved to Google Sheets", "success");
     } catch (e) { setConfigError(e.message); showToast(`Config save failed: ${e.message}`, "error"); }
     finally { setConfigSyncing(false); }
   }, [appConfig, configSheetId, gdriveClientId, settings.googleClientId, showToast]);
@@ -20620,7 +20739,7 @@ If no relationship changes, respond "No relationship updates needed."` },
     const safeValue = dropdownValueSlug(draft.value || draft.label || "option");
     const row = { ...draft, value: safeValue, id: dropdownRowIdFor(draft.group, safeValue), active: draft.active || "TRUE", customAllowed: draft.customAllowed || "TRUE", metadataJSON: draft.metadataJSON || "{}" };
     try { JSON.parse(row.metadataJSON || "{}"); } catch { setDropdownOptionEditor(prev => prev ? { ...prev, error: "metadataJSON must be valid JSON" } : prev); return; }
-    const nextCfg = normalizeAppConfig({
+    const dropdownUpdatedCfg = normalizeAppConfig({
       ...appConfig,
       dropdowns: (() => {
         const rows = appConfig?.dropdowns || [];
@@ -20628,6 +20747,8 @@ If no relationship changes, respond "No relationship updates needed."` },
         return [...without, row];
       })(),
     });
+    const syncResult = syncImagePromptRowsForDropdownOptionEdit(dropdownUpdatedCfg, row);
+    const nextCfg = normalizeAppConfig(syncResult.config);
     commitLiveAppConfig(nextCfg);
     setConfigDirty(true);
     setConfigDropdownGroup(row.group);
@@ -20636,9 +20757,23 @@ If no relationship changes, respond "No relationship updates needed."` },
       const access = await prepareConfigSheetAccess(`dropdown:${row.group}`);
       if (!access.ok) throw new Error(access.message || "No config spreadsheet connected");
       const saved = await ConfigSheets.save(nextCfg);
+      const promptSyncRanges = [];
+      for (const item of (syncResult.syncedRows || [])) {
+        if (!item?.tableKey || !item?.row?.id) continue;
+        const syncWrite = await ConfigSheets.upsertConfigRow(item.tableKey, item.row.id, item.row);
+        await ConfigSheets.verifyConfigRowWrite(item.tableKey, item.row.id, item.row, item.fields || ["user", "notes", "active"]);
+        promptSyncRanges.push(syncWrite.range);
+      }
       commitLiveAppConfig(saved);
       setConfigDirty(false);
-      showToast("Dropdown option saved to Google Sheets", "success");
+      const syncMsg = syncResult.synced.length
+        ? ` Also direct-synced and verified ${syncResult.synced.length} prompt row${syncResult.synced.length === 1 ? "" : "s"}: ${promptSyncRanges.join(", ") || "CharacterStudioPrompts"}.`
+        : syncResult.skipped.length
+          ? ` Matching prompt row has custom prompt edits, so it was not overwritten. Use the pen icon to edit that exact prompt.`
+          : syncResult.runtimeOnly?.length
+            ? ` This dropdown feeds runtime image options directly; no separate generated prompt row exists.`
+            : "";
+      showToast(`Dropdown option saved to Google Sheets.${syncMsg}`, "success");
       setDropdownOptionEditor(null);
     } catch (e) {
       const msg = e?.message || String(e);
@@ -26790,10 +26925,10 @@ ${lookAlikeLock}` : ""}`;
                                         <button type="button" className="nf-portfolio-shot-menu-label" onClick={() => { setPortfolioShotSelections(prev => ({ ...prev, [selKey]: shot.key })); setOpenPortfolioShotMenu(null); }} title={`Render only ${shot.label}`}>
                                           <span>{shot.label}</span>
                                         </button>
-                                        <button type="button" className="nf-portfolio-shot-menu-edit" onClick={(e) => { e.stopPropagation(); openDropdownOptionEditor({ group: modelPortfolioShotGroup(key), value: shot.key, title: `Edit shot option: ${shot.label}`, metadataDefaults: { framing: shot.framing || "3:4", direction: shot.direction || "" }, label: shot.label, notes: "Model portfolio shot. Label changes the dropdown; direction/framing feed the default image prompt." }); }} title={`Edit dropdown option: ${shot.label}`} aria-label={`Edit dropdown option for ${shot.label}`}>
+                                        <button type="button" className="nf-portfolio-shot-menu-edit" onClick={(e) => { e.stopPropagation(); openDropdownOptionEditor({ group: modelPortfolioShotGroup(key), value: shot.key, title: `Edit shot option: ${shot.label}`, metadataDefaults: { framing: shot.framing || "3:4", direction: shot.direction || "" }, label: shot.label, notes: "Model portfolio shot. Label changes the dropdown; direction/framing also sync the generated CharacterStudioPrompts row unless that row has custom prompt edits." }); }} title={`Edit dropdown label/settings: ${shot.label} (saves to DropdownOptions and syncs generated prompt row when safe)`} aria-label={`Edit dropdown label/settings for ${shot.label}`}>
                                           <Icons.Settings />
                                         </button>
-                                        <button type="button" className="nf-portfolio-shot-menu-edit" onClick={(e) => { e.stopPropagation(); openPortfolioPromptEditor(key, shot.key); }} title={`Edit prompt template: ${shot.label}`} aria-label={`Edit prompt template for ${shot.label}`}>
+                                        <button type="button" className="nf-portfolio-shot-menu-edit" onClick={(e) => { e.stopPropagation(); openPortfolioPromptEditor(key, shot.key); }} title={`Edit exact image prompt: ${shot.label} (saves to CharacterStudioPrompts)`} aria-label={`Edit exact image prompt for ${shot.label}`}>
                                           <Icons.Pen />
                                         </button>
                                       </div>
@@ -31539,7 +31674,7 @@ Speech pattern: ${char.speechPattern || ""}` },
           <div>
             <h3 className="nf-card-title" style={{ marginBottom: 4 }}>App Config Editor</h3>
             <p style={{ fontSize: 12, color: "var(--nf-text-muted)", lineHeight: 1.5, margin: 0 }}>
-              Edit dropdowns and prompts from the app. Saved text prompts are written back into the structured tab-level prompt sheets. Prompt rows auto-save on blur and can also be saved with Save row.
+              Edit dropdowns and prompts from the app. Text prompts write back to their prompt sheets. Image dropdowns write DropdownOptions, and dropdowns with mirrored image prompt rows direct-sync and verify those prompt rows too from both the gear editor and full Save Config.
             </p>
           </div>
           <button onClick={() => setConfigEditorOpen(v => !v)} className="nf-btn nf-btn-ghost">{configEditorOpen ? "Hide" : "Customize"}</button>
@@ -33957,7 +34092,7 @@ Speech pattern: ${char.speechPattern || ""}` },
               </div>
               <div style={{ padding: 16, display: "grid", gap: 10 }}>
                 <div style={{ fontSize: 11, color: "var(--nf-text-muted)", lineHeight: 1.5 }}>
-                  Label is what the dropdown shows. Value is the stable key used by saved projects and prompt rows. For portfolio shots, <code>metadataJSON.direction</code> controls the default shot instruction and <code>metadataJSON.framing</code> controls aspect ratio.
+                  Label is what the dropdown shows. Value is the stable key used by saved projects and prompt rows. For portfolio shots, <code>metadataJSON.direction</code> controls the generated shot instruction and <code>metadataJSON.framing</code> controls aspect ratio. Saving an image dropdown writes DropdownOptions. If that dropdown has generated prompt rows, the app also direct-writes and verifies the matching prompt sheet rows. Portfolio shot/package options sync CharacterStudioPrompts unless the exact prompt has custom pen-icon edits.
                 </div>
                 {dropdownOptionEditor.error && <div style={{ fontSize: 11, color: "var(--nf-accent)", padding: "6px 8px", border: "1px solid var(--nf-accent)", background: "var(--nf-accent-glow)", borderRadius: 2 }}>{dropdownOptionEditor.error}</div>}
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
