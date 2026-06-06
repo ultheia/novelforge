@@ -1,6 +1,6 @@
 // APP_UPDATE_TIMESTAMP: 20260606_235959_Jakarta
-// FILE_NAME: App_mod_image_qa_toggle_v15_20260606.jsx
-// FIX_MARKER: image-qa-review-toggle-v15
+// FILE_NAME: App_mod_moodboard_color_sort_v16_20260606.jsx
+// FIX_MARKER: moodboard-main-color-sort-v16
 import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, useReducer, memo, createContext, useContext, Fragment } from "react";
 import { createPortal } from "react-dom";
 
@@ -1106,6 +1106,103 @@ const makeThumbnail = (dataUrl, maxPx = 240) => new Promise((resolve) => {
     img.src = dataUrl;
   } catch { resolve(dataUrl); }
 });
+
+// ─── IMAGE COLOR SORTING ───
+// Browser-only dominant-color analyzer for mood boards. No AI/API calls: load the image, downsample it,
+// quantize pixels into color buckets, choose the strongest bucket, then sort by hue/saturation/lightness.
+const _rgbToHsl = (r, g, b) => {
+  r /= 255; g /= 255; b /= 255;
+  const max = Math.max(r, g, b), min = Math.min(r, g, b);
+  let h = 0, s = 0;
+  const l = (max + min) / 2;
+  const d = max - min;
+  if (d !== 0) {
+    s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+    if (max === r) h = ((g - b) / d + (g < b ? 6 : 0)) / 6;
+    else if (max === g) h = ((b - r) / d + 2) / 6;
+    else h = ((r - g) / d + 4) / 6;
+  }
+  return { h: h * 360, s, l };
+};
+
+const _hexFromRgb = (r, g, b) => `#${[r, g, b].map(v => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, "0")).join("")}`;
+
+const _loadImageForColor = (src) => new Promise((resolve, reject) => {
+  if (!src) { reject(new Error("Missing image source")); return; }
+  const img = new Image();
+  // Helps remote images when CORS allows it; data URLs are unaffected. If the canvas is tainted,
+  // the analyzer catches that and leaves the image in its original relative position.
+  if (typeof src === "string" && !src.startsWith("data:")) img.crossOrigin = "anonymous";
+  img.onload = () => resolve(img);
+  img.onerror = () => reject(new Error("Image failed to load"));
+  img.src = src;
+});
+
+const analyzeDominantImageColor = async (src) => {
+  const img = await _loadImageForColor(src);
+  const size = 48;
+  const canvas = document.createElement("canvas");
+  const scale = Math.min(size / Math.max(img.naturalWidth || img.width || 1, img.naturalHeight || img.height || 1), 1);
+  canvas.width = Math.max(1, Math.round((img.naturalWidth || img.width || 1) * scale));
+  canvas.height = Math.max(1, Math.round((img.naturalHeight || img.height || 1) * scale));
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+  const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+  const buckets = new Map();
+  for (let i = 0; i < data.length; i += 4) {
+    const a = data[i + 3];
+    if (a < 40) continue;
+    const r = data[i], g = data[i + 1], b = data[i + 2];
+    const max = Math.max(r, g, b), min = Math.min(r, g, b);
+    const chroma = max - min;
+    const luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    // Ignore near-white/near-black border/background pixels unless the whole image is monochrome.
+    if ((luma > 246 || luma < 9) && chroma < 18) continue;
+    const qr = Math.round(r / 24) * 24;
+    const qg = Math.round(g / 24) * 24;
+    const qb = Math.round(b / 24) * 24;
+    const key = `${qr},${qg},${qb}`;
+    const satWeight = 1 + Math.min(1.8, chroma / 80);
+    const existing = buckets.get(key) || { count: 0, r: 0, g: 0, b: 0 };
+    existing.count += satWeight;
+    existing.r += r * satWeight; existing.g += g * satWeight; existing.b += b * satWeight;
+    buckets.set(key, existing);
+  }
+  let best = null;
+  for (const bucket of buckets.values()) if (!best || bucket.count > best.count) best = bucket;
+  if (!best) {
+    let r = 0, g = 0, b = 0, n = 0;
+    for (let i = 0; i < data.length; i += 4) {
+      if (data[i + 3] < 40) continue;
+      r += data[i]; g += data[i + 1]; b += data[i + 2]; n++;
+    }
+    if (!n) return { hex: "#808080", h: 0, s: 0, l: 0.5 };
+    best = { count: n, r, g, b };
+  }
+  const r = best.r / best.count, g = best.g / best.count, b = best.b / best.count;
+  const hsl = _rgbToHsl(r, g, b);
+  return { hex: _hexFromRgb(r, g, b), ...hsl };
+};
+
+const sortImagesByDominantColor = async (images = []) => {
+  const analyzed = await Promise.all((Array.isArray(images) ? images : []).map(async (img, index) => {
+    try {
+      const cached = img?.dominantColorSort;
+      const color = cached?.hex && typeof cached.h === "number" ? cached : await analyzeDominantImageColor(img?.data);
+      return { img: { ...img, dominantColorSort: color }, index, color, failed: false };
+    } catch {
+      return { img, index, color: { h: 999, s: 0, l: 0.5, hex: "#808080" }, failed: true };
+    }
+  }));
+  analyzed.sort((a, b) => {
+    if (a.failed !== b.failed) return a.failed ? 1 : -1;
+    const ah = Math.round(a.color.h / 12) * 12;
+    const bh = Math.round(b.color.h / 12) * 12;
+    return ah - bh || b.color.s - a.color.s || a.color.l - b.color.l || a.index - b.index;
+  });
+  return analyzed.map(x => x.img);
+};
+
 // ─── PROSE DENSITY / RHYTHM ANALYSIS (feature: heatmap) ───
 // Classifies prose into dialogue / action / exposition by sentence, so pacing can be visualized.
 // Heuristic, deliberately conservative: dialogue = contains quoted speech; action = short,
@@ -8090,12 +8187,13 @@ const FindReplaceModal = memo(({ project, onClose, onUpdate }) => {
 // ─── MULTI-IMAGE GALLERY ───
 // Reusable gallery for mood boards, location refs, signature item illustrations, org logos, etc.
 // Handles upload, preview thumbnails, captions, and removal.
-const MultiImageGallery = memo(({ label, hint, images, onAdd, onRemove, onUpdateCaption, onRegenerate, regenBusyId = null, maxMB = 3, maxCount = 12, compact = false }) => {
+const MultiImageGallery = memo(({ label, hint, images, onAdd, onRemove, onUpdateCaption, onRegenerate, regenBusyId = null, onSortByColor = null, maxMB = 3, maxCount = 12, compact = false }) => {
   const inputId = useMemo(() => `nf-mig-${Math.random().toString(36).slice(2, 9)}`, []);
   const imgs = Array.isArray(images) ? images : [];
   const thumbSize = compact ? 88 : 120;
   // Lightbox: index of the image being viewed full-size, or null when closed.
   const [viewerIdx, setViewerIdx] = useState(null);
+  const [colorSortBusy, setColorSortBusy] = useState(false);
 
   const handleFiles = (files) => {
     const remaining = maxCount - imgs.length;
@@ -8134,11 +8232,32 @@ const MultiImageGallery = memo(({ label, hint, images, onAdd, onRemove, onUpdate
     return `QA passed ${qa.attempts || 1}/${qa.maxAttempts || 3}`;
   };
 
+  const handleSortByColor = async () => {
+    if (!onSortByColor || imgs.length < 2 || colorSortBusy) return;
+    setColorSortBusy(true);
+    try {
+      const sorted = await sortImagesByDominantColor(imgs);
+      onSortByColor(sorted);
+    } finally {
+      setColorSortBusy(false);
+    }
+  };
+
   return (
     <div className="nf-field">
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6, gap: 8 }}>
         <label className="nf-label" style={{ margin: 0 }}>{label}</label>
-        <span style={{ fontSize: 11, color: "var(--nf-text-muted)", fontFamily: "var(--nf-font-mono)" }}>{imgs.length}/{maxCount}</span>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          {onSortByColor && imgs.length > 1 && (
+            <button type="button" onClick={handleSortByColor} disabled={colorSortBusy}
+              className="nf-btn-micro"
+              style={{ fontSize: 10, padding: "2px 6px", display: "inline-flex", alignItems: "center", gap: 4 }}
+              title="Sort this mood board by each image's dominant/main color using local browser code only">
+              <span aria-hidden="true">🎨</span>{colorSortBusy ? "Sorting…" : "Sort color"}
+            </button>
+          )}
+          <span style={{ fontSize: 11, color: "var(--nf-text-muted)", fontFamily: "var(--nf-font-mono)" }}>{imgs.length}/{maxCount}</span>
+        </div>
       </div>
       {hint && <div style={{ fontSize: 11, color: "var(--nf-text-muted)", marginBottom: 8, lineHeight: 1.6 }}>{hint}</div>}
       <div style={{ display: "grid", gridTemplateColumns: `repeat(auto-fill, minmax(${thumbSize}px, 1fr))`, gap: 10 }}>
@@ -8148,6 +8267,9 @@ const MultiImageGallery = memo(({ label, hint, images, onAdd, onRemove, onUpdate
               onClick={() => setViewerIdx(idx)} title={img.caption || "Click to view full size"}>
               <img loading="lazy" src={img.data} alt={img.caption || "Reference image"}
                 style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
+              {img.dominantColorSort?.hex && (
+                <div title={`Dominant color: ${img.dominantColorSort.hex}`} style={{ position: "absolute", left: 4, bottom: img.caption ? 22 : 4, width: 14, height: 14, borderRadius: 999, background: img.dominantColorSort.hex, border: "1px solid rgba(255,255,255,0.78)", boxShadow: "0 1px 4px rgba(0,0,0,0.45)" }} />
+              )}
               {img.caption && (
                 <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, padding: "4px 6px", fontSize: 11, color: "#fff", background: "linear-gradient(to top, rgba(0,0,0,0.78), transparent)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{img.caption}</div>
               )}
@@ -27027,6 +27149,7 @@ ${lookAlikeLock}` : ""}`;
                 onAdd={(img) => updateCharById(editingCharId, "moodBoard", [...(editingChar.moodBoard || []), img])}
                 onRemove={(id) => updateCharById(editingCharId, "moodBoard", (editingChar.moodBoard || []).filter(i => i.id !== id))}
                 onUpdateCaption={(id, caption) => updateCharById(editingCharId, "moodBoard", (editingChar.moodBoard || []).map(i => i.id === id ? { ...i, caption } : i))}
+                onSortByColor={(sorted) => updateCharById(editingCharId, "moodBoard", sorted)}
                 onRegenerate={(img) => redoGeneratedCharacterImage(editingCharId, img.id, img)}
                 regenBusyId={imageRedoBusy}
                 maxCount={16}
