@@ -1,6 +1,6 @@
 // APP_UPDATE_TIMESTAMP: 20260606_223000_Jakarta
-// FILE_NAME: App_mod_real_character_fields_image_prompts_v8_20260606.jsx
-// FIX_MARKER: real-character-fields-image-prompts-v8
+// FILE_NAME: App_mod_all_image_prompt_saves_v10_20260606.jsx
+// FIX_MARKER: all-image-prompt-editor-save-stability-v10
 import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, useReducer, memo, createContext, useContext, Fragment } from "react";
 import { createPortal } from "react-dom";
 
@@ -902,8 +902,10 @@ const renderPromptVariablesHtml = (text = "", promptId = "") => escapePromptHtml
 
 const getEditableText = (el) => {
   if (!el) return "";
-  // textContent preserves the placeholder text inside highlighted spans and avoids HTML leakage.
-  return (el.textContent || "").replace(/\u00a0/g, " ");
+  // contentEditable can represent line breaks as <div>, <p>, or <br>. innerText preserves the
+  // author's visible line breaks better than textContent, while textContent is a fallback for tests.
+  const text = (typeof el.innerText === "string" && el.innerText.length ? el.innerText : (el.textContent || ""));
+  return String(text || "").replace(/\u00a0/g, " ").replace(/\r\n/g, "\n").replace(/\n{4,}/g, "\n\n\n");
 };
 
 const getSelectionTextOffset = (root) => {
@@ -948,18 +950,25 @@ const setSelectionTextOffset = (root, offset) => {
   } catch {}
 };
 
-const PromptVariableEditor = memo(({ value = "", onChange, rows = 8, placeholder = "", className = "", style = null, autoFocus = false, readOnly = false, title = "", promptId = "" }) => {
+const PromptVariableEditor = memo(({ value = "", onChange, onBlur: onBlurExternal = null, onCommit = null, rows = 8, placeholder = "", className = "", style = null, autoFocus = false, readOnly = false, title = "", promptId = "" }) => {
   const editorRef = useRef(null);
   const focusedRef = useRef(false);
   const pendingCaretRef = useRef(null);
   const lastValueRef = useRef(String(value || ""));
+  const lastNonEmptyValueRef = useRef(String(value || "").trim() ? String(value || "") : "");
   const variableInfo = useMemo(() => classifyPromptVariables(value, promptId), [value, promptId]);
   const editorHtml = useMemo(() => renderPromptVariablesHtml(value || "", promptId), [value, promptId]);
   const variables = variableInfo.vars;
 
   const emitPlainText = useCallback((text) => {
-    lastValueRef.current = text;
-    if (onChange) onChange({ target: { value: text }, currentTarget: { value: text } });
+    const nextText = String(text ?? "");
+    // Guard against the contentEditable/re-highlight race that can briefly report an empty editor.
+    // Prompt templates are rarely intentionally blank; refusing accidental blank drafts prevents the
+    // whole prompt editor from appearing wiped while preserving the last good value.
+    if (!nextText.trim() && lastNonEmptyValueRef.current.trim()) return;
+    lastValueRef.current = nextText;
+    if (nextText.trim()) lastNonEmptyValueRef.current = nextText;
+    if (onChange) onChange({ target: { value: nextText }, currentTarget: { value: nextText } });
   }, [onChange]);
 
   const syncHtml = useCallback((preserveCaret = false) => {
@@ -974,8 +983,12 @@ const PromptVariableEditor = memo(({ value = "", onChange, rows = 8, placeholder
     const el = editorRef.current;
     if (!el) return;
     const incoming = String(value || "");
+    if (incoming.trim()) lastNonEmptyValueRef.current = incoming;
+    // Do not rewrite the DOM on every keystroke while focused. That was the source of caret jumps
+    // and occasional blank prompt drafts. Re-highlight on blur or when an external value arrives.
+    if (focusedRef.current && incoming === lastValueRef.current) return;
     const current = getEditableText(el);
-    const preserve = focusedRef.current && (incoming === lastValueRef.current || incoming === current);
+    const preserve = focusedRef.current && incoming === current;
     syncHtml(preserve);
     lastValueRef.current = incoming;
   }, [value, syncHtml]);
@@ -1003,9 +1016,23 @@ const PromptVariableEditor = memo(({ value = "", onChange, rows = 8, placeholder
   const handleBlur = useCallback(() => {
     focusedRef.current = false;
     pendingCaretRef.current = null;
-    // Re-highlight after edits so any newly typed {{variable}} becomes color-coded immediately after leaving the field.
-    syncHtml(false);
-  }, [syncHtml]);
+    const el = editorRef.current;
+    const plain = getEditableText(el);
+    const commitText = plain.trim() ? plain : (lastNonEmptyValueRef.current || plain);
+    if (commitText.trim()) {
+      lastValueRef.current = commitText;
+      lastNonEmptyValueRef.current = commitText;
+      // Make sure parent state receives the final visible text before any save-on-blur handler runs.
+      if (commitText !== String(value || "")) emitPlainText(commitText);
+    }
+    // Re-highlight the committed text directly. Do not reuse stale editorHtml here; React state may
+    // still be catching up during blur, and stale HTML is what made prompts appear blank/old before.
+    const committedHtml = renderPromptVariablesHtml(commitText || "", promptId);
+    if (el && el.innerHTML !== committedHtml) el.innerHTML = committedHtml;
+    const evt = { target: { value: commitText }, currentTarget: { value: commitText } };
+    if (onCommit) onCommit(commitText);
+    if (onBlurExternal) onBlurExternal(evt);
+  }, [promptId, onCommit, onBlurExternal, emitPlainText, value]);
 
   const editorStyle = {
     minHeight: `calc(${Math.max(2, Number(rows) || 8)} * 1.45em + 18px)`,
@@ -5342,7 +5369,13 @@ const CONFIG_PROMPT_EDITOR_TABLES = [
 ];
 const CONFIG_TEXT_PROMPT_TABLE_KEYS = new Set(PROMPT_TEMPLATE_TABLE_KEYS);
 const CONFIG_SCHEMA_VERSION = "4";
-const PROMPT_STRUCTURE_RELEASE = "real-character-fields-image-prompts-v8-2026-06-06";
+const PROMPT_STRUCTURE_RELEASE = "all-image-prompt-editor-save-stability-v10-2026-06-06";
+const USER_EDITED_PROMPT_NOTE = "USER_EDITED_IN_APP_DO_NOT_AUTOREPAIR";
+const isUserEditedPromptRow = (row = {}) => String(row?.notes || "").includes(USER_EDITED_PROMPT_NOTE);
+const markPromptRowUserEdited = (row = {}) => ({
+  ...row,
+  notes: String(row.notes || "").includes(USER_EDITED_PROMPT_NOTE) ? row.notes : `${row.notes || ""}${row.notes ? " " : ""}${USER_EDITED_PROMPT_NOTE}`.trim(),
+});
 const cfgBool = (value, fallback = true) => {
   if (value == null || value === "") return fallback;
   if (typeof value === "boolean") return value;
@@ -5595,21 +5628,24 @@ const imagePromptNeedsDossierUpgrade = (row = {}) => {
 };
 const structurePromptTemplateRowForImageCreation = (row = {}) => {
   if (!isUniversalImageStructurePromptId(row?.id)) return row;
-  const mustRebuild = !hasUniversalImagePromptStructure(row.user) || imagePromptNeedsRebuild(row.user) || imagePromptNeedsDossierUpgrade(row);
+  const userEdited = isUserEditedPromptRow(row);
+  const mustRebuild = userEdited ? imagePromptNeedsRebuild(row.user) : (!hasUniversalImagePromptStructure(row.user) || imagePromptNeedsRebuild(row.user) || imagePromptNeedsDossierUpgrade(row));
   const nextUser = mustRebuild ? buildUniversalImagePromptTemplate(universalImageTemplateVarsForPromptRow(row)) : inlineAppOwnedImagePromptConstants(row.user);
-  return { ...row, user: nextUser, version: Math.max(Number(row.version || 1), 11), notes: `${row.notes || ""}${String(row.notes || "").includes("Universal 1-7 image structure") ? "" : " Universal 1-7 image structure applied."}${String(row.notes || "").includes("Real character-field dossier v8") ? "" : " Real character-field dossier v8."}`.trim() };
+  return { ...row, user: nextUser, version: Math.max(Number(row.version || 1), 12), notes: `${row.notes || ""}${String(row.notes || "").includes("Universal 1-7 image structure") ? "" : " Universal 1-7 image structure applied."}${String(row.notes || "").includes("Real character-field dossier v8") ? "" : " Real character-field dossier v8."}${String(row.notes || "").includes("Prompt save stability v10") ? "" : " Prompt save stability v10."}`.trim() };
 };
 const structureImagePromptTemplateRowForImageCreation = (row = {}) => {
   if (!UNIVERSAL_IMAGE_STRUCTURE_IMAGE_TEMPLATE_IDS.has(String(row?.id || ""))) return row;
-  const mustRebuild = !hasUniversalImagePromptStructure(row.promptTemplate) || imagePromptNeedsRebuild(row.promptTemplate) || imagePromptNeedsDossierUpgrade(row);
+  const userEdited = isUserEditedPromptRow(row);
+  const mustRebuild = userEdited ? imagePromptNeedsRebuild(row.promptTemplate) : (!hasUniversalImagePromptStructure(row.promptTemplate) || imagePromptNeedsRebuild(row.promptTemplate) || imagePromptNeedsDossierUpgrade(row));
   const nextPromptTemplate = mustRebuild ? buildUniversalImagePromptTemplate(universalImageTemplateVarsForImageTemplateRow(row)) : inlineAppOwnedImagePromptConstants(row.promptTemplate);
-  return { ...row, promptTemplate: nextPromptTemplate, notes: `${row.notes || ""}${String(row.notes || "").includes("Universal 1-7 image structure") ? "" : " Universal 1-7 image structure applied."}${String(row.notes || "").includes("Real character-field dossier v8") ? "" : " Real character-field dossier v8."}`.trim() };
+  return { ...row, promptTemplate: nextPromptTemplate, notes: `${row.notes || ""}${String(row.notes || "").includes("Universal 1-7 image structure") ? "" : " Universal 1-7 image structure applied."}${String(row.notes || "").includes("Real character-field dossier v8") ? "" : " Real character-field dossier v8."}${String(row.notes || "").includes("Prompt save stability v10") ? "" : " Prompt save stability v10."}`.trim() };
 };
 const structureImageTemplateRowForImageCreation = (row = {}) => {
   if (!UNIVERSAL_IMAGE_STRUCTURE_IMAGE_TEMPLATE_IDS.has(String(row?.id || ""))) return row;
-  const mustRebuild = !hasUniversalImagePromptStructure(row.promptTemplate) || imagePromptNeedsRebuild(row.promptTemplate) || imagePromptNeedsDossierUpgrade(row);
+  const userEdited = isUserEditedPromptRow(row);
+  const mustRebuild = userEdited ? imagePromptNeedsRebuild(row.promptTemplate) : (!hasUniversalImagePromptStructure(row.promptTemplate) || imagePromptNeedsRebuild(row.promptTemplate) || imagePromptNeedsDossierUpgrade(row));
   const nextPromptTemplate = mustRebuild ? buildUniversalImagePromptTemplate(universalImageTemplateVarsForImageTemplateRow(row)) : inlineAppOwnedImagePromptConstants(row.promptTemplate);
-  return { ...row, promptTemplate: nextPromptTemplate, notes: `${row.notes || ""}${String(row.notes || "").includes("Universal 1-7 image structure") ? "" : " Universal 1-7 image structure applied."}${String(row.notes || "").includes("Real character-field dossier v8") ? "" : " Real character-field dossier v8."}`.trim() };
+  return { ...row, promptTemplate: nextPromptTemplate, notes: `${row.notes || ""}${String(row.notes || "").includes("Universal 1-7 image structure") ? "" : " Universal 1-7 image structure applied."}${String(row.notes || "").includes("Real character-field dossier v8") ? "" : " Real character-field dossier v8."}${String(row.notes || "").includes("Prompt save stability v10") ? "" : " Prompt save stability v10."}`.trim() };
 };
 const applyUniversalImageStructureToConfig = (config = {}) => {
   const out = { ...config };
@@ -7338,6 +7374,49 @@ const ConfigSheets = {
     }
     return raw;
   },
+  async upsertConfigRow(tableKey, rowId, rowObject = {}, idColumn = "id") {
+    const id = this.getSpreadsheetId();
+    if (!id) throw new Error("No config spreadsheet connected");
+    const meta = CONFIG_TABLES[tableKey];
+    if (!meta) throw new Error(`Unknown config table: ${tableKey}`);
+    await this.ensureTabs();
+
+    const tab = meta.tab;
+    const data = await this.request(`spreadsheets/${id}/values/${encodeURIComponent(`${tab}!A:Z`)}`);
+    let values = data.values || [];
+    const headers = values[0]?.length ? values[0] : (meta.headers || []);
+
+    if (!values.length) {
+      await this.request(`spreadsheets/${id}/values/${encodeURIComponent(`${tab}!A1`)}`, {
+        method: "PUT",
+        body: JSON.stringify({ values: [headers] }),
+      });
+      values = [headers];
+    }
+
+    const idIdx = headers.findIndex(h => String(h).trim() === idColumn);
+    if (idIdx < 0) throw new Error(`${tab} is missing ${idColumn} column`);
+    const fullRow = { ...rowObject, [idColumn]: rowId };
+    const rowValues = headers.map(h => fullRow[h] ?? "");
+    const rowIndex = values.findIndex((row, idx) => idx > 0 && String(row[idIdx] || "").trim() === String(rowId || "").trim());
+
+    if (rowIndex === -1) {
+      await this.request(`spreadsheets/${id}/values/${encodeURIComponent(`${tab}!A:Z`)}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`, {
+        method: "POST",
+        body: JSON.stringify({ values: [rowValues] }),
+      });
+      return { appended: true, range: `${tab}!row:new`, tab };
+    }
+
+    const endCol = _sheetA1Col(Math.max(headers.length - 1, 0));
+    const range = `${_sheetA1Tab(tab)}!A${rowIndex + 1}:${endCol}${rowIndex + 1}`;
+    await this.request(`spreadsheets/${id}/values/${encodeURIComponent(range)}?valueInputOption=RAW`, {
+      method: "PUT",
+      body: JSON.stringify({ values: [rowValues] }),
+    });
+    return { appended: false, range, tab };
+  },
+
   async upsertConfigFieldCell(tableKey, rowId, fieldName, value, fallbackRow = {}, idColumn = "id") {
     const id = this.getSpreadsheetId();
     if (!id) throw new Error("No config spreadsheet connected");
@@ -18644,7 +18723,9 @@ Rules:
       const tpl = await getLivePromptTemplate(promptId, fetchKind);
       const defaults = buildDefaultAppConfig();
       const fallback = findPromptTemplate(defaults, promptId, resolvedTableKey) || findPromptTemplate(defaults, promptId, fetchKind) || findPromptTemplate(defaults, promptId) || tpl || {};
-      setPortfolioPromptEditor({ tableKey: resolvedTableKey, promptId, fieldName, label, draft: tpl?.[fieldName] || fallback[fieldName] || "", loading: false, error: "", fallbackPatch });
+      const sheetValue = String(tpl?.[fieldName] || "");
+      const fallbackValue = String(fallback[fieldName] || fallbackPatch?.[fieldName] || "");
+      setPortfolioPromptEditor({ tableKey: resolvedTableKey, promptId, fieldName, label, draft: sheetValue.trim() ? sheetValue : fallbackValue, loading: false, error: "", fallbackPatch });
     } catch (e) {
       const defaults = buildDefaultAppConfig();
       const fallback = findPromptTemplate(defaults, promptId, resolvedTableKey) || findPromptTemplate(defaults, promptId, fetchKind) || findPromptTemplate(defaults, promptId) || {};
@@ -18682,31 +18763,38 @@ Rules:
     const draft = String(ed.draft || "");
     const defaultRow = findPromptTemplate(buildDefaultAppConfig(), ed.promptId, ed.tableKey) || findPromptTemplate(buildDefaultAppConfig(), ed.promptId) || {};
     const localRow = findPromptTemplate(appConfig, ed.promptId, ed.tableKey) || findPromptTemplate(appConfig, ed.promptId) || {};
-    const fallbackRow = enrichPromptTemplateRow({
+    const fieldName = ed.fieldName || "user";
+    const previousValue = String(localRow?.[fieldName] || defaultRow?.[fieldName] || ed.fallbackPatch?.[fieldName] || "");
+    if (!draft.trim() && previousValue.trim()) {
+      const msg = "Refusing to save a blank prompt because the editor still has a previous non-empty prompt. Close/reopen the editor if you really meant to clear it.";
+      setPortfolioPromptEditor(prev => prev ? { ...prev, draft: previousValue, error: msg } : prev);
+      showToast(msg, "error");
+      return;
+    }
+    let fallbackRow = markPromptRowUserEdited(enrichPromptTemplateRow({
       ...defaultRow,
       ...localRow,
       ...(ed.fallbackPatch || {}),
       id: ed.promptId,
-      [ed.fieldName || "user"]: draft,
+      [fieldName]: draft,
       active: localRow.active || defaultRow.active || ed.fallbackPatch?.active || "TRUE",
-    }, 0);
+    }, 0));
     const tableKey = ed.tableKey || promptTemplateTableKeyForRow(fallbackRow);
+    if (tableKey === "imagePromptTemplates") fallbackRow = structureImagePromptTemplateRowForImageCreation(fallbackRow);
+    else if (tableKey === "imageTemplates") fallbackRow = structureImageTemplateRowForImageCreation(fallbackRow);
+    else fallbackRow = structurePromptTemplateRowForImageCreation(fallbackRow);
 
     try {
       setPortfolioPromptSaving(true);
       setConfigError("");
       const access = await prepareConfigSheetAccess(`prompt:${ed.promptId}`);
       if (!access.ok) throw new Error(access.message || "No config spreadsheet connected");
-      const fieldName = ed.fieldName || "user";
-      const result = fieldName === "user"
-        ? await ConfigSheets.upsertPromptTemplateUserCell(tableKey, ed.promptId, draft, fallbackRow)
-        : await ConfigSheets.upsertConfigFieldCell(tableKey, ed.promptId, fieldName, draft, fallbackRow);
+      const result = await ConfigSheets.upsertConfigRow(tableKey, ed.promptId, fallbackRow);
 
       const nextRows = (() => {
         const rows = appConfig?.[tableKey] || [];
         const exists = rows.some(r => r.id === ed.promptId);
-        const fieldName = ed.fieldName || "user";
-        return exists ? rows.map(r => r.id === ed.promptId ? { ...r, [fieldName]: draft } : r) : [...rows, fallbackRow];
+        return exists ? rows.map(r => r.id === ed.promptId ? { ...r, ...fallbackRow } : r) : [...rows, fallbackRow];
       })();
       const nextCfg = commitLiveAppConfig({ ...appConfig, [tableKey]: nextRows });
       cacheAppConfig(nextCfg);
@@ -20509,10 +20597,76 @@ If no relationship changes, respond "No relationship updates needed."` },
     setConfigPromptId(id);
   }, [configPromptKind, updateAppConfigLocal]);
 
+  const isPromptConfigTableKey = useCallback((kind = "") => CONFIG_TEXT_PROMPT_TABLE_KEYS.has(kind) || kind === "imagePromptTemplates" || kind === "imageTemplates", []);
+
+  const buildEditedConfigPromptRow = useCallback((kind, rowId, patch = {}) => {
+    const defaults = buildDefaultAppConfig();
+    const defaultRow = findPromptTemplate(defaults, rowId, kind) || findPromptTemplate(defaults, rowId) || {};
+    const localRows = appConfig?.[kind] || [];
+    const localRow = localRows.find(r => String(r.id || "") === String(rowId || "")) || findPromptTemplate(appConfig, rowId, kind) || {};
+    let row = {
+      ...defaultRow,
+      ...localRow,
+      ...(patch || {}),
+      id: String(patch?.id || localRow?.id || defaultRow?.id || rowId || "").trim(),
+      active: patch?.active || localRow?.active || defaultRow?.active || "TRUE",
+    };
+    if (CONFIG_TEXT_PROMPT_TABLE_KEYS.has(kind)) row = enrichPromptTemplateRow(row, 0);
+    if (isPromptConfigTableKey(kind)) row = markPromptRowUserEdited(row);
+    if (kind === "imagePromptTemplates") return structureImagePromptTemplateRowForImageCreation(row);
+    if (kind === "imageTemplates") return structureImageTemplateRowForImageCreation(row);
+    return structurePromptTemplateRowForImageCreation(row);
+  }, [appConfig, isPromptConfigTableKey]);
+
+  const saveConfigPromptRowToSheet = useCallback(async (kind, rowId, patch = {}, opts = {}) => {
+    if (!isPromptConfigTableKey(kind) || !rowId) return null;
+    const row = buildEditedConfigPromptRow(kind, rowId, patch);
+    if (!row?.id) return null;
+    const fieldName = kind === "imagePromptTemplates" || kind === "imageTemplates" ? "promptTemplate" : (patch?.system != null ? "system" : "user");
+    const nextValue = String(row?.[fieldName] || "");
+    const currentRows = appConfig?.[kind] || [];
+    const previous = currentRows.find(r => String(r.id || "") === String(rowId || "")) || {};
+    const previousValue = String(previous?.[fieldName] || "");
+    if (!nextValue.trim() && previousValue.trim()) {
+      const msg = "Refusing to save a blank prompt over an existing non-empty prompt.";
+      setConfigError(msg);
+      if (!opts.quiet) showToast(msg, "error");
+      return null;
+    }
+    try {
+      if (!opts.quiet) setConfigSyncing(true);
+      setConfigError("");
+      const access = await prepareConfigSheetAccess(`prompt:${row.id}`);
+      if (!access.ok) throw new Error(access.message || "No config spreadsheet connected");
+      const result = await ConfigSheets.upsertConfigRow(kind, row.id, row);
+      const rows = appConfig?.[kind] || [];
+      const nextRows = [...rows.filter(r => String(r.id || "") !== String(rowId || "") && String(r.id || "") !== String(row.id || "")), row]
+        .sort((a, b) => Number(a.sort || 0) - Number(b.sort || 0));
+      const nextCfg = commitLiveAppConfig({ ...appConfig, [kind]: nextRows });
+      cacheAppConfig(nextCfg);
+      setConfigDirty(false);
+      if (row.id !== rowId) setConfigPromptId(row.id);
+      if (!opts.quiet) showToast(`Prompt row saved to ${result.range}`, "success");
+      return result;
+    } catch (e) {
+      const msg = e?.message || String(e);
+      setConfigError(msg);
+      if (!opts.quiet) showToast(`Prompt row save failed: ${msg}`, "error");
+      else console.warn("[NovelForge] Prompt row auto-save failed:", msg);
+      return null;
+    } finally {
+      if (!opts.quiet) setConfigSyncing(false);
+    }
+  }, [appConfig, buildEditedConfigPromptRow, isPromptConfigTableKey, prepareConfigSheetAccess, commitLiveAppConfig, showToast]);
+
   const updateConfigPromptRow = useCallback((kind, rowId, patch) => updateAppConfigLocal(prev => ({
     ...prev,
-    [kind]: (prev[kind] || []).map(r => r.id === rowId ? { ...r, ...patch } : r)
-  }), ""), [updateAppConfigLocal]);
+    [kind]: (prev[kind] || []).map(r => {
+      if (String(r.id || "") !== String(rowId || "")) return r;
+      const nextRow = { ...r, ...patch };
+      return isPromptConfigTableKey(kind) ? markPromptRowUserEdited(nextRow) : nextRow;
+    })
+  }), ""), [updateAppConfigLocal, isPromptConfigTableKey]);
 
   const handleGenerateChapterWorldView = useCallback(async () => {
     if (!settings.apiKey) { showToast("Set API key first", "error"); return; }
@@ -31288,7 +31442,7 @@ Speech pattern: ${char.speechPattern || ""}` },
           <div>
             <h3 className="nf-card-title" style={{ marginBottom: 4 }}>App Config Editor</h3>
             <p style={{ fontSize: 12, color: "var(--nf-text-muted)", lineHeight: 1.5, margin: 0 }}>
-              Edit dropdowns and prompts from the app. Saved text prompts are written back into the structured tab-level prompt sheets.
+              Edit dropdowns and prompts from the app. Saved text prompts are written back into the structured tab-level prompt sheets. Prompt rows auto-save on blur and can also be saved with Save row.
             </p>
           </div>
           <button onClick={() => setConfigEditorOpen(v => !v)} className="nf-btn nf-btn-ghost">{configEditorOpen ? "Hide" : "Customize"}</button>
@@ -31366,24 +31520,25 @@ Speech pattern: ${char.speechPattern || ""}` },
                     <button onClick={() => addConfigPromptRow(kind)} className="nf-btn nf-btn-primary">+ Add prompt</button>
                     <span style={{ fontSize: 11, color: "var(--nf-text-muted)", padding: "5px 8px", border: "1px solid var(--nf-border)", borderRadius: 999 }}>Sheet: {CONFIG_TABLES[kind]?.tab || kind} · {(rows || []).length} rows</span>
                     {selected && <button onClick={() => updateConfigPromptRow(kind, selected.id, { active: cfgBool(selected.active, true) ? "FALSE" : "TRUE" })} className="nf-btn nf-btn-ghost">{cfgBool(selected.active, true) ? "Active" : "Hidden"}</button>}
+                    {selected && <button onClick={() => saveConfigPromptRowToSheet(kind, selected.id, {}, { quiet: false })} disabled={configSyncing || !configSheetId.trim()} className="nf-btn nf-btn-primary" title="Save this exact prompt row to Google Sheets now">Save row</button>}
                   </div>
                   {selected ? (
                     <div style={{ display: "grid", gap: 8, padding: 10, border: "1px solid var(--nf-border)", borderRadius: 10, background: "var(--nf-bg-surface)" }}>
                       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-                        <input value={selected.id || ""} onChange={e => updateConfigPromptRow(kind, selected.id, { id: e.target.value })} className="nf-input" style={{ fontSize: 11 }} placeholder="id" />
-                        <input value={selected.name || selected.label || ""} onChange={e => updateConfigPromptRow(kind, selected.id, kind === "imagePromptTemplates" ? { label: e.target.value } : { name: e.target.value })} className="nf-input" style={{ fontSize: 11 }} placeholder="Name / label" />
+                        <input value={selected.id || ""} onChange={e => updateConfigPromptRow(kind, selected.id, { id: e.target.value })} onBlur={e => saveConfigPromptRowToSheet(kind, selected.id, { id: e.target.value }, { quiet: true })} className="nf-input" style={{ fontSize: 11 }} placeholder="id" />
+                        <input value={selected.name || selected.label || ""} onChange={e => updateConfigPromptRow(kind, selected.id, kind === "imagePromptTemplates" ? { label: e.target.value } : { name: e.target.value })} onBlur={e => saveConfigPromptRowToSheet(kind, selected.id, kind === "imagePromptTemplates" ? { label: e.target.value } : { name: e.target.value }, { quiet: true })} className="nf-input" style={{ fontSize: 11 }} placeholder="Name / label" />
                       </div>
                       {isTextPromptTable ? <>
-                        <PromptVariableEditor value={selected.system || ""} onChange={e => updateConfigPromptRow(kind, selected.id, { system: e.target.value })} rows={4} placeholder="System prompt" promptId={selected.id} />
-                        <PromptVariableEditor value={selected.user || ""} onChange={e => updateConfigPromptRow(kind, selected.id, { user: e.target.value })} rows={6} placeholder="User prompt template. Use {{context}}, {{character}}, {{story}}, etc." promptId={selected.id} />
+                        <PromptVariableEditor value={selected.system || ""} onChange={e => updateConfigPromptRow(kind, selected.id, { system: e.target.value })} onBlur={e => saveConfigPromptRowToSheet(kind, selected.id, { system: e.target.value }, { quiet: true })} rows={4} placeholder="System prompt" promptId={selected.id} />
+                        <PromptVariableEditor value={selected.user || ""} onChange={e => updateConfigPromptRow(kind, selected.id, { user: e.target.value })} onBlur={e => saveConfigPromptRowToSheet(kind, selected.id, { user: e.target.value }, { quiet: true })} rows={6} placeholder="User prompt template. Use {{context}}, {{character}}, {{story}}, etc." promptId={selected.id} />
                       </> : <>
-                        <PromptVariableEditor value={selected.promptTemplate || ""} onChange={e => updateConfigPromptRow(kind, selected.id, { promptTemplate: e.target.value })} rows={7} placeholder="Image prompt template" promptId={selected.id} />
+                        <PromptVariableEditor value={selected.promptTemplate || ""} onChange={e => updateConfigPromptRow(kind, selected.id, { promptTemplate: e.target.value })} onBlur={e => saveConfigPromptRowToSheet(kind, selected.id, { promptTemplate: e.target.value }, { quiet: true })} rows={7} placeholder="Image prompt template" promptId={selected.id} />
                         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-                          <input value={selected.variant || ""} onChange={e => updateConfigPromptRow(kind, selected.id, { variant: e.target.value })} className="nf-input" style={{ fontSize: 11 }} placeholder="Variant" />
-                          <input value={selected.ratio || ""} onChange={e => updateConfigPromptRow(kind, selected.id, { ratio: e.target.value })} className="nf-input" style={{ fontSize: 11 }} placeholder="Ratio" />
+                          <input value={selected.variant || ""} onChange={e => updateConfigPromptRow(kind, selected.id, { variant: e.target.value })} onBlur={e => saveConfigPromptRowToSheet(kind, selected.id, { variant: e.target.value }, { quiet: true })} className="nf-input" style={{ fontSize: 11 }} placeholder="Variant" />
+                          <input value={selected.ratio || ""} onChange={e => updateConfigPromptRow(kind, selected.id, { ratio: e.target.value })} onBlur={e => saveConfigPromptRowToSheet(kind, selected.id, { ratio: e.target.value }, { quiet: true })} className="nf-input" style={{ fontSize: 11 }} placeholder="Ratio" />
                         </div>
                       </>}
-                      <div style={{ fontSize: 11, color: "var(--nf-text-muted)" }}>Tip: hide rows instead of deleting them. Hidden rows stay in the sheet but disappear from the app.</div>
+                      <div style={{ fontSize: 11, color: "var(--nf-text-muted)" }}>Tip: prompt rows auto-save on blur. Use Save row for a manual full-row write. Hide rows instead of deleting them; hidden rows stay in the sheet but disappear from the app.</div>
                     </div>
                   ) : <div style={{ fontSize: 12, color: "var(--nf-text-muted)" }}>No prompts yet.</div>}
                 </div>
