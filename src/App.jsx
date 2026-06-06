@@ -15939,7 +15939,7 @@ export default function NovelForge() {
         obs.disconnect();
       }
     };
-  }, [activeTab, activeChapterIdx, isMobile, project?.id, project?.updatedAt, refreshMobileSections]);
+  }, [activeTab, activeChapterIdx, isMobile, activeProjectId, refreshMobileSections]);
 
   const jumpToMobileSection = useCallback((id) => {
     if (typeof document === "undefined") return;
