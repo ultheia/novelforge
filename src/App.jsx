@@ -1,6 +1,6 @@
-// APP_UPDATE_TIMESTAMP: 20260606_235900_Jakarta
-// FILE_NAME: App_mod_all_dropdown_image_prompt_sync_v14_20260606.jsx
-// FIX_MARKER: all-dropdown-image-prompt-sync-v14
+// APP_UPDATE_TIMESTAMP: 20260606_235959_Jakarta
+// FILE_NAME: App_mod_image_qa_toggle_v15_20260606.jsx
+// FIX_MARKER: image-qa-review-toggle-v15
 import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, useReducer, memo, createContext, useContext, Fragment } from "react";
 import { createPortal } from "react-dom";
 
@@ -16231,6 +16231,7 @@ export default function NovelForge() {
     frequencyPenalty: 0.1, presencePenalty: 0.15,
     modelContextWindow: 1000000,
     imageModel: "google/gemini-3.1-flash-image-preview", // model used for all image generation
+    imageQaEnabled: true, // Gemini 2.5 Flash image QA/retry passer; can be disabled in Settings
     tabModels: {}, // per-tab model overrides (characters/world/plot/relationships); empty = use main model
     // Multi-agent system settings
     agentsEnabled: false, // opt-in: user must enable in settings
@@ -21426,7 +21427,8 @@ CRITICAL: Every sentence must describe something visible. If a detail cannot be 
   const _generateSingleImage = useCallback(async (prompt, aspectRatio = null, referenceImages = null, activity = {}) => {
     _lastImageQaRef.current = null;
     const IMAGE_REVIEW_MODEL = "google/gemini-2.5-flash";
-    const QUALITY_MAX_ATTEMPTS = 3;
+    const imageQaEnabled = settings.imageQaEnabled !== false;
+    const QUALITY_MAX_ATTEMPTS = imageQaEnabled ? 3 : 1;
     const NETWORK_MAX_RETRIES = 6;
 
     const refs = (Array.isArray(referenceImages) ? referenceImages : [])
@@ -21503,7 +21505,7 @@ CRITICAL: Every sentence must describe something visible. If a detail cannot be 
           const data = await res.json();
           const imageUrl = extractImageUrl(data);
           if (imageUrl) {
-            updateAiActivity(activityId, { title: activityTitle, detail: "Image returned · sending to QA review", status: "working" });
+            updateAiActivity(activityId, { title: activityTitle, detail: imageQaEnabled ? "Image returned · sending to QA review" : "Image returned · QA passer disabled", status: "working" });
             return imageUrl;
           }
           updateAiActivity(activityId, { title: activityTitle, detail: `No image returned · retrying ${attempt + 1}/${NETWORK_MAX_RETRIES}`, status: "working" });
@@ -21592,6 +21594,18 @@ ${lastReview.mustFix || lastReview.reason}`
         const candidate = await generateCandidate(effectivePrompt);
         if (!candidate) continue;
         lastCandidate = candidate;
+        if (!imageQaEnabled) {
+          _lastImageQaRef.current = {
+            status: "skipped",
+            attempts: 1,
+            maxAttempts: 1,
+            model: IMAGE_REVIEW_MODEL,
+            reason: "Image QA passer disabled in Settings.",
+            reviewedAt: new Date().toISOString(),
+          };
+          finishAiActivity(activityId, "done", "Image generated · QA passer off");
+          return candidate;
+        }
         lastReview = await reviewCandidate(candidate);
         if (lastReview.verdict === "pass") {
           _lastImageQaRef.current = {
@@ -21626,7 +21640,7 @@ ${lastReview.mustFix || lastReview.reason}`
       finishAiActivity(activityId, "failed", _formatApiError(err));
       throw err;
     }
-  }, [settings.apiKey, settings.imageModel, startAiActivity, updateAiActivity, finishAiActivity]);
+  }, [settings.apiKey, settings.imageModel, settings.imageQaEnabled, startAiActivity, updateAiActivity, finishAiActivity]);
   useEffect(() => { _genSingleImageRef.current = _generateSingleImage; }, [_generateSingleImage]);
 
   const handleGenerateImage = useCallback(async (prompt, use4x = false, aspectRatio = null, referenceImages = null) => {
@@ -31219,6 +31233,7 @@ Speech pattern: ${char.speechPattern || ""}` },
           <span className={`nf-settings-summary-pill ${settings.apiKey ? "is-good" : "is-warn"}`}>{settings.apiKey ? "Key set" : "Needs key"}</span>
           <span className="nf-settings-summary-pill">Writer: {settings.model || "Default model"}</span>
           <span className={`nf-settings-summary-pill ${settings.imageModel ? "is-good" : ""}`}>Images: {settings.imageModel || "Not set"}</span>
+          <span className={`nf-settings-summary-pill ${settings.imageQaEnabled !== false ? "is-good" : "is-warn"}`}>Image QA: {settings.imageQaEnabled !== false ? "On" : "Off"}</span>
         </div>
         <div className="nf-field">
           <label className="nf-label">OpenRouter API Key</label>
@@ -31237,6 +31252,9 @@ Speech pattern: ${char.speechPattern || ""}` },
         </div>
         <ModelSelector apiKey={settings.apiKey} value={settings.model} onChange={(v, ctxLen) => setSettings(prev => ({ ...prev, model: v, modelContextWindow: ctxLen || prev.modelContextWindow }))} />
         <ModelSelector apiKey={settings.apiKey} value={settings.imageModel} onChange={(v) => setSettings(prev => ({ ...prev, imageModel: v }))} label="Image Model" />
+        <SettingToggle checked={settings.imageQaEnabled !== false} onChange={v => setSettings(prev => ({ ...prev, imageQaEnabled: v }))}
+          label="Image QA passer (Gemini 2.5 Flash)"
+          desc="When on, each generated image is reviewed by Gemini 2.5 Flash and can be regenerated up to 3 times if it materially misses the prompt. Turn off to accept the first returned image and skip the extra QA call/cost." />
         <details style={{ marginTop: 4 }}>
           <summary style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--nf-accent-2)", cursor: "pointer", padding: "6px 0" }}>
             Per-Tab Model Overrides
