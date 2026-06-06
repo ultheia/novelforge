@@ -15520,6 +15520,44 @@ export default function NovelForge() {
     setCurrentLang(settings?.language || "en");
   }, [settings?.language]);
 
+  // ─── MOBILE VIEWPORT CONTRACT ───
+  // GitHub Pages can be served without a viewport meta tag. On iPhone Safari that makes
+  // the layout viewport ~980px wide, so every @media (max-width: 820px) mobile rule fails
+  // and the desktop side rails overlap the screen. Force the correct viewport from the app.
+  useEffect(() => {
+    if (typeof document === "undefined" || typeof window === "undefined") return;
+    let meta = document.querySelector('meta[name="viewport"]');
+    if (!meta) {
+      meta = document.createElement("meta");
+      meta.setAttribute("name", "viewport");
+      document.head.prepend(meta);
+    }
+    meta.setAttribute("content", "width=device-width, initial-scale=1, viewport-fit=cover");
+
+    const root = document.documentElement;
+    const markHandheld = () => {
+      const vvWidth = window.visualViewport?.width || window.innerWidth || 0;
+      const screenWidth = window.screen?.width || vvWidth;
+      const coarse = window.matchMedia?.("(pointer: coarse)")?.matches || false;
+      const handheld = coarse && Math.min(vvWidth || 9999, screenWidth || 9999) <= 900;
+      root.classList.toggle("nf-handheld", !!handheld);
+      setIsMobile(handheld || (window.innerWidth || vvWidth) < 820);
+    };
+
+    markHandheld();
+    window.setTimeout(markHandheld, 0);
+    window.setTimeout(markHandheld, 250);
+    window.addEventListener("resize", markHandheld, { passive: true });
+    window.addEventListener("orientationchange", markHandheld, { passive: true });
+    window.visualViewport?.addEventListener("resize", markHandheld, { passive: true });
+    return () => {
+      window.removeEventListener("resize", markHandheld);
+      window.removeEventListener("orientationchange", markHandheld);
+      window.visualViewport?.removeEventListener("resize", markHandheld);
+      root.classList.remove("nf-handheld");
+    };
+  }, []);
+
   const [tabChatHistories, setTabChatHistories] = useState({});
   const [showApiKey, setShowApiKey] = useState(false);
   const [dragOverIdx, setDragOverIdx] = useState(null); // C4: Chapter drag indicator
@@ -15766,19 +15804,25 @@ export default function NovelForge() {
   const themeVars = useMemo(() => Object.entries(THEMES[theme]).map(([k, v]) => `${k}: ${v};`).join("\n"), [theme]);
 
   // ─── RESPONSIVE ───
-  // iPad Mini 7 is 744px wide in portrait — treat it as mobile for layout
-  // iPad Pro 11" in portrait is 834px — gets tablet layout below
+  // iPad Mini 7 is 744px wide in portrait — treat it as mobile for layout.
+  // Also respect nf-handheld, which catches iPhone Safari before/while the viewport meta settles.
   useEffect(() => {
     const check = () => {
-      const w = window.innerWidth;
-      setIsMobile(w < 820); // covers iPad Mini (744), iPhones, most phones
+      const vvWidth = window.visualViewport?.width || window.innerWidth || 0;
+      const screenWidth = window.screen?.width || vvWidth;
+      const coarse = window.matchMedia?.("(pointer: coarse)")?.matches || false;
+      const handheld = coarse && Math.min(vvWidth || 9999, screenWidth || 9999) <= 900;
+      if (typeof document !== "undefined") document.documentElement.classList.toggle("nf-handheld", !!handheld);
+      setIsMobile(handheld || (window.innerWidth || vvWidth) < 820);
     };
     check();
-    window.addEventListener("resize", check);
-    window.addEventListener("orientationchange", check);
+    window.addEventListener("resize", check, { passive: true });
+    window.addEventListener("orientationchange", check, { passive: true });
+    window.visualViewport?.addEventListener("resize", check, { passive: true });
     return () => {
       window.removeEventListener("resize", check);
       window.removeEventListener("orientationchange", check);
+      window.visualViewport?.removeEventListener("resize", check);
     };
   }, []);
 
@@ -34981,6 +35025,344 @@ Speech pattern: ${char.speechPattern || ""}` },
             border-top-color: var(--nf-accent) !important;
             border-top-style: dashed !important;
           }
+
+          /* ═══════════════════════════════════════════
+             MOBILE DISASTER RECOVERY — v15
+             The screenshots showed the real bug: iPhone Safari was still getting desktop rails.
+             These rules are keyed off html.nf-handheld, not only media queries, so they work even
+             when the browser starts with the legacy 980px mobile layout viewport.
+          ═══════════════════════════════════════════ */
+          html.nf-handheld, html.nf-handheld body, html.nf-handheld #root {
+            width: 100% !important;
+            max-width: 100% !important;
+            min-width: 0 !important;
+            overflow: hidden !important;
+            touch-action: manipulation;
+          }
+          html.nf-handheld .nf-root {
+            width: 100vw !important;
+            max-width: 100vw !important;
+            height: var(--nf-real-vh, 100dvh) !important;
+            min-height: var(--nf-real-vh, 100dvh) !important;
+            overflow: hidden !important;
+            display: flex !important;
+            background: var(--nf-bg-deep) !important;
+          }
+          html.nf-handheld #nf-main-content {
+            width: 100vw !important;
+            max-width: 100vw !important;
+            min-width: 0 !important;
+            min-height: 0 !important;
+            padding: 0 !important;
+            overflow: hidden !important;
+          }
+          html.nf-handheld .nf-mobile-topbar { display: none !important; }
+
+          /* On Safari, bottom app nav fights the browser toolbar. Use a simple top rail instead. */
+          html.nf-handheld .nf-tab-bar {
+            position: sticky !important;
+            top: 0 !important;
+            bottom: auto !important;
+            left: 0 !important;
+            right: 0 !important;
+            z-index: 300 !important;
+            width: 100vw !important;
+            height: 52px !important;
+            min-height: 52px !important;
+            padding: 0 max(8px, env(safe-area-inset-left, 0px)) 0 max(8px, env(safe-area-inset-right, 0px)) !important;
+            gap: 6px !important;
+            border-top: 0 !important;
+            border-bottom: 1px solid var(--nf-border) !important;
+            background: color-mix(in srgb, var(--nf-bg) 96%, transparent) !important;
+            box-shadow: none !important;
+            backdrop-filter: blur(14px) !important;
+            -webkit-backdrop-filter: blur(14px) !important;
+            overflow: hidden !important;
+          }
+          html.nf-handheld .nf-tab-title,
+          html.nf-handheld .nf-tab-group-label,
+          html.nf-handheld .nf-save-indicator,
+          html.nf-handheld .nf-tab-label,
+          html.nf-handheld .nf-tab-bar > div[style*="flex: 1"] { display: none !important; }
+          html.nf-handheld .nf-tab-bar > .nf-btn-icon:not(:first-child) { display: none !important; }
+          html.nf-handheld .nf-tab-bar > .nf-btn-icon:first-child {
+            display: inline-flex !important;
+            flex: 0 0 38px !important;
+            width: 38px !important;
+            height: 46px !important;
+            min-width: 38px !important;
+            min-height: 46px !important;
+            margin: 0 !important;
+            padding: 0 !important;
+            border: 0 !important;
+            background: transparent !important;
+            color: var(--nf-text-muted) !important;
+            justify-content: center !important;
+          }
+          html.nf-handheld .nf-tab-scroll-area {
+            flex: 1 1 auto !important;
+            min-width: 0 !important;
+            height: 52px !important;
+            display: flex !important;
+            align-items: center !important;
+            gap: 8px !important;
+            overflow-x: auto !important;
+            overflow-y: hidden !important;
+            padding: 0 2px !important;
+            -webkit-overflow-scrolling: touch !important;
+            scrollbar-width: none !important;
+          }
+          html.nf-handheld .nf-tab-scroll-area::-webkit-scrollbar { display: none !important; }
+          html.nf-handheld .nf-tab-btn {
+            position: relative !important;
+            flex: 0 0 42px !important;
+            min-width: 42px !important;
+            width: 42px !important;
+            height: 48px !important;
+            min-height: 48px !important;
+            padding: 0 !important;
+            border: 0 !important;
+            border-radius: 0 !important;
+            background: transparent !important;
+            display: inline-flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+            color: var(--nf-text-muted) !important;
+          }
+          html.nf-handheld .nf-tab-btn svg { width: 21px !important; height: 21px !important; }
+          html.nf-handheld .nf-tab-btn.active { color: var(--nf-accent) !important; background: transparent !important; box-shadow: none !important; }
+          html.nf-handheld .nf-tab-btn.active::after {
+            content: "";
+            position: absolute;
+            left: 8px;
+            right: 8px;
+            bottom: 0;
+            height: 4px;
+            border-radius: 999px;
+            background: currentColor;
+          }
+          html.nf-handheld .nf-tab-cue {
+            position: absolute !important;
+            top: 5px !important;
+            right: 6px !important;
+            width: 5px !important;
+            height: 5px !important;
+            min-width: 5px !important;
+            padding: 0 !important;
+            border-radius: 999px !important;
+            font-size: 0 !important;
+          }
+
+          /* Hard kill the desktop floating chrome seen in the screenshots. */
+          html.nf-handheld .nf-utility-rail,
+          html.nf-handheld .nf-mobile-ai-fab,
+          html.nf-handheld .nf-ai-activity-panel { display: none !important; }
+
+          /* Content area owns the full phone width. */
+          html.nf-handheld .nf-write-layout {
+            width: 100vw !important;
+            max-width: 100vw !important;
+            min-width: 0 !important;
+            flex: 1 1 auto !important;
+            min-height: 0 !important;
+            display: flex !important;
+            flex-direction: column !important;
+            overflow: hidden !important;
+          }
+          html.nf-handheld .nf-content-scroll {
+            flex: 1 1 auto !important;
+            width: 100vw !important;
+            max-width: 100vw !important;
+            min-width: 0 !important;
+            min-height: 0 !important;
+            padding: 22px 16px calc(92px + env(safe-area-inset-bottom, 0px)) !important;
+            overflow-x: hidden !important;
+            overflow-y: auto !important;
+            -webkit-overflow-scrolling: touch !important;
+            scroll-padding-bottom: 120px !important;
+          }
+          html.nf-handheld .nf-content-scroll > * { max-width: 100% !important; min-width: 0 !important; }
+
+          /* Rails become top strips instead of left columns. */
+          html.nf-handheld .nf-chapter-sidebar {
+            order: 0 !important;
+            width: 100vw !important;
+            max-width: 100vw !important;
+            min-width: 0 !important;
+            height: 84px !important;
+            min-height: 84px !important;
+            max-height: 84px !important;
+            display: flex !important;
+            flex-direction: row !important;
+            align-items: stretch !important;
+            border-right: 0 !important;
+            border-bottom: 1px solid var(--nf-border) !important;
+            background: var(--nf-bg-raised) !important;
+            overflow: hidden !important;
+          }
+          html.nf-handheld .nf-chapter-sidebar-header {
+            flex: 0 0 74px !important;
+            width: 74px !important;
+            min-width: 74px !important;
+            padding: 7px !important;
+            border-right: 1px solid var(--nf-border) !important;
+            border-bottom: 0 !important;
+            display: flex !important;
+            flex-direction: column !important;
+            align-items: center !important;
+            justify-content: center !important;
+            gap: 6px !important;
+          }
+          html.nf-handheld .nf-chapter-sidebar-header .nf-section-label {
+            font-size: 9px !important;
+            max-width: 62px !important;
+            overflow: hidden !important;
+            text-overflow: ellipsis !important;
+            white-space: nowrap !important;
+            text-align: center !important;
+          }
+          html.nf-handheld .nf-chapter-sidebar-header .nf-btn-icon-sm {
+            width: 34px !important;
+            min-width: 34px !important;
+            height: 34px !important;
+            min-height: 34px !important;
+            padding: 0 !important;
+            font-size: 0 !important;
+            border-radius: 12px !important;
+          }
+          html.nf-handheld .nf-chapter-list {
+            flex: 1 1 auto !important;
+            min-width: 0 !important;
+            display: flex !important;
+            flex-direction: row !important;
+            gap: 7px !important;
+            overflow-x: auto !important;
+            overflow-y: hidden !important;
+            padding: 8px !important;
+            -webkit-overflow-scrolling: touch !important;
+            scrollbar-width: none !important;
+          }
+          html.nf-handheld .nf-chapter-list::-webkit-scrollbar { display: none !important; }
+          html.nf-handheld .nf-chapter-item,
+          html.nf-handheld .nf-roster-row,
+          html.nf-handheld .nf-polaroid {
+            flex: 0 0 118px !important;
+            width: 118px !important;
+            min-width: 118px !important;
+            max-width: 118px !important;
+            min-height: 66px !important;
+            margin: 0 !important;
+            border-radius: 14px !important;
+            overflow: hidden !important;
+          }
+          html.nf-handheld .nf-tab-characters .nf-chapter-sidebar {
+            height: 108px !important;
+            min-height: 108px !important;
+            max-height: 108px !important;
+          }
+          html.nf-handheld .nf-tab-characters .nf-chapter-sidebar > div:not(.nf-chapter-sidebar-header):not(.nf-chapter-list) {
+            display: none !important;
+          }
+
+          /* Editor fixes after the rail moves. */
+          html.nf-handheld .nf-editor-split,
+          html.nf-handheld .nf-text-editor,
+          html.nf-handheld .nf-editor-area {
+            width: 100vw !important;
+            max-width: 100vw !important;
+            min-width: 0 !important;
+            flex: 1 1 auto !important;
+            min-height: 0 !important;
+            overflow: hidden !important;
+          }
+          html.nf-handheld .nf-chapter-header {
+            width: 100vw !important;
+            padding: 10px 12px !important;
+            gap: 8px !important;
+            flex-wrap: wrap !important;
+            border-bottom: 1px solid var(--nf-border) !important;
+            background: var(--nf-bg) !important;
+          }
+          html.nf-handheld .nf-chapter-title-input {
+            flex: 1 1 100% !important;
+            min-width: 0 !important;
+            font-size: 17px !important;
+            line-height: 1.2 !important;
+          }
+          html.nf-handheld .nf-header-actions {
+            width: 100% !important;
+            max-width: 100% !important;
+            display: flex !important;
+            flex-wrap: nowrap !important;
+            overflow-x: auto !important;
+            gap: 6px !important;
+            -webkit-overflow-scrolling: touch !important;
+            scrollbar-width: none !important;
+          }
+          html.nf-handheld .nf-header-actions::-webkit-scrollbar { display: none !important; }
+          html.nf-handheld .nf-rich-toolbar {
+            width: 100vw !important;
+            min-height: 50px !important;
+            display: flex !important;
+            flex-wrap: nowrap !important;
+            overflow-x: auto !important;
+            overflow-y: hidden !important;
+            padding: 5px 8px !important;
+            border-bottom: 1px solid var(--nf-border) !important;
+            background: var(--nf-bg-raised) !important;
+            scrollbar-width: none !important;
+          }
+          html.nf-handheld .nf-rich-toolbar::-webkit-scrollbar { display: none !important; }
+          html.nf-handheld .nf-editor-contenteditable {
+            width: 100vw !important;
+            max-width: 100vw !important;
+            min-height: 46vh !important;
+            padding: 20px 16px calc(92px + env(safe-area-inset-bottom, 0px)) !important;
+            font-size: 17px !important;
+            line-height: 1.8 !important;
+            overflow-wrap: anywhere !important;
+          }
+
+          /* Phone cards: no half-table layouts. */
+          html.nf-handheld .nf-card,
+          html.nf-handheld .nf-char-section,
+          html.nf-handheld .nf-world-view-card,
+          html.nf-handheld .nf-plot-edit-section,
+          html.nf-handheld .nf-rel-edit-section,
+          html.nf-handheld .nf-settings-desk,
+          html.nf-handheld .nf-keepsake-desk-card {
+            width: 100% !important;
+            max-width: 100% !important;
+            min-width: 0 !important;
+            border-radius: 16px !important;
+            padding: 14px !important;
+            overflow: hidden !important;
+          }
+          html.nf-handheld [style*="grid-template-columns"],
+          html.nf-handheld [style*="gridTemplateColumns"] {
+            grid-template-columns: minmax(0, 1fr) !important;
+          }
+          html.nf-handheld .nf-card [style*="display: flex"],
+          html.nf-handheld .nf-content-scroll [style*="display: flex"] {
+            min-width: 0 !important;
+            max-width: 100% !important;
+            flex-wrap: wrap !important;
+          }
+          html.nf-handheld .nf-btn { min-height: 44px !important; border-radius: 12px !important; }
+          html.nf-handheld input:not([type="checkbox"]):not([type="radio"]),
+          html.nf-handheld select,
+          html.nf-handheld textarea {
+            font-size: 16px !important;
+            max-width: 100% !important;
+            min-width: 0 !important;
+          }
+
+          @media (max-width: 520px) {
+            html.nf-handheld .nf-tab-btn { flex-basis: 38px !important; min-width: 38px !important; width: 38px !important; }
+            html.nf-handheld .nf-tab-scroll-area { gap: 5px !important; }
+            html.nf-handheld .nf-content-scroll { padding-left: 12px !important; padding-right: 12px !important; }
+          }
+
         `}</style>
         
 
