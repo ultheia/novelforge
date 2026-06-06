@@ -1,6 +1,6 @@
-// APP_UPDATE_TIMESTAMP: 20260604_224600_Jakarta
-// FILE_NAME: App_polish_phase7.jsx
-// FIX_MARKER: character-preview-dossier-polish-v1
+// APP_UPDATE_TIMESTAMP: 20260606_120000_Jakarta
+// FILE_NAME: App_mod_universal_image_prompt_structure_v2_20260606.jsx
+// FIX_MARKER: universal-image-prompt-structure-verbatim-v2
 import { useState, useEffect, useRef, useCallback, useMemo, useReducer, memo, createContext, useContext, Fragment } from "react";
 import { createPortal } from "react-dom";
 
@@ -849,6 +849,50 @@ const EditablePromptDropdown = memo(({
   );
 });
 EditablePromptDropdown.displayName = "EditablePromptDropdown";
+
+
+const escapePromptHtml = (text = "") => String(text || "")
+  .replace(/&/g, "&amp;")
+  .replace(/</g, "&lt;")
+  .replace(/>/g, "&gt;");
+const renderPromptVariablesHtml = (text = "") => escapePromptHtml(text).replace(/\{\{\s*([\w.]+)\s*\}\}/g, '<span class="nf-prompt-variable">{{$1}}</span>');
+const promptVariablesIn = (text = "") => [...new Set((String(text || "").match(/\{\{\s*[\w.]+\s*\}\}/g) || []).map(v => v.replace(/\s+/g, "")))];
+
+const PromptVariableEditor = memo(({ value = "", onChange, rows = 8, placeholder = "", className = "", style = null, autoFocus = false, readOnly = false, title = "" }) => {
+  const overlayRef = useRef(null);
+  const variables = useMemo(() => promptVariablesIn(value), [value]);
+  const html = useMemo(() => renderPromptVariablesHtml(value || ""), [value]);
+  const syncScroll = (e) => {
+    if (overlayRef.current) {
+      overlayRef.current.scrollTop = e.currentTarget.scrollTop;
+      overlayRef.current.scrollLeft = e.currentTarget.scrollLeft;
+    }
+  };
+  return (
+    <div className="nf-prompt-editor-shell">
+      <div className="nf-prompt-editor-stack" style={style || undefined} title={title}>
+        <pre ref={overlayRef} aria-hidden="true" className="nf-prompt-highlight-layer" dangerouslySetInnerHTML={{ __html: html + "\n" }} />
+        <textarea
+          value={value}
+          onChange={onChange}
+          onScroll={syncScroll}
+          rows={rows}
+          placeholder={placeholder}
+          readOnly={readOnly}
+          autoFocus={autoFocus}
+          spellCheck={false}
+          className={`nf-textarea nf-prompt-highlight-input ${className || ""}`}
+        />
+      </div>
+      <div className="nf-prompt-variable-legend">
+        <span className="nf-prompt-variable-chip">{"{{variable}}"}</span>
+        <span>Colored chips are live placeholders. Keep them unless you intentionally remove that data source.</span>
+        {variables.length > 0 && <span className="nf-prompt-variable-list">Found: {variables.slice(0, 12).join(", ")}{variables.length > 12 ? ` +${variables.length - 12} more` : ""}</span>}
+      </div>
+    </div>
+  );
+});
+PromptVariableEditor.displayName = "PromptVariableEditor";
 
 // ─── UTILITIES ───
 // G7: Stronger UID — use crypto.randomUUID if available, otherwise timestamp + longer random
@@ -5149,12 +5193,226 @@ const CONFIG_PROMPT_EDITOR_TABLES = [
 ];
 const CONFIG_TEXT_PROMPT_TABLE_KEYS = new Set(PROMPT_TEMPLATE_TABLE_KEYS);
 const CONFIG_SCHEMA_VERSION = "4";
-const PROMPT_STRUCTURE_RELEASE = "apple-simple-prompt-sheets-portfolio-packages-v6-2026-06-03";
+const PROMPT_STRUCTURE_RELEASE = "universal-image-structure-verbatim-v1-2026-06-06";
 const cfgBool = (value, fallback = true) => {
   if (value == null || value === "") return fallback;
   if (typeof value === "boolean") return value;
   const v = String(value).trim().toLowerCase();
   return !(v === "false" || v === "0" || v === "no" || v === "inactive");
+};
+
+
+const UNIVERSAL_IMAGE_STRUCTURE_EXEMPT_PROMPT_KINDS = new Set(["logo", "place", "location", "room", "wall", "world", "world-place", "world-location", "architectural", "environment-only"]);
+const UNIVERSAL_IMAGE_STRUCTURE_PROMPT_IDS = new Set([
+  "scene.imagePrompt",
+  "image.characterReference",
+  "image.scenePromptDirector",
+  "character.studio.quickPortrait",
+  "character.studio.artVariant",
+  "character.studio.portfolioShot",
+  "character.studio.editorial",
+  "world.orgGroupPhotoPrompt",
+]);
+const UNIVERSAL_IMAGE_STRUCTURE_IMAGE_TEMPLATE_IDS = new Set([
+  "charArt.reference",
+  "scene.illustration",
+  "character_portrait",
+  "chapter_illustration",
+]);
+const isUniversalImageStructurePromptId = (id = "") => {
+  const key = String(id || "").trim();
+  return UNIVERSAL_IMAGE_STRUCTURE_PROMPT_IDS.has(key) || key.startsWith("character.studio.portfolio.");
+};
+const hasUniversalImagePromptStructure = (text = "") => {
+  const s = String(text || "");
+  return s.includes("Scene: 1") && s.includes("Do this:") && s.includes("(1) Only this character(s) appears in the scene:") && s.includes("(3) Skip to (4)") && s.includes("— you must bake all instructions from 1-7,");
+};
+const shouldExemptUniversalImagePromptStructure = (prompt = "", opts = {}) => {
+  if (opts?.exemptImageStructure === true) return true;
+  const kind = String(opts?.promptKind || opts?.kind || "").trim().toLowerCase();
+  if (UNIVERSAL_IMAGE_STRUCTURE_EXEMPT_PROMPT_KINDS.has(kind)) return true;
+  const id = String(opts?.promptId || opts?.id || "").trim();
+  if (id === "world.orgLogo" || id === "world.roomImagePrompts" || id === "location_shot") return true;
+  const t = String(prompt || "").toLowerCase();
+  if (/\blogo\b|\bemblem\b|\bcrest\b/.test(t) && /\bicon-only\b|\bno text\b|\bsquare format\b/.test(t)) return true;
+  if (/architectural visualization|master establishing shot prompt|prompt_wall_|prompt_master|wall-view prompts|all views depict one physically consistent room/.test(t)) return true;
+  if (/establishing shot of \{\{worldname\}\}|location establishing shot|environment design|no people/.test(t)) return true;
+  return false;
+};
+const imagePromptValue = (v, fallback = "") => {
+  if (v == null || v === "") return fallback;
+  if (Array.isArray(v)) return v.filter(Boolean).join(", ") || fallback;
+  return String(v);
+};
+const buildUniversalImagePromptTemplate = (vars = {}) => {
+  const charactersList = imagePromptValue(vars.charactersList || vars.characterNames || vars.characterName, "{{charactersList}}");
+  const characterDescriptions = imagePromptValue(vars.characterDescriptions || vars.characters || vars.character || vars.identitySeed || vars.identity || vars.subjectDescription, "{{characterDescriptions}}");
+  const clothingNames = imagePromptValue(vars.clothingNames || vars.characterNames || vars.charactersList || vars.characterName, charactersList || "{{charactersList}}");
+  const clothingDesign = imagePromptValue(vars.clothingDesign || vars.wardrobeSeed || vars.wardrobe || vars.wardrobePhrase, "{{clothingDesign}}");
+  const activity = imagePromptValue(vars.activity || vars.sceneText || vars.task || vars.shotDirection || vars.studioDirection || vars.sourcePrompt, "{{activity}}");
+  const backdrop = imagePromptValue(vars.backdrop || vars.location || vars.world || vars.context || vars.style || vars.authority, "{{backdrop}}");
+  const timeOfDay = imagePromptValue(vars.timeOfDay || vars.time || vars.timeContext, "{{timeOfDay}}");
+  const cameraAngle = imagePromptValue(vars.cameraAngle || vars.angle || vars.framing || vars.ratio || vars.shot || vars.shotLabel, "{{cameraAngle}}");
+  return `Scene: 1 
+
+
+
+Do this:
+
+
+
+(1) Only this character(s) appears in the scene: ${charactersList}
+
+
+
+${characterDescriptions}
+
+
+
+(2) Use this design(s) for each of their clothing (they ONLY wear this, nothing
+
+else):
+
+
+
+${clothingNames}:
+
+
+
+${clothingDesign}
+
+
+
+(3) Skip to (4)
+
+
+
+(4) This is the activity the character(s) is currently doing: ${activity}
+
+
+
+Facial expressions: suitable to the action, very passionate. :
+
+
+
+(5) Use this backdrop and remember the details to the centimeters:
+
+
+
+${backdrop}
+
+
+
+(6) The scene is set at this time of days: ${timeOfDay}
+
+
+
+(7) Use this specific angle showing the appropriate side of the space described
+
+in (5) in relation to (4): ${cameraAngle}
+
+
+
+— you must bake all instructions from 1-7,
+
+
+
+and then you must write the instructions (1-7) in 1 comprehensive sentence in
+
+the back-end, and then add these exact sentences in the back-end:
+
+
+
+“Each character(s)’s expression must match the activity that he’s doing (very
+
+expressive though). Refer to your project instructions, must be realistic to the
+
+skin pore. The atmosphere must feel thick and heavy, the kind that slows
+
+movement and breath. The moment must appear discovered, not staged — like a
+
+camera left running in the corner.
+
+
+
+— and then proceed automatically to create a picture based on your choices.
+
+Then, double check after creating the draft image to ensure everything is as
+
+asked, if wrong, fix the creation. Then, triple check now, point (4) and (7) --
+
+restate in your back end, if the draft is wrong, fix the creation.`;
+};
+const universalImageTemplateVarsForPromptRow = (row = {}) => {
+  const id = String(row?.id || "");
+  if (id === "scene.imagePrompt" || id === "image.scenePromptDirector") {
+    return { charactersList: "{{charactersList}}", characterDescriptions: "{{characters}}", clothingDesign: "{{wardrobeSeed}}", activity: "{{sceneText}}", backdrop: "{{context}}{{world}}{{worldView}}", timeOfDay: "{{timeOfDay}}", cameraAngle: "{{cameraAngle}}" };
+  }
+  if (id === "image.characterReference" || id === "character.studio.quickPortrait" || id === "character.studio.artVariant") {
+    return { charactersList: "{{characterName}}", characterDescriptions: "{{identitySeed}}{{subjectDescription}}{{character}}", clothingNames: "{{characterName}}", clothingDesign: "{{wardrobeSeed}}", activity: "{{task}}{{variant}}", backdrop: "{{context}}", timeOfDay: "{{timeOfDay}}", cameraAngle: "{{cameraAngle}}{{ratio}}" };
+  }
+  if (id === "character.studio.portfolioShot" || id.startsWith("character.studio.portfolio.")) {
+    return { charactersList: "{{characterName}}", characterDescriptions: "{{identity}}", clothingNames: "{{characterName}}", clothingDesign: "{{wardrobe}}{{wardrobePhrase}}", activity: "{{packageStyle}} {{shotDirection}}", backdrop: "{{package.label}} {{package.style}}", timeOfDay: "{{timeOfDay}}", cameraAngle: "{{shot.label}} {{shotDirection}} {{samePersonLock}} {{realismContract}}" };
+  }
+  if (id === "character.studio.editorial") {
+    return { charactersList: "{{characterName}}", characterDescriptions: "{{identity}}", clothingNames: "{{characterName}}", clothingDesign: "{{studioDirection}}", activity: "{{studioDirection}}", backdrop: "{{authority}}", timeOfDay: "{{timeOfDay}}", cameraAngle: "{{cameraAngle}}" };
+  }
+  if (id === "world.orgGroupPhotoPrompt") {
+    return { charactersList: "{{memberDescs}}", characterDescriptions: "{{members}}", clothingNames: "{{memberDescs}}", clothingDesign: "formal group portrait wardrobe appropriate to each role; do not add unrelated clothing", activity: "formal group portrait for {{orgName}}{{name}}; higher ranks center/front", backdrop: "{{world.description}}{{organization.description}}{{item.description}}", timeOfDay: "{{timeOfDay}}", cameraAngle: "formal group portrait, 4:3, all visible members framed clearly" };
+  }
+  return { sourcePrompt: row?.user || row?.promptTemplate || "{{sourcePrompt}}" };
+};
+const universalImageTemplateVarsForImageTemplateRow = (row = {}) => {
+  const id = String(row?.id || "");
+  if (id === "charArt.reference" || id === "character_portrait") return { charactersList: "{{characterName}}", characterDescriptions: "{{identitySeed}}", clothingNames: "{{characterName}}", clothingDesign: "{{wardrobeSeed}}", activity: "portrait/reference image for {{characterName}}", backdrop: "{{context}}", timeOfDay: "{{timeOfDay}}", cameraAngle: "{{cameraAngle}}{{defaultRatio}}{{ratio}}" };
+  if (id === "scene.illustration" || id === "chapter_illustration") return { charactersList: "{{charactersList}}", characterDescriptions: "{{characters}}", clothingDesign: "{{wardrobeSeed}}", activity: "{{sceneText}}", backdrop: "{{context}}{{world}}", timeOfDay: "{{timeOfDay}}", cameraAngle: "{{cameraAngle}}{{defaultRatio}}{{ratio}}" };
+  return { sourcePrompt: row?.promptTemplate || "{{sourcePrompt}}" };
+};
+const structurePromptTemplateRowForImageCreation = (row = {}) => {
+  if (!isUniversalImageStructurePromptId(row?.id)) return row;
+  const nextUser = hasUniversalImagePromptStructure(row.user) ? row.user : buildUniversalImagePromptTemplate(universalImageTemplateVarsForPromptRow(row));
+  return { ...row, user: nextUser, version: Math.max(Number(row.version || 1), 10), notes: `${row.notes || ""}${String(row.notes || "").includes("Universal 1-7 image structure") ? "" : " Universal 1-7 image structure applied."}`.trim() };
+};
+const structureImagePromptTemplateRowForImageCreation = (row = {}) => {
+  if (!UNIVERSAL_IMAGE_STRUCTURE_IMAGE_TEMPLATE_IDS.has(String(row?.id || ""))) return row;
+  const nextPromptTemplate = hasUniversalImagePromptStructure(row.promptTemplate) ? row.promptTemplate : buildUniversalImagePromptTemplate(universalImageTemplateVarsForImageTemplateRow(row));
+  return { ...row, promptTemplate: nextPromptTemplate, notes: `${row.notes || ""}${String(row.notes || "").includes("Universal 1-7 image structure") ? "" : " Universal 1-7 image structure applied."}`.trim() };
+};
+const structureImageTemplateRowForImageCreation = (row = {}) => {
+  if (!UNIVERSAL_IMAGE_STRUCTURE_IMAGE_TEMPLATE_IDS.has(String(row?.id || ""))) return row;
+  const nextPromptTemplate = hasUniversalImagePromptStructure(row.promptTemplate) ? row.promptTemplate : buildUniversalImagePromptTemplate(universalImageTemplateVarsForImageTemplateRow(row));
+  return { ...row, promptTemplate: nextPromptTemplate, notes: `${row.notes || ""}${String(row.notes || "").includes("Universal 1-7 image structure") ? "" : " Universal 1-7 image structure applied."}`.trim() };
+};
+const applyUniversalImageStructureToConfig = (config = {}) => {
+  const out = { ...config };
+  for (const key of PROMPT_TEMPLATE_TABLE_KEYS_WITH_LEGACY || []) {
+    if (Array.isArray(out[key])) out[key] = out[key].map(structurePromptTemplateRowForImageCreation);
+  }
+  if (Array.isArray(out.imagePromptTemplates)) out.imagePromptTemplates = out.imagePromptTemplates.map(structureImagePromptTemplateRowForImageCreation);
+  if (Array.isArray(out.imageTemplates)) out.imageTemplates = out.imageTemplates.map(structureImageTemplateRowForImageCreation);
+  if (Array.isArray(out.meta)) {
+    const hasRelease = out.meta.some(r => r.key === "promptStructureRelease");
+    out.meta = hasRelease
+      ? out.meta.map(r => r.key === "promptStructureRelease" ? { ...r, value: PROMPT_STRUCTURE_RELEASE } : r)
+      : [...out.meta, { key: "promptStructureRelease", value: PROMPT_STRUCTURE_RELEASE, notes: "Visible structured prompt sheets release. If you do not see this in ConfigMeta, you are not using the updated file." }];
+  }
+  return out;
+};
+const applyUniversalImagePromptStructure = (prompt = "", opts = {}) => {
+  const rawPrompt = String(prompt || "").trim();
+  if (!rawPrompt || hasUniversalImagePromptStructure(rawPrompt) || shouldExemptUniversalImagePromptStructure(rawPrompt, opts)) return rawPrompt;
+  const activity = imagePromptValue(opts.activity || opts.sceneText || opts.task || opts.sourcePrompt || rawPrompt, rawPrompt);
+  const vars = {
+    charactersList: opts.charactersList || opts.characterNames || opts.characterName || "character(s) described in the source prompt",
+    characterDescriptions: opts.characterDescriptions || opts.characters || opts.character || opts.identitySeed || opts.identity || opts.subjectDescription || "Use the character identity details from the source prompt exactly.",
+    clothingNames: opts.clothingNames || opts.characterNames || opts.characterName || opts.charactersList || "character(s) described in the source prompt",
+    clothingDesign: opts.clothingDesign || opts.wardrobeSeed || opts.wardrobe || opts.wardrobePhrase || "Use the clothing, wardrobe, and condition described in the source prompt exactly; do not add anything else.",
+    activity: `${activity}${rawPrompt && activity !== rawPrompt ? `\n\nSource prompt to infuse into this activity and all visual choices:\n${rawPrompt}` : ""}`,
+    backdrop: opts.backdrop || opts.location || opts.world || opts.context || "Use the backdrop/location/environment described in the source prompt exactly.",
+    timeOfDay: opts.timeOfDay || opts.time || opts.timeContext || "Use the time of day and lighting described in the source prompt exactly.",
+    cameraAngle: opts.cameraAngle || opts.angle || opts.framing || opts.ratio || opts.aspectRatio || "Use the camera angle, framing, lens, color temperature, and flash instructions described in the source prompt exactly.",
+  };
+  return buildUniversalImagePromptTemplate(vars);
 };
 const sheetRowsToObjects = (values = []) => {
   const [headers, ...rows] = values || [];
@@ -5992,17 +6250,17 @@ const buildDefaultAppConfig = () => ({
     ]),
   ],
   promptTemplates: [],
-  ...splitPromptTemplatesByArea(DETAILED_PROMPT_TEMPLATES),
+  ...splitPromptTemplatesByArea(DETAILED_PROMPT_TEMPLATES.map(structurePromptTemplateRowForImageCreation)),
   imagePromptTemplates: [
     { id: "charArt.reference", section: "characterArt", variant: "reference", label: "Reference portrait", promptTemplate: "Reference art for {{characterName}}.\n\nIDENTITY:\n{{identitySeed}}\n\nWARDROBE:\n{{wardrobeSeed}}\n\nDo not use prior generated images for identity. Preserve look-alike, clothing, accessories, and permanent marks.", ratio: "3:4", active: "TRUE", sort: 10, notes: "Full prompt identity injection" },
     { id: "scene.illustration", section: "scene", variant: "chapter-illustration", label: "Chapter illustration", promptTemplate: "Cinematic chapter illustration.\n\nScene:\n{{sceneText}}\n\nVisible details only. No text overlays.", ratio: "16:9", active: "TRUE", sort: 20, notes: "General scene image" },
-  ],
+  ].map(structureImagePromptTemplateRowForImageCreation),
   characterTemplates: DEFAULT_CHARACTER_TEMPLATES_UX,
   imageTemplates: [
     { id: "character_portrait", label: "Character portrait", category: "Character", promptTemplate: "Portrait of {{characterName}} using identity: {{identitySeed}}", requiredSource: "character", defaultRatio: "3:4", destination: "character.moodBoard", active: "TRUE", sort: 10, notes: "" },
     { id: "chapter_illustration", label: "Chapter illustration", category: "Scene", promptTemplate: "Illustrate this scene: {{sceneText}}", requiredSource: "chapter", defaultRatio: "16:9", destination: "chapter.image", active: "TRUE", sort: 20, notes: "" },
     { id: "location_shot", label: "Location establishing shot", category: "World", promptTemplate: "Establishing shot of {{worldName}}: {{description}}", requiredSource: "world", defaultRatio: "16:9", destination: "world.reference", active: "TRUE", sort: 30, notes: "" },
-  ],
+  ].map(structureImageTemplateRowForImageCreation),
   imageRules: [
     { id: "inbox", trigger: "new image", conditionJSON: '{"source":"empty"}', action: "send_to_inbox", destination: "imageInbox", active: "TRUE", sort: 10, notes: "Unsourced images stay reviewable" },
     { id: "hideRejected", trigger: "quality rejected", conditionJSON: '{"qualityState":"rejected"}', action: "hide_from_default", destination: "review", active: "TRUE", sort: 20, notes: "Rejected images are hidden by default, not deleted" },
@@ -6039,10 +6297,10 @@ const normalizeAppConfig = (raw = {}) => {
   } else {
     out.promptTemplates = defaultsStructured.filter(r => cfgBool(r.active, true));
   }
-  return out;
+  return applyUniversalImageStructureToConfig(out);
 };
 const configForSheetWrite = (config = {}) => {
-  const out = { ...config };
+  const out = applyUniversalImageStructureToConfig({ ...config });
   const mergedPrompts = mergePromptTemplateRows(
     ...PROMPT_TEMPLATE_TABLE_KEYS.map(k => out[k] || []),
     out.promptTemplates || []
@@ -6059,7 +6317,7 @@ const configForSheetWrite = (config = {}) => {
 const getCfgOptions = (config, group, fallback = []) => {
   const rows = (config?.dropdowns || []).filter(r => r.group === group && cfgBool(r.active, true));
   if (!rows.length) return fallback;
-  return rows.map(r => ({ value: r.value, label: r.label || r.value, ...(parseJSONSafe(r.metadataJSON, {})) }));
+  return rows.map(r => ({ ...(parseJSONSafe(r.metadataJSON, {})), value: r.value, label: r.label || r.value }));
 };
 const loadCachedAppConfig = () => {
   try { return normalizeAppConfig(JSON.parse(localStorage.getItem(LS_APP_CONFIG_CACHE) || "null") || buildDefaultAppConfig()); }
@@ -6771,7 +7029,9 @@ const ConfigSheets = {
       const structuredCount = countStructuredTextPrompts(normalized);
       const legacyCount = (raw.promptTemplates || []).length;
       const defaultCount = countStructuredTextPrompts(buildDefaultAppConfig());
-      if (structuredCount < defaultCount || legacyCount > 0) return this.mergeDefaults();
+      const releaseRow = (raw.meta || []).find(r => r.key === "promptStructureRelease");
+      const stalePromptStructure = releaseRow?.value !== PROMPT_STRUCTURE_RELEASE;
+      if (structuredCount < defaultCount || legacyCount > 0 || stalePromptStructure) return this.mergeDefaults({ forcePromptStructureRepair: stalePromptStructure });
     }
     return normalized;
   },
@@ -6915,7 +7175,7 @@ const ConfigSheets = {
     await this.formatForHumans().catch(e => console.warn("[NovelForge] Sheet formatting skipped:", e.message));
     return normalizeAppConfig(sheetConfig);
   },
-  async mergeDefaults() {
+  async mergeDefaults({ forcePromptStructureRepair = false } = {}) {
     const current = await this.loadRaw();
     const defaults = configForSheetWrite(buildDefaultAppConfig());
     const keyFieldFor = (tableKey) => (tableKey === "meta" || tableKey === "uiStrings" || tableKey === "defaults") ? "key" : "id";
@@ -6939,7 +7199,8 @@ const ConfigSheets = {
       }
       merged[tableKey] = rows;
     }
-    return this.saveRaw(merged);
+    const repaired = forcePromptStructureRepair ? applyUniversalImageStructureToConfig(merged) : merged;
+    return this.saveRaw(repaired);
   },
   async save(config) {
     const id = this.getSpreadsheetId();
@@ -10243,133 +10504,6 @@ const detectCursorBeat = (el) => {
     }
   }
   return activeBeatId;
-};
-
-
-// ─── UNIVERSAL CHARACTER/SCENE IMAGE PROMPT STRUCTURE ───
-// Injected into all character/scene image creation prompts. Logo and place-only renders are exempt.
-const NF_IMAGE_PROMPT_STRUCTURE_MARKER = "NF_IMAGE_CREATION_STRUCTURE_V1";
-const NF_IMAGE_PROMPT_EXACT_TAIL = `Each character(s)’s expression must match the activity that he’s doing (very expressive though). Refer to your project instructions, must be realistic to the skin pore. The atmosphere must feel thick and heavy, the kind that slows movement and breath. The moment must appear discovered, not staged — like a camera left running in the corner.`;
-const NF_IMAGE_PROMPT_QA_TAIL = `— and then proceed automatically to create a picture based on your choices. Then, double check after creating the draft image to ensure everything is as asked, if wrong, fix the creation. Then, triple check now, point (4) and (7) -- restate in your back end, if the draft is wrong, fix the creation.`;
-const _nfPromptText = (v, fallback = "") => {
-  const txt = String(v ?? "").replace(/\s+/g, " ").trim();
-  return txt || fallback;
-};
-const _nfImageCharacterName = (c) => _nfPromptText(c?.name, "the character");
-const _nfImageCharacterDossier = (c) => {
-  if (!c) return "Use the complete character identity supplied in the source prompt; do not invent a new person.";
-  const name = _nfImageCharacterName(c);
-  const bits = [];
-  bits.push(`${name} is ${_nfPromptText(c.age, "an adult")} ${_nfPromptText(c.gender, "person")}${c.ethnicity ? ` of ${c.ethnicity} descent` : ""}.`);
-  if (c.height || c.build || c.appearance) bits.push([c.height && `Height: ${c.height}.`, c.build && `Build: ${c.build}.`, c.appearance && `Appearance: ${c.appearance}`].filter(Boolean).join(" "));
-  if (c.skinTone || c.hair || c.eyes) bits.push([c.skinTone && `Skin tone: ${c.skinTone}.`, c.hair && `Hair: ${c.hair}.`, c.eyes && `Eyes: ${c.eyes}.`].filter(Boolean).join(" "));
-  if (c.permanentMarks) bits.push(`Permanent marks: ${c.permanentMarks}`);
-  if (c.lookAlike) bits.push(`His face is... let's say most people will mistake him with ${c.lookAlike}. Hahaha.`);
-  else if (c.face) bits.push(`Face: ${c.face}`);
-  return bits.filter(Boolean).join("\n\n") || `${name}: use the complete identity supplied in the source prompt.`;
-};
-const _nfImageWardrobeLine = (c, fallback = "Only the clothing specified in the source prompt; add nothing else.") => {
-  const parts = [c?.artWardrobe, c?.artAccessories, c?.clothing, c?.defaultOutfit, c?.signatureItems].filter(v => _nfPromptText(v));
-  return parts.length ? `${_nfImageCharacterName(c)}: ${parts.map(v => _nfPromptText(v)).join(", ")}` : fallback;
-};
-const _nfIsLogoOrPlaceImagePrompt = (prompt = "", opts = {}) => {
-  if (opts?.exemptImageStructure) return true;
-  const kind = String(opts?.promptKind || opts?.imageKind || opts?.type || "").toLowerCase();
-  if (["logo", "place", "location", "room", "world", "worldroom", "wall", "place-only"].includes(kind)) return true;
-  const txt = String(prompt || "").toLowerCase();
-  if (/\b(logo|emblem|crest|icon-only)\b/.test(txt)) return true;
-  if (/\b(no people|without people|empty room|architectural visualization|establishing shot|wall view|master room shot|same room|room dimensions|flooring|ceiling|furniture|location establishing shot)\b/.test(txt) && !/\b(character|portrait|person|people|man|woman|face|expression|pose|wearing|clothing)\b/.test(txt)) return true;
-  return false;
-};
-const applyUniversalImagePromptStructure = (prompt, opts = {}) => {
-  const sourcePrompt = String(prompt || "").trim();
-  if (!sourcePrompt || sourcePrompt.includes(NF_IMAGE_PROMPT_STRUCTURE_MARKER) || _nfIsLogoOrPlaceImagePrompt(sourcePrompt, opts)) return sourcePrompt;
-
-  const charList = Array.isArray(opts.characters) ? opts.characters.filter(Boolean) : (opts.character ? [opts.character] : []);
-  const charNames = (opts.characterNames || charList.map(_nfImageCharacterName)).filter(Boolean);
-  const characterLine = _nfPromptText(opts.characterLine || charNames.join(", "), "the character(s) specified in the source prompt");
-  const characterDossier = _nfPromptText(opts.characterDossier || (charList.length ? charList.map(_nfImageCharacterDossier).join("\n\n") : ""), "Use only the character identity, look-alike, body, skin, hair, marks, expression, and presence supplied in the source prompt; do not invent extra characters.");
-  const wardrobeLine = _nfPromptText(opts.wardrobeLine || opts.wardrobe || (charList.length ? charList.map(c => _nfImageWardrobeLine(c)).join("\n") : ""), "Use only the clothing stated in the source prompt; if clothing is unseen because of the crop or angle, do not invent visible garments.");
-  const activity = _nfPromptText(opts.activity || opts.sceneText || opts.task || opts.action, sourcePrompt);
-  const expression = _nfPromptText(opts.expression || opts.facialExpression, "suitable to the action, very expressive and physically believable.");
-  const backdrop = _nfPromptText(opts.backdrop || opts.location || opts.world || opts.environment, "Use the backdrop, location, room, props, and reference-image details supplied in the source prompt; keep them physically consistent.");
-  const timeOfDay = _nfPromptText(opts.timeOfDay || opts.time || opts.lightingTime, "Use the time-of-day and lighting cues supplied in the source prompt.");
-  const camera = _nfPromptText(opts.camera || opts.angle || opts.framing, "Use the camera angle, crop, lens, framing, aspect ratio, light color temperature, and flash/no-flash instructions supplied in the source prompt.");
-  const sceneNumber = _nfPromptText(opts.sceneNumber, "1");
-  const comprehensiveSentence = `Scene ${sceneNumber} must show only ${characterLine}, wearing only ${wardrobeLine.replace(/\n+/g, "; ")}, doing ${activity.replace(/\n+/g, " ")}, with expressions ${expression}, in ${backdrop.replace(/\n+/g, " ")}, at ${timeOfDay}, photographed with ${camera}.`;
-
-  return `${NF_IMAGE_PROMPT_STRUCTURE_MARKER}
-
-Scene: ${sceneNumber}
-
-
-
-Do this:
-
-
-
-(1) Only this character(s) appears in the scene: ${characterLine}
-
-
-
-${characterDossier}
-
-
-
-(2) Use this design(s) for each of their clothing (they ONLY wear this, nothing else):
-
-
-
-${wardrobeLine}
-
-
-
-(3) Skip to (4)
-
-
-
-(4) This is the activity the character(s) is currently doing: ${activity}
-
-
-
-Facial expressions: ${expression} :
-
-
-
-(5) Use this backdrop and remember the details to the centimeters:
-
-
-
-${backdrop}
-
-
-
-(6) The scene is set at this time of days: ${timeOfDay}
-
-
-
-(7) Use this specific angle showing the appropriate side of the space described in (5) in relation to (4): ${camera}
-
-
-
-— you must bake all instructions from 1-7,
-
-
-
-BACK-END COMPREHENSIVE SENTENCE: ${comprehensiveSentence}
-
-
-
-“${NF_IMAGE_PROMPT_EXACT_TAIL}”
-
-
-
-${NF_IMAGE_PROMPT_QA_TAIL}
-
-
-
-SOURCE PROMPT DETAILS TO PRESERVE VERBATIM:
-${sourcePrompt}`;
 };
 
 // ─── VISUAL NOVEL IMAGE PROMPT GENERATOR ───
@@ -18116,9 +18250,9 @@ Rules:
   const runCharacterArtJob = useCallback(async (job) => {
     setCharacterArtJobs(prev => ({ ...prev, [job.id]: { ...job, status: "generating", error: "", updatedAt: new Date().toISOString() } }));
     try {
-      const c = (project?.characters || []).find(x => x.id === job.charId) || job.char || {};
-      const img = await _genSingleImageRef.current(job.prompt, job.ratio, null, { title: job.caption || "Generate character art", detail: "Building character image", promptKind: "character", character: c, characters: [c], activity: job.caption || job.variant || "character reference art", camera: `Aspect ratio ${job.ratio || "3:4"}` });
+      const img = await _genSingleImageRef.current(job.prompt, job.ratio, null, { title: job.caption || "Generate character art", detail: "Building character image", promptKind: "character", promptId: "character.studio.artVariant", characterName: job.char?.name, identitySeed: buildCharacterIdentitySeed(job.char || {}), wardrobeSeed: buildCharacterWardrobeSeed(job.char || {}) });
       if (!img) throw new Error("Image API returned no image");
+      const c = (project?.characters || []).find(x => x.id === job.charId) || job.char || {};
       const imageId = uid();
       const prev = Array.isArray(c.moodBoard) ? c.moodBoard : [];
       updateCharById(job.charId, "moodBoard", [...prev, { id: imageId, data: img, caption: job.caption, addedAt: new Date().toISOString(), genKind: job.variant, genPrompt: job.prompt, parentId: null, aspectRatio: job.ratio, sceneChapterIdx: activeChapterIdx, qa: _lastImageQaRef.current }]);
@@ -18306,7 +18440,7 @@ Rules:
           : fallbackPrompt;
         // Text-only identity lock: never pass previous portfolio shots or style images as references.
         let img = null;
-        try { img = await _genSingleImageRef.current(prompt, shot.framing, null, { title: `${portfolioLabel} · ${shot.label}`, detail: `Portfolio shot ${i + 1}/${total}`, promptKind: "character", character: char, characters: [char], wardrobe, activity: shot.direction, backdrop: pkg.style, camera: `Model portfolio shot, ${shot.framing} framing` }); } catch { img = null; }
+        try { img = await _genSingleImageRef.current(prompt, shot.framing, null, { title: `${portfolioLabel} · ${shot.label}`, detail: `Portfolio shot ${i + 1}/${total}`, promptKind: "character", promptId: `character.studio.portfolio.${pkgKey}.${shot.key}`, characterName: char.name, identity, wardrobe, activity: `${pkg.style} ${shot.direction}`, backdrop: pkg.style, cameraAngle: `${shot.label}: ${shot.direction}` }); } catch { img = null; }
         if (img) {
           const shotItem = { id: uid(), data: img, caption: shot.label, shotKey: shot.key, addedAt: new Date().toISOString(), genKind: `portfolio:${pkgKey}`, genPrompt: prompt, aspectRatio: shot.framing, portfolioId, qa: _lastImageQaRef.current };
           results.push(shotItem);
@@ -18346,7 +18480,7 @@ Rules:
     setImageRedoBusy(imageId);
     showToast("Redoing image from text prompt only…", "info");
     try {
-      const nextImg = await _genSingleImageRef.current(prompt, ratio, null, { title: "Redo generated image", detail: "Regenerating from saved text prompt" });
+      const nextImg = await _genSingleImageRef.current(prompt, ratio, null, { title: "Redo generated image", detail: "Regenerating from saved text prompt", promptKind: "character" });
       if (!nextImg) { showToast("Redo failed", "error"); return; }
       const redoneAt = new Date().toISOString();
       setProjects(prev => prev.map(p => {
@@ -18421,7 +18555,7 @@ ${studioDirection}`;
 
 ${liveStyleRefTpl?.user ? renderConfigTemplate(liveStyleRefTpl.user, { character: char, studio }) : "Use the attached image ONLY as a loose reference for color grading, grain, and overall mood. Do NOT copy its clothing, pose, or background — those are defined by the direction above."}`;
       }
-      const img = await _genSingleImageRef.current(prompt, ratio, refs, { promptKind: "character", character: char, characters: [char], activity: studioDirection || "editorial studio photograph", backdrop: hasBackdrop ? studioDirection : "clean, simple, neutral studio background unless the direction says otherwise", camera: `Editorial Studio, ${ratio} framing` });
+      const img = await _genSingleImageRef.current(prompt, ratio, refs, { title: "Editorial Studio", detail: "Generating character editorial image", promptKind: "character", promptId: "character.studio.editorial", characterName: char.name, identity, clothingDesign: studioDirection, activity: studioDirection, backdrop: authority, cameraAngle: ratio });
       if (img) {
         const prev = char.moodBoard || [];
         const parentId = prev.length ? prev[prev.length - 1].id : null;
@@ -20482,10 +20616,10 @@ CRITICAL: Every sentence must describe something visible. If a detail cannot be 
     const refs = (Array.isArray(referenceImages) ? referenceImages : [])
       .filter(u => typeof u === "string" && (u.startsWith("data:") || u.startsWith("http")))
       .slice(0, 4);
-    const basePrompt = applyUniversalImagePromptStructure(prompt, activity || {});
     const activityId = activity?.id || startAiActivity(activity?.title || "Generate image", activity?.detail || "Preparing image request");
     const activityTitle = activity?.title || "Generate image";
     updateAiActivity(activityId, { title: activityTitle, detail: activity?.detail || "Preparing prompt and image settings", status: "working", done: 0, total: QUALITY_MAX_ATTEMPTS });
+    const structuredPrompt = applyUniversalImagePromptStructure(prompt, { ...activity, aspectRatio });
 
     const extractImageUrl = (data) => {
       const message = data?.choices?.[0]?.message;
@@ -20577,7 +20711,7 @@ CRITICAL: Every sentence must describe something visible. If a detail cannot be 
         aspectRatio ? `Requested aspect ratio: ${aspectRatio}.` : null,
         'Return JSON only with this shape: {"verdict":"pass"|"redo","reason":"short reason","must_fix":"specific correction instructions if redo, else empty string"}.',
         "Original prompt:",
-        basePrompt.trim(),
+        structuredPrompt.trim(),
       ].filter(Boolean).join("\n\n");
 
       const body = {
@@ -20638,7 +20772,7 @@ CRITICAL: Every sentence must describe something visible. If a detail cannot be 
 IMPORTANT: The previous image failed QA review. Regenerate from scratch and correct these issues while keeping the original prompt faithful:
 ${lastReview.mustFix || lastReview.reason}`
           : "";
-        const effectivePrompt = `${basePrompt.trim()}${correctiveTail}`;
+        const effectivePrompt = `${structuredPrompt.trim()}${correctiveTail}`;
         const candidate = await generateCandidate(effectivePrompt);
         if (!candidate) continue;
         lastCandidate = candidate;
@@ -20679,14 +20813,14 @@ ${lastReview.mustFix || lastReview.reason}`
   }, [settings.apiKey, settings.imageModel, startAiActivity, updateAiActivity, finishAiActivity]);
   useEffect(() => { _genSingleImageRef.current = _generateSingleImage; }, [_generateSingleImage]);
 
-  const handleGenerateImage = useCallback(async (prompt, use4x = false, aspectRatio = null, referenceImages = null, promptContext = {}) => {
+  const handleGenerateImage = useCallback(async (prompt, use4x = false, aspectRatio = null, referenceImages = null) => {
     if (!settings.apiKey || !prompt?.trim()) return;
 
     if (!use4x) {
       // Single image mode — use selected aspect ratio
       setImageGenStatus({ status: "generating", imageUrl: null, images: null, retryCount: 0, error: null });
       try {
-        const imageUrl = await _generateSingleImage(prompt, aspectRatio, referenceImages, promptContext);
+        const imageUrl = await _generateSingleImage(prompt, aspectRatio, referenceImages, { promptKind: "scene", activity: prompt, cameraAngle: aspectRatio });
         if (imageUrl) {
           setImageGenStatus({ status: "done", imageUrl, images: null, retryCount: 0, error: null, qa: _lastImageQaRef.current });
         } else {
@@ -20722,7 +20856,7 @@ ${lastReview.mustFix || lastReview.reason}`
         return { ...prev, images: imgs };
       });
       try {
-        const imageUrl = await _generateSingleImage(prompt, r.ratio, referenceImages, promptContext);
+        const imageUrl = await _generateSingleImage(prompt, r.ratio, referenceImages, { promptKind: "scene", activity: prompt, cameraAngle: r.ratio });
         setImageGenStatus(prev => {
           if (!prev?.images) return prev;
           const imgs = [...prev.images];
@@ -20785,7 +20919,7 @@ ${lastReview.mustFix || lastReview.reason}`
         : `Ultra-wide 14mm establishing photograph taken from the CENTER of this room, showing as much of all four walls, the floor and ceiling as possible in one frame. Photorealistic, no people, no text.\n\nROOM: ${item.description || item.name || "interior room"}`;
       // Master uses any pre-uploaded wall images as soft references if present, else pure text.
       const seedRefs = WALL_KEYS.map(k => (item.referenceImages || {})[k]).filter(Boolean).slice(0, 4);
-      const m = await _generateSingleImage(masterPrompt, "16:9", seedRefs.length ? seedRefs : null, { promptKind: "place", exemptImageStructure: true, title: "Render master room", detail: "Place-only master establishing shot" });
+      const m = await _generateSingleImage(masterPrompt, "16:9", seedRefs.length ? seedRefs : null, { promptKind: "place", exemptImageStructure: true });
       if (m) { masterUrl = m; persistMaster(m); }
     } catch (e) {
       showToast(`Master render failed: ${e.message?.replace(/sk-[a-zA-Z0-9]+/g, "sk-***") || "error"}`, "error");
@@ -20811,7 +20945,7 @@ The FIRST attached image is the master photograph of this exact room. ${WALL_REF
       // Always anchor to the master FIRST, then include up to 3 already-rendered walls for extra coherence.
       const refsForThisWall = [masterUrl, ...WALL_KEYS.filter(k => k !== wallKey).map(k => updatedRefs[k]).filter(Boolean)].slice(0, 4);
       try {
-        const imageUrl = await _generateSingleImage(reframePrompt, "4:3", refsForThisWall, { promptKind: "place", exemptImageStructure: true, title: "Render room wall", detail: "Place-only wall reframe" });
+        const imageUrl = await _generateSingleImage(reframePrompt, "4:3", refsForThisWall, { promptKind: "place", exemptImageStructure: true });
         if (imageUrl) {
           updatedRefs[wallKey] = imageUrl;
           okCount++;
@@ -21795,18 +21929,15 @@ The FIRST attached image is the master photograph of this exact room. ${WALL_REF
       setStyleTestBusy(true);
       setStyleTestResults([]);
       const prompts = [
-        `Style test portrait for ${project.characters?.[0]?.name || "main character"}. Use the project's style lock for lighting, palette, texture, and art direction only. Do not use it for identity.`,
-        `Style test scene still for ${project.title || "the story"}. Cinematic composition, clear subject, consistent lighting, palette, texture, and art direction from the style lock.`,
-        `Style test location establishing shot for ${project.title || "the story"}. Show environment design and atmosphere with the style lock's color, lighting, and texture.`
+        { prompt: `Style test portrait for ${project.characters?.[0]?.name || "main character"}. Use the project's style lock for lighting, palette, texture, and art direction only. Do not use it for identity.`, promptKind: "character" },
+        { prompt: `Style test scene still for ${project.title || "the story"}. Cinematic composition, clear subject, consistent lighting, palette, texture, and art direction from the style lock.`, promptKind: "scene" },
+        { prompt: `Style test location establishing shot for ${project.title || "the story"}. Show environment design and atmosphere with the style lock's color, lighting, and texture.`, promptKind: "place", exemptImageStructure: true }
       ];
       const out = [];
-      for (let i = 0; i < prompts.length; i++) {
-        const prompt = prompts[i];
+      for (const test of prompts) {
+        const prompt = test.prompt;
         try {
-          const ctx = i === 2
-            ? { promptKind: "place", exemptImageStructure: true, title: "Style test location", detail: "Place-only style test" }
-            : { promptKind: i === 0 ? "character" : "scene", characters: i === 0 && project.characters?.[0] ? [project.characters[0]] : [], activity: prompt, backdrop: "Project style-lock image controls lighting, palette, texture, and art direction.", camera: "1:1 style test frame" };
-          const img = await _genSingleImageRef.current(prompt, "1:1", [project.styleLockImage], ctx);
+          const img = await _genSingleImageRef.current(prompt, "1:1", [project.styleLockImage], test);
           if (img) out.push({ id: uid(), imageUrl: img, prompt, createdAt: new Date().toISOString() });
         } catch (e) {
           out.push({ id: uid(), error: e.message || "Style test failed", prompt });
@@ -22862,73 +22993,26 @@ When the selected text says a character "emerged from" a bedroom, alcove, bathro
 ABSOLUTE RULE #6 — PROPS DON'T TRAVEL AFTER BEING PUT DOWN:
 If the selected text shows a character putting down an object (setting down a mug, dropping a plate, leaving a bag), that object stays where it was put down. It does not appear in the character's hand in the next moment or in a different room. Track object state: if Ryker "set it down with a clink," the mug is on the counter in the apartment — it is NOT in his hand when he's getting dressed, and it is NOT in the stairwell.
 
-YOUR OUTPUT FORMAT (follow this EXACTLY; infuse the variables from the selected text, character profiles, world view, and location references):
+YOUR OUTPUT FORMAT (follow this EXACTLY):
 
-Scene: 1
+(Include this sentence) You must decide your choices on 1-7 sequentially & completely, no summarizing) before rendering! See this instructions: For next scene, still adhering to the character’s profile, do this:
 
+(1) CHARACTER APPEARANCE: For each character, the look-alike IS the face — state it as the single face authority and do NOT describe individual facial features (eyes, nose, lips, jaw, brows, cheekbones); re-describing the face competes with the look-alike and makes it drift. Describe only: build, height, skin tone, hair, and expression in THIS scene. Write it as if describing a real person to a photographer, and always phrase the face as "with the exact face of [look-alike name], unmistakably [look-alike name]'s face". VISUAL ONLY — no sound, no smell, no sensation.
 
+(2) CLOTHING: USE THE CLOTHING FROM THE WORLD VIEW — the world view tracks what characters are wearing scene-by-scene. Find the matching scene and use those exact clothing details. Do NOT invent new outfits. Every detail must be something a camera can see: color, fabric, fit, condition. Never describe what's under the clothing. Treats nudity like this: add a foreground blurred item(s) that blocks that specific sensitive body part without mentioning those body part(s).
 
-Do this:
+(3) ACTIVITY / POSE: Describe the EXACT physical positions, poses, gestures, and interactions. Who is where, doing what, touching what, looking where. Be specific about body angles, hand positions, weight distribution, and spatial relationships between characters. VISUAL ONLY — describe positions, not sensations.
 
+(4) EXPRESSION: Describe the EXACT face expression of each character in the scene.
 
+(5) BACKDROP / LOCATION: Describe the EXACT environment. ONE physical space only. If a detailed location spec is provided, use it verbatim. If the scene is outside or in an unregistered location, create a detailed environment description from context clues. Keep to what's physically present — objects, surfaces, light sources, colors, textures. No sounds, no smells, no weather sensations unless visible (rain droplets on surfaces are visible; "pattering" rain is not).
 
-(1) Only this character(s) appears in the scene: [comma-separated character names from the selected scene only]
+(6) TIME OF DAY: State the specific time and its LIGHTING effects — sun angle, shadow direction, artificial light sources, color temperature of light, ambient light quality. Describe light, not weather sensations.
 
+(7) CAMERA SETTINGS: Specify lens, aperture, distance, framing, and whether characters are cropped or full-body. Do not specify aspect ratios.
 
-
-[For each character: write a complete visible dossier from the character profile. Use the look-alike as the single face authority. State it in this style: "His face is... let's say most people will mistake him with [look-alike]. Hahaha." Do not invent extra characters.]
-
-
-
-(2) Use this design(s) for each of their clothing (they ONLY wear this, nothing else):
-
-
-
-[For each character: use only clothing visible or explicitly specified in the selected scene/world view/source prompt. If the angle hides clothing, say it is not seen because of the angle instead of inventing garments.]
-
-
-
-(3) Skip to (4)
-
-
-
-(4) This is the activity the character(s) is currently doing: [state the exact visible activity from the selected scene]
-
-
-
-Facial expressions: suitable to the action, very expressive. :
-
-
-
-(5) Use this backdrop and remember the details to the centimeters:
-
-
-
-[Use the exact matched backdrop/location/reference image details. One physical space only.]
-
-
-
-(6) The scene is set at this time of days: [state exact time-of-day from the selected scene, world view, or source prompt]
-
-
-
-(7) Use this specific angle showing the appropriate side of the space described in (5) in relation to (4): [state the exact camera angle, framing, lens, crop, aspect ratio, color temperature, and flash/no-flash rules]
-
-
-
-— you must bake all instructions from 1-7,
-
-
-
-BACK-END COMPREHENSIVE SENTENCE: [write instructions (1)-(7) as one comprehensive sentence, with all variables resolved.]
-
-
-
-“Each character(s)’s expression must match the activity that he’s doing (very expressive though). Refer to your project instructions, must be realistic to the skin pore. The atmosphere must feel thick and heavy, the kind that slows movement and breath. The moment must appear discovered, not staged — like a camera left running in the corner.”
-
-
-
-— and then proceed automatically to create a picture based on your choices. Then, double check after creating the draft image to ensure everything is as asked, if wrong, fix the creation. Then, triple check now, point (4) and (7) -- restate in your back end, if the draft is wrong, fix the creation.
+End with this EXACT paragraph:
+"Each character(s)’s expression must match the activity that he’s doing (very expressive though). Most importantly, this is a candid shot so the character must not be looking towards us unless it’s a POV angle, and framing must include slight misalignment, a hint of motion blur, or a cropped edge as if caught unintentionally. The scene is 50 degree celcius, 100% humidity, but no excessive fogging, just sweat. They have been training for hours too — so much more sweat, drenched even. It’s okay if their faces or bodies aren’t visible, depending on the camera angle or obstruction. Play with depth using foreground (blurred object) and background (abundance of items & decor) framing and bokeh. Refer to your project instructions, must be realistic to the skin pore. The atmosphere must feel thick and heavy, the kind that slows movement and breath. The moment must appear discovered, not staged — like a camera left running in the corner. Use the camera’s bright flash on the subject."
 
 CRITICAL RULES:
 - NEVER say "analyze", "determine", "infer from context" — YOU must have already done the analysis
@@ -23001,7 +23085,8 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
 
                 // Mark main prompt as done
                 if (imagePromptAbortRef.current === abortController) {
-                  setImagePromptData(prev => prev ? { ...prev, prompt: aiPrompt || "(AI returned empty)", isGenerating: false } : null);
+                  const structuredAiPrompt = applyUniversalImagePromptStructure(aiPrompt || jsFallback || "", { promptKind: "scene", promptId: "image.scenePromptDirector", charactersList: contextData.mentionedChars.map(c => c.name).join(", ") || "characters described in the selected text", characterDescriptions: contextData.mentionedChars.map(c => `${c.name}: ${_stripFacialClauses(c.appearance) || "appearance not set"}${c.lookAlike ? `; face is exactly ${c.lookAlike}'s face` : ""}`).join("\n\n"), activity: effectiveText.slice(0, 12000), backdrop: contextData._backdropRaw || "Use the selected scene location.", timeOfDay: contextData._timeRaw || "Determine from scene", cameraAngle: contextData._cameraDefaults || "50mm f/2.8" });
+                  setImagePromptData(prev => prev ? { ...prev, prompt: structuredAiPrompt || "(AI returned empty)", isGenerating: false } : null);
                   imagePromptAbortRef.current = null;
                 }
 
@@ -24590,16 +24675,7 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                     const currentPrompt = imagePromptData._showDesensitized && imagePromptData.desensitizedPrompt ? imagePromptData.desensitizedPrompt : imagePromptData.prompt;
                     // Attach location reference images (image-to-image) so the scene renders INSIDE the location.
                     const refImgs = imagePromptData._useLocationRefs === false ? null : (imagePromptData.worldRefImages || null);
-                    handleGenerateImage(currentPrompt, imageGen4x, imageGenAspect || null, refImgs, {
-                      promptKind: "scene",
-                      sceneNumber: 1,
-                      characters: imagePromptData.mentionedChars || [],
-                      sceneText: selectedText || currentPrompt,
-                      activity: selectedText || currentPrompt,
-                      backdrop: imagePromptData._backdropRaw || "Use the selected scene location and attached backdrop references.",
-                      timeOfDay: imagePromptData._timeRaw || "Use the selected scene time cues.",
-                      camera: imagePromptData._cameraDefaults || "Use the selected scene camera direction.",
-                    });
+                    handleGenerateImage(currentPrompt, imageGen4x, imageGenAspect || null, refImgs);
                   }} disabled={imageGenStatus?.status === "generating"} className="nf-btn nf-btn-primary" style={{ fontSize: 11, padding: "6px 14px" }}>
                     {imageGenStatus?.status === "generating" ? <><Spinner /> Generating...</> : <><Icons.Sparkle /> {imageGen4x ? "Generate 4 Variants" : "Generate Image"}</>}
                   </button>
@@ -25443,7 +25519,7 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                           ? renderConfigTemplate(livePortraitTpl.user, { character: editingChar, characterName: editingChar.name || "the character", subjectDescription, lookAlikeLock, wardrobe })
                           : fallbackPortraitPrompt;
                         const prompt = String(rawPrompt || fallbackPortraitPrompt);
-                        const imageUrl = await _genSingleImageRef.current(prompt, "3:4", null, { id: portraitActivityId, title: "Generate AI Portrait", detail: `Portrait for ${editingChar.name || "character"}`, promptKind: "character", character: editingChar, characters: [editingChar], activity: "model catalogue portrait", backdrop: "pure solid white (#FFFFFF) background", camera: "strict upper-body portrait, eye level, 3:4" });
+                        const imageUrl = await _genSingleImageRef.current(prompt, "3:4", null, { id: portraitActivityId, title: "Generate AI Portrait", detail: `Portrait for ${editingChar.name || "character"}`, promptKind: "character", promptId: "character.studio.quickPortrait", characterName: editingChar.name, subjectDescription, cameraAngle: "3:4 portrait" });
                         if (imageUrl) {
                           updateCharById(editingCharId, "image", imageUrl);
                           const qa = _lastImageQaRef.current;
@@ -27173,7 +27249,7 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                                     if (!settings.apiKey || !item.name) { showToast("Name the org and set API key first", "error"); return; }
                                     showToast("Generating logo...", "info");
                                     try {
-                                      const img = await _genSingleImageRef.current(`Create a simple, clean logo/emblem/crest for an organization called "${item?.name || "unnamed"}". ${item.orgPurpose ? `Purpose: ${item.orgPurpose}. ` : ""}Style: minimalist Japandi aesthetic, clean lines, muted earth tones, on a plain dark background. Square format, icon-only, no text.`, "1:1", null, { promptKind: "logo", exemptImageStructure: true, title: "Generate logo", detail: "Logo-only render" });
+                                      const img = await _genSingleImageRef.current(`Create a simple, clean logo/emblem/crest for an organization called "${item?.name || "unnamed"}". ${item.orgPurpose ? `Purpose: ${item.orgPurpose}. ` : ""}Style: minimalist Japandi aesthetic, clean lines, muted earth tones, on a plain dark background. Square format, icon-only, no text.`, "1:1", null, { promptKind: "logo", promptId: "world.orgLogo", exemptImageStructure: true });
                                       if (img) { updateProject({ worldBuilding: items.map(it => it.id === item.id ? { ...it, logoImage: img } : it) }); showToast("Logo generated", "success"); }
                                       else showToast("No image returned", "error");
                                     } catch (e) { showToast(`Failed: ${e.message?.replace(/sk-[a-zA-Z0-9]+/g, "sk-***") || "Unknown error"}`, "error"); }
@@ -27199,7 +27275,7 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                                             <button onClick={async () => {
                                               showToast("Re-rendering...", "info");
                                               try {
-                                                const img = await _genSingleImageRef.current(item.orgGroupPhotoPrompt, "4:3", null, { promptKind: "character", activity: "formal organization group portrait", backdrop: `formal group photo setting for ${item?.name || "organization"}`, camera: "4:3 formal group portrait" });
+                                                const img = await _genSingleImageRef.current(item.orgGroupPhotoPrompt, "4:3", null, { promptKind: "character", promptId: "world.orgGroupPhotoPrompt", charactersList: item.orgMembers || item.name, activity: item.orgGroupPhotoPrompt, backdrop: item.description || item.orgPurpose || item.name, cameraAngle: "formal group portrait, 4:3" });
                                                 if (img) { updateProject({ worldBuilding: items.map(it => it.id === item.id ? { ...it, orgGroupPhoto: img } : it) }); showToast("Photo regenerated", "success"); }
                                               } catch (e) { showToast(`Failed: ${e.message}`, "error"); }
                                             }} className="nf-btn-micro" style={{ fontSize: 11 }}><Icons.Sparkle /> Re-render</button>
@@ -27243,7 +27319,7 @@ Formal group portrait, higher ranks center/front, appropriate setting.`;
                                       {item.orgGroupPhotoPrompt && <button onClick={async () => {
                                         showToast("Rendering...", "info");
                                         try {
-                                          const img = await _genSingleImageRef.current(item.orgGroupPhotoPrompt, "4:3", null, { promptKind: "character", activity: "formal organization group portrait", backdrop: `formal group photo setting for ${item?.name || "organization"}`, camera: "4:3 formal group portrait" });
+                                          const img = await _genSingleImageRef.current(item.orgGroupPhotoPrompt, "4:3", null, { promptKind: "character", promptId: "world.orgGroupPhotoPrompt", charactersList: item.orgMembers || item.name, activity: item.orgGroupPhotoPrompt, backdrop: item.description || item.orgPurpose || item.name, cameraAngle: "formal group portrait, 4:3" });
                                           if (img) { updateProject({ worldBuilding: items.map(it => it.id === item.id ? { ...it, orgGroupPhoto: img } : it) }); showToast("Photo rendered", "success"); }
                                           else showToast("No image", "error");
                                         } catch (e) { showToast(`Failed: ${e.message?.replace(/sk-[a-zA-Z0-9]+/g, "sk-***") || "Unknown error"}`, "error"); }
@@ -27686,7 +27762,7 @@ Formal group portrait, higher ranks center/front, appropriate setting.`;
                                               if (refStack.length > 0) {
                                                 renderPrompt = `${prompts[wallKey]}\n\nCRITICAL: ${masterImg ? "The FIRST attached image is the master photo of this exact room. " : ""}The attached reference image(s) are the SAME ROOM. Keep the wall material, flooring, ceiling, lighting, furniture, props and palette IDENTICAL to them. Re-photograph the same room from this angle only — do not invent a different room.`;
                                               }
-                                              const imageUrl = await _generateSingleImage(renderPrompt, "4:3", refStack.length ? refStack : null, { promptKind: "place", exemptImageStructure: true, title: "Render room wall", detail: "Place-only wall render" });
+                                              const imageUrl = await _generateSingleImage(renderPrompt, "4:3", refStack.length ? refStack : null, { promptKind: "place", exemptImageStructure: true });
                                               if (imageUrl) {
                                                 const updatedRefs = { ...(item.referenceImages || {}) };
                                                 updatedRefs[wallKey] = imageUrl;
@@ -30850,10 +30926,10 @@ Speech pattern: ${char.speechPattern || ""}` },
                         <input value={selected.name || selected.label || ""} onChange={e => updateConfigPromptRow(kind, selected.id, kind === "imagePromptTemplates" ? { label: e.target.value } : { name: e.target.value })} className="nf-input" style={{ fontSize: 11 }} placeholder="Name / label" />
                       </div>
                       {isTextPromptTable ? <>
-                        <textarea value={selected.system || ""} onChange={e => updateConfigPromptRow(kind, selected.id, { system: e.target.value })} className="nf-textarea" rows={4} placeholder="System prompt" />
-                        <textarea value={selected.user || ""} onChange={e => updateConfigPromptRow(kind, selected.id, { user: e.target.value })} className="nf-textarea" rows={6} placeholder="User prompt template. Use {{context}}, {{character}}, {{story}}, etc." />
+                        <PromptVariableEditor value={selected.system || ""} onChange={e => updateConfigPromptRow(kind, selected.id, { system: e.target.value })} rows={4} placeholder="System prompt" />
+                        <PromptVariableEditor value={selected.user || ""} onChange={e => updateConfigPromptRow(kind, selected.id, { user: e.target.value })} rows={6} placeholder="User prompt template. Use {{context}}, {{character}}, {{story}}, etc." />
                       </> : <>
-                        <textarea value={selected.promptTemplate || ""} onChange={e => updateConfigPromptRow(kind, selected.id, { promptTemplate: e.target.value })} className="nf-textarea" rows={7} placeholder="Image prompt template" />
+                        <PromptVariableEditor value={selected.promptTemplate || ""} onChange={e => updateConfigPromptRow(kind, selected.id, { promptTemplate: e.target.value })} rows={7} placeholder="Image prompt template" />
                         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
                           <input value={selected.variant || ""} onChange={e => updateConfigPromptRow(kind, selected.id, { variant: e.target.value })} className="nf-input" style={{ fontSize: 11 }} placeholder="Variant" />
                           <input value={selected.ratio || ""} onChange={e => updateConfigPromptRow(kind, selected.id, { ratio: e.target.value })} className="nf-input" style={{ fontSize: 11 }} placeholder="Ratio" />
@@ -31291,6 +31367,19 @@ Speech pattern: ${char.speechPattern || ""}` },
             *:hover { background: inherit !important; color: inherit !important; border-color: inherit !important; box-shadow: inherit !important; transform: none !important; opacity: inherit !important; }
           }
           /* Mobile hover-lock prevention */
+
+          .nf-prompt-editor-shell { width: 100%; }
+          .nf-prompt-editor-stack { position: relative; width: 100%; min-height: 120px; background: var(--nf-bg-deep); border: 1px solid var(--nf-border); border-radius: 4px; overflow: hidden; }
+          .nf-prompt-highlight-layer, .nf-prompt-highlight-input { margin: 0; padding: 10px 12px; width: 100%; min-height: 100%; box-sizing: border-box; font-family: var(--nf-font-mono); font-size: 11px; line-height: 1.45; white-space: pre-wrap; overflow: auto; tab-size: 2; }
+          .nf-prompt-highlight-layer { position: absolute; inset: 0; color: var(--nf-text-dim); pointer-events: none; background: transparent; border: 0; }
+          .nf-prompt-highlight-input { position: relative; z-index: 1; color: transparent !important; caret-color: var(--nf-accent); background: transparent !important; border: 0 !important; resize: vertical; outline: none; }
+          .nf-prompt-highlight-input::selection { background: var(--nf-selection-bg); }
+          .nf-prompt-highlight-input::placeholder { color: var(--nf-text-muted); -webkit-text-fill-color: var(--nf-text-muted); }
+          .nf-prompt-variable { color: #6ee7b7; background: rgba(110,231,183,0.12); border: 1px solid rgba(110,231,183,0.28); border-radius: 3px; padding: 0 2px; font-weight: 700; }
+          .nf-prompt-variable-legend { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-top: 6px; color: var(--nf-text-muted); font-size: 10.5px; line-height: 1.4; }
+          .nf-prompt-variable-chip { color: #6ee7b7; background: rgba(110,231,183,0.12); border: 1px solid rgba(110,231,183,0.28); border-radius: 3px; padding: 1px 4px; font-family: var(--nf-font-mono); font-weight: 700; }
+          .nf-prompt-variable-list { color: var(--nf-text-dim); }
+
           .nf-root { width: 100vw; height: 100vh; height: 100dvh; display: flex; font-family: var(--nf-font-body); background: var(--nf-bg-deep); color: var(--nf-text); overflow: hidden; font-size: 13px; transition: background 0.3s ease, color 0.3s ease; overscroll-behavior: none; -webkit-tap-highlight-color: transparent; padding: env(safe-area-inset-top, 0) env(safe-area-inset-right, 0) env(safe-area-inset-bottom, 0) env(safe-area-inset-left, 0); box-sizing: border-box; }
           .nf-btn, .nf-btn-icon, .nf-btn-icon-sm, .nf-btn-micro, button, [role="button"] { touch-action: manipulation; }
           @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; scroll-behavior: auto !important; } }
@@ -33143,7 +33232,7 @@ Speech pattern: ${char.speechPattern || ""}` },
             setLineageRegenBusy(srcImg.id);
             showToast("Generating variation…", "info");
             try {
-              const img = await _genSingleImageRef.current(srcImg.genPrompt, srcImg.aspectRatio || "3:4", null);
+              const img = await _genSingleImageRef.current(srcImg.genPrompt, srcImg.aspectRatio || "3:4", null, { promptKind: "character", activity: srcImg.genPrompt, cameraAngle: srcImg.aspectRatio || "3:4" });
               if (img) {
                 const c = (project?.characters || []).find(x => x.id === lineageChar.id);
                 const prev = c?.moodBoard || [];
@@ -33172,7 +33261,7 @@ Speech pattern: ${char.speechPattern || ""}` },
                 {portfolioPromptEditor.loading ? (
                   <div style={{ fontSize: 12, color: "var(--nf-text-muted)", display: "flex", alignItems: "center", gap: 8 }}><Spinner /> Loading prompt…</div>
                 ) : (
-                  <textarea value={portfolioPromptEditor.draft || ""} onChange={e => setPortfolioPromptEditor(prev => prev ? { ...prev, draft: e.target.value } : prev)} className="nf-textarea" rows={18} style={{ fontSize: 11, fontFamily: "var(--nf-font-mono)", lineHeight: 1.45 }} placeholder="Prompt template" autoFocus />
+                  <PromptVariableEditor value={portfolioPromptEditor.draft || ""} onChange={e => setPortfolioPromptEditor(prev => prev ? { ...prev, draft: e.target.value } : prev)} rows={18} style={{ fontSize: 11, fontFamily: "var(--nf-font-mono)", lineHeight: 1.45 }} placeholder="Prompt template" autoFocus />
                 )}
                 <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", alignItems: "center" }}>
                   <button onClick={() => setPortfolioPromptEditor(null)} disabled={portfolioPromptSaving} className="nf-btn nf-btn-ghost" style={{ fontSize: 12 }}>Cancel</button>
