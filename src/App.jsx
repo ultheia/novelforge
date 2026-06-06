@@ -35363,6 +35363,195 @@ Speech pattern: ${char.speechPattern || ""}` },
             html.nf-handheld .nf-content-scroll { padding-left: 12px !important; padding-right: 12px !important; }
           }
 
+
+
+          /* ═══ V17 MOBILE RECOVERY — stop the over-corrected v15/v16 phone layout ═══ */
+          @media (max-width: 820px), (hover: none) and (pointer: coarse) {
+            html, body, #root { width: 100% !important; max-width: 100% !important; overflow-x: hidden !important; }
+            .nf-root, .nf-root-mobile { width: 100% !important; max-width: 100% !important; min-width: 0 !important; overflow-x: hidden !important; }
+            .nf-root-mobile { --nf-phone-pad: 10px; --nf-mobile-nav-h: 0px; }
+
+            /* The Safari toolbar already owns the bottom of the screen. Keep app navigation at the top. */
+            .nf-tab-bar {
+              position: sticky !important;
+              top: 0 !important;
+              bottom: auto !important;
+              z-index: 180 !important;
+              height: 52px !important;
+              min-height: 52px !important;
+              padding: 5px 6px !important;
+              border-top: 0 !important;
+              border-bottom: 1px solid var(--nf-border) !important;
+              box-shadow: none !important;
+              background: var(--nf-bg) !important;
+              overflow: hidden !important;
+            }
+            .nf-tab-scroll-area { height: 42px !important; display: flex !important; gap: 4px !important; overflow-x: auto !important; overflow-y: hidden !important; scrollbar-width: none !important; padding: 0 2px !important; }
+            .nf-tab-scroll-area::-webkit-scrollbar { display: none !important; }
+            .nf-tab-btn { flex: 0 0 44px !important; min-width: 44px !important; width: 44px !important; height: 42px !important; min-height: 42px !important; padding: 0 !important; border-radius: 0 !important; background: transparent !important; border: 0 !important; }
+            .nf-tab-btn svg { width: 22px !important; height: 22px !important; }
+            .nf-tab-label, .nf-tab-title, .nf-tab-group-label, .nf-save-indicator { display: none !important; }
+            .nf-tab-btn.active::after { bottom: 0 !important; width: 34px !important; height: 3px !important; border-radius: 999px !important; }
+
+            /* Kill desktop/floating chrome on phones. */
+            .nf-mobile-topbar,
+            .nf-utility-rail,
+            .nf-mobile-ai-fab,
+            .nf-ai-activity-panel,
+            .nf-mobile-section-fab,
+            .nf-mobile-action-fab { display: none !important; }
+
+            #nf-main-content { width: 100% !important; max-width: 100% !important; min-width: 0 !important; overflow-x: hidden !important; padding-bottom: calc(96px + env(safe-area-inset-bottom, 0px)) !important; }
+            .nf-write-layout { width: 100% !important; max-width: 100% !important; min-width: 0 !important; display: flex !important; flex-direction: column !important; overflow-x: hidden !important; overflow-y: auto !important; }
+            .nf-content-scroll { width: 100% !important; max-width: 100% !important; min-width: 0 !important; padding: 14px var(--nf-phone-pad) calc(106px + env(safe-area-inset-bottom, 0px)) !important; overflow-x: hidden !important; overflow-y: auto !important; -webkit-overflow-scrolling: touch !important; }
+            .nf-content-scroll > * { max-width: 100% !important; min-width: 0 !important; }
+
+            /* The old left rails were still taking phone width. Only keep their scrollable list. */
+            .nf-tab-write .nf-chapter-sidebar,
+            .nf-tab-characters .nf-chapter-sidebar {
+              order: 0 !important;
+              width: 100% !important;
+              max-width: 100% !important;
+              min-width: 0 !important;
+              height: 96px !important;
+              min-height: 96px !important;
+              max-height: 96px !important;
+              display: block !important;
+              background: var(--nf-bg-raised) !important;
+              border-right: 0 !important;
+              border-bottom: 1px solid var(--nf-border) !important;
+              overflow: hidden !important;
+            }
+            .nf-tab-write .nf-chapter-sidebar-header,
+            .nf-tab-characters .nf-chapter-sidebar-header { display: none !important; }
+            .nf-tab-write .nf-chapter-list,
+            .nf-tab-characters .nf-chapter-list {
+              width: 100% !important;
+              height: 100% !important;
+              display: flex !important;
+              flex-direction: row !important;
+              gap: 8px !important;
+              overflow-x: auto !important;
+              overflow-y: hidden !important;
+              padding: 8px 10px !important;
+              -webkit-overflow-scrolling: touch !important;
+              scrollbar-width: none !important;
+            }
+            .nf-tab-write .nf-chapter-list::-webkit-scrollbar,
+            .nf-tab-characters .nf-chapter-list::-webkit-scrollbar { display: none !important; }
+            .nf-tab-write .nf-chapter-item,
+            .nf-tab-characters .nf-chapter-item,
+            .nf-tab-characters .nf-roster-row,
+            .nf-tab-characters .nf-polaroid {
+              flex: 0 0 116px !important;
+              width: 116px !important;
+              min-width: 116px !important;
+              max-width: 116px !important;
+              min-height: 76px !important;
+              max-height: 82px !important;
+              margin: 0 !important;
+              padding: 8px !important;
+              border-radius: 14px !important;
+              overflow: hidden !important;
+            }
+            .nf-tab-characters .nf-polaroid img,
+            .nf-tab-characters .nf-roster-row img { width: 100% !important; height: 100% !important; object-fit: cover !important; }
+
+            /* Header/action rows: stop clipped prose and ridiculous single-column button stacks. */
+            .nf-content-scroll > div:first-child { max-width: 100% !important; min-width: 0 !important; overflow: hidden !important; }
+            .nf-content-scroll > div:first-child > div { min-width: 0 !important; max-width: 100% !important; }
+            .nf-content-scroll > div:first-child p,
+            .nf-hint {
+              white-space: normal !important;
+              overflow: visible !important;
+              text-overflow: clip !important;
+              overflow-wrap: break-word !important;
+              word-break: normal !important;
+              max-width: 100% !important;
+              line-height: 1.5 !important;
+            }
+            .nf-content-scroll > div:first-child > div:last-child {
+              width: 100% !important;
+              display: grid !important;
+              grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+              gap: 8px !important;
+              align-items: stretch !important;
+            }
+            .nf-content-scroll > div:first-child > div:last-child > .nf-btn,
+            .nf-content-scroll > div:first-child > div:last-child > .nf-btn-ghost,
+            .nf-content-scroll > div:first-child > div:last-child > .nf-btn-primary,
+            .nf-content-scroll > div:first-child > div:last-child > .nf-select,
+            .nf-content-scroll > div:first-child > div:last-child > select {
+              width: 100% !important;
+              min-width: 0 !important;
+              justify-content: center !important;
+            }
+
+            /* Cards and metrics should be compact, not full-screen slabs. */
+            .nf-card { width: 100% !important; max-width: 100% !important; border-radius: 16px !important; padding: 14px !important; overflow: hidden !important; }
+            .nf-card .nf-btn,
+            .nf-card .nf-btn-primary,
+            .nf-card .nf-btn-ghost { min-height: 42px !important; padding: 9px 12px !important; }
+            .nf-stat-card,
+            .nf-relationship-stat,
+            .nf-memory-stat,
+            .nf-visual-desk-card,
+            .nf-settings-health-card { min-height: 86px !important; }
+
+            /* Undo the too-aggressive one-column grid overrides for simple stat grids. */
+            .nf-rel-pulse-grid,
+            .nf-visual-desk-grid,
+            .nf-settings-health-grid,
+            .nf-memory-health-grid,
+            .nf-plot-stat-grid,
+            .nf-story-flow-grid {
+              display: grid !important;
+              grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+              gap: 10px !important;
+            }
+            .nf-tab-plot .nf-card [style*="grid-template-columns"],
+            .nf-tab-relationships .nf-card [style*="grid-template-columns"],
+            .nf-tab-images .nf-card [style*="grid-template-columns"],
+            .nf-tab-memory .nf-card [style*="grid-template-columns"],
+            .nf-tab-settings .nf-card [style*="grid-template-columns"] {
+              grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+            }
+            @media (max-width: 370px) {
+              .nf-rel-pulse-grid,
+              .nf-visual-desk-grid,
+              .nf-settings-health-grid,
+              .nf-memory-health-grid,
+              .nf-plot-stat-grid,
+              .nf-story-flow-grid { grid-template-columns: minmax(0, 1fr) !important; }
+            }
+
+            /* Writer screen compacting. */
+            .nf-chapter-header { width: 100% !important; padding: 10px !important; gap: 8px !important; flex-wrap: wrap !important; }
+            .nf-chapter-title-input { flex: 1 1 100% !important; width: 100% !important; min-width: 0 !important; font-size: 20px !important; }
+            .nf-header-actions, .nf-rich-toolbar { width: 100% !important; overflow-x: auto !important; overflow-y: hidden !important; flex-wrap: nowrap !important; -webkit-overflow-scrolling: touch !important; scrollbar-width: none !important; }
+            .nf-header-actions::-webkit-scrollbar, .nf-rich-toolbar::-webkit-scrollbar { display: none !important; }
+            .nf-writer-brief-panel { border-radius: 16px !important; padding: 12px !important; }
+            .nf-writing-progress { display: grid !important; grid-template-columns: repeat(2, minmax(0, 1fr)) !important; gap: 8px !important; }
+            .nf-editor-contenteditable { min-height: 45vh !important; padding: 18px 18px 120px !important; font-size: 20px !important; line-height: 1.65 !important; }
+
+            /* Forms and search bars. */
+            .nf-input, .nf-select, .nf-textarea, input, select, textarea { max-width: 100% !important; font-size: 16px !important; }
+            .nf-content-scroll input[style*="minWidth"],
+            .nf-content-scroll select[style*="width"] { min-width: 0 !important; width: 100% !important; }
+            .nf-content-scroll [style*="overflowX: \"auto\""] { max-width: 100% !important; }
+          }
+
+          html.nf-handheld .nf-mobile-topbar,
+          html.nf-handheld .nf-utility-rail,
+          html.nf-handheld .nf-mobile-ai-fab,
+          html.nf-handheld .nf-ai-activity-panel,
+          html.nf-handheld .nf-mobile-section-fab,
+          html.nf-handheld .nf-mobile-action-fab { display: none !important; }
+          html.nf-handheld .nf-root, html.nf-handheld .nf-root-mobile { width: 100% !important; max-width: 100% !important; overflow-x: hidden !important; }
+          html.nf-handheld .nf-content-scroll { width: 100% !important; max-width: 100% !important; padding-left: 10px !important; padding-right: 10px !important; }
+          html.nf-handheld .nf-chapter-sidebar-header { display: none !important; }
+          html.nf-handheld .nf-tab-write .nf-chapter-sidebar,
+          html.nf-handheld .nf-tab-characters .nf-chapter-sidebar { width: 100% !important; max-width: 100% !important; min-width: 0 !important; }
         `}</style>
         
 
