@@ -8538,13 +8538,13 @@ const WhiteRoomModal = memo(({ char1, char2, tension, result, isGenerating, onGe
   }, [onClose]);
 
   return (
-    <div style={{
+    <div className="nf-modal-overlay nf-white-room-overlay" style={{
       position: "fixed", inset: 0, zIndex: 9998,
       background: "rgba(0,0,0,0.6)", backdropFilter: "blur(6px)",
       display: "flex", alignItems: "center", justifyContent: "center",
       animation: "nf-fadeIn 0.12s ease-out",
     }} role="dialog" aria-modal="true" onClick={onClose}>
-      <div role="button" tabIndex={0} onClick={e => e.stopPropagation()} style={{
+      <div className="nf-modal-sheet nf-white-room-sheet" role="button" tabIndex={0} onClick={e => e.stopPropagation()} style={{
         background: "var(--nf-dialog-bg)", border: "1px solid var(--nf-dialog-border)", borderRadius: 6,
         padding: 0, maxWidth: 750, width: "95%", maxHeight: "85vh",
         boxShadow: "var(--nf-shadow-lg)", display: "flex", flexDirection: "column", overflow: "hidden",
@@ -8670,13 +8670,13 @@ const TimelineView = memo(({ plotOutline, chapters, characters, onClose, restore
   const dateSpan = datedEntries.length >= 2 ? `${datedEntries[0].date} — ${datedEntries[datedEntries.length - 1].date}` : null;
 
   return (
-    <div style={{
+    <div className="nf-modal-overlay nf-timeline-overlay" style={{
       position: "fixed", inset: 0, zIndex: 9997,
       background: "rgba(0,0,0,0.55)", backdropFilter: "blur(4px)",
       display: "flex", alignItems: "center", justifyContent: "center",
       animation: "nf-fadeIn 0.12s ease-out",
     }}>
-      <div role="button" tabIndex={0} onClick={e => e.stopPropagation()} style={{
+      <div className="nf-modal-sheet nf-timeline-sheet" role="button" tabIndex={0} onClick={e => e.stopPropagation()} style={{
         background: "var(--nf-dialog-bg)", border: "1px solid var(--nf-dialog-border)", borderRadius: 2,
         padding: 0, maxWidth: 950, width: "95%", maxHeight: "85vh",
         boxShadow: "var(--nf-shadow-lg)", display: "flex", flexDirection: "column",
@@ -8854,7 +8854,7 @@ const CleanViewModal = memo(({ project, startChapter, onClose }) => {
   // Strip beat markers and other editor artifacts for clean reading
   const contentHtml = (ch?.content || "").replace(/<div\s+class="nf-beat-marker"[^>]*>.*?<\/div>/g, "").replace(/<div\s+class="nf-beat-marker"[^>]*\/>/g, "");
   return (
-    <div style={{
+    <div className="nf-clean-view-modal" style={{
 	  position: "fixed", inset: 0, zIndex: 9996, background: "var(--nf-bg-deep)",
 	  display: "flex", flexDirection: "column", animation: "nf-fadeIn 0.2s ease-out",
 	}}>
@@ -9351,11 +9351,11 @@ const RelationshipWebModal = memo(({ characters, relationships, onClose, povChar
     return counts;
   }, [rels]);
 
-  if (!chars.length) return (<div style={{ position: "fixed", inset: 0, zIndex: 9997, background: "rgba(0,0,0,0.6)", backdropFilter: "blur(8px)", display: "flex", alignItems: "center", justifyContent: "center" }} onClick={onClose}><div onClick={e => e.stopPropagation()} style={{ background: "var(--nf-dialog-bg)", border: "1px solid var(--nf-dialog-border)", borderRadius: 2, padding: 40, textAlign: "center", color: "var(--nf-text-muted)", fontFamily: "var(--nf-font-display)", fontStyle: "italic" }}>Add characters first to see their connections</div></div>);
+  if (!chars.length) return (<div className="nf-modal-overlay nf-rel-web-overlay" style={{ position: "fixed", inset: 0, zIndex: 9997, background: "rgba(0,0,0,0.6)", backdropFilter: "blur(8px)", display: "flex", alignItems: "center", justifyContent: "center" }} onClick={onClose}><div className="nf-modal-sheet nf-rel-web-sheet" onClick={e => e.stopPropagation()} style={{ background: "var(--nf-dialog-bg)", border: "1px solid var(--nf-dialog-border)", borderRadius: 2, padding: 40, textAlign: "center", color: "var(--nf-text-muted)", fontFamily: "var(--nf-font-display)", fontStyle: "italic" }}>Add characters first to see their connections</div></div>);
   return (
-    <div style={{ position: "fixed", inset: 0, zIndex: 9997, background: "rgba(0,0,0,0.6)", backdropFilter: "blur(8px)", display: "flex", alignItems: "center", justifyContent: "center", animation: "nf-fadeIn 0.2s ease-out" }} onClick={onClose}>
+    <div className="nf-modal-overlay nf-rel-web-overlay" style={{ position: "fixed", inset: 0, zIndex: 9997, background: "rgba(0,0,0,0.6)", backdropFilter: "blur(8px)", display: "flex", alignItems: "center", justifyContent: "center", animation: "nf-fadeIn 0.2s ease-out" }} onClick={onClose}>
       <style>{`.nf-rel-web-node{cursor:grab}.nf-rel-web-node:active{cursor:grabbing}.nf-rel-web-line{transition:opacity .15s}.nf-rel-web-hit{cursor:pointer}.nf-wl{position:absolute;bottom:14px;right:14px;background:var(--nf-bg-raised);border:1px solid var(--nf-border);border-radius:2px;padding:12px 16px;box-shadow:var(--nf-shadow);z-index:10;font-size:10px;color:var(--nf-text-muted);line-height:1.8;user-select:none;max-height:60vh;overflow-y:auto}.nf-wl-t{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px;padding-bottom:5px;border-bottom:1px solid var(--nf-border);color:var(--nf-text-dim)}.nf-wl-s{margin-bottom:8px}.nf-wl-s:last-child{margin-bottom:0}.nf-wl-i{display:flex;align-items:center;gap:8px;padding:1px 0}.nf-wl-sw{width:24px;height:2px;flex-shrink:0;border-radius:1px}.nf-wl-d{width:8px;height:8px;border-radius:50%;flex-shrink:0}.nf-rel-web-tip{position:fixed;z-index:10001;pointer-events:none;background:var(--nf-dialog-bg);border:1px solid var(--nf-border);border-radius:3px;padding:12px 16px;box-shadow:var(--nf-shadow-lg);max-width:300px;animation:nf-fadeIn .12s ease-out;font-size:12px;line-height:1.6;color:var(--nf-text)}`}</style>
-      <div role="button" tabIndex={0} onClick={e => e.stopPropagation()} style={{ background: "var(--nf-dialog-bg)", border: "1px solid var(--nf-dialog-border)", borderRadius: 2, width: "95vw", maxWidth: 1100, height: "88vh", maxHeight: 800, display: "flex", flexDirection: "column", boxShadow: "var(--nf-shadow-lg)", overflow: "hidden", textOverflow: "ellipsis", animation: "nf-pop 0.25s ease-out" }}>
+      <div className="nf-modal-sheet nf-rel-web-sheet" role="button" tabIndex={0} onClick={e => e.stopPropagation()} style={{ background: "var(--nf-dialog-bg)", border: "1px solid var(--nf-dialog-border)", borderRadius: 2, width: "95vw", maxWidth: 1100, height: "88vh", maxHeight: 800, display: "flex", flexDirection: "column", boxShadow: "var(--nf-shadow-lg)", overflow: "hidden", textOverflow: "ellipsis", animation: "nf-pop 0.25s ease-out" }}>
         {/* Header */}
         <div style={{ padding: "16px 22px", borderBottom: "1px solid var(--nf-border)", display: "flex", justifyContent: "space-between", alignItems: "center", flexShrink: 0, background: "var(--nf-bg-raised)" }}>
           <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
@@ -12574,9 +12574,9 @@ const HelpPanel = memo(({ open, onClose, onAsk, currentTab }) => {
 
   if (!open) return null;
   return createPortal(
-    <div onClick={onClose} role="dialog" aria-modal="true" aria-label="Help"
+    <div className="nf-modal-overlay nf-help-panel-overlay" onClick={onClose} role="dialog" aria-modal="true" aria-label="Help"
       style={{ position: "fixed", inset: 0, zIndex: 9999, background: "rgba(0,0,0,0.5)", backdropFilter: "blur(4px)", display: "flex", alignItems: "flex-start", justifyContent: "center", paddingTop: "8vh", animation: "nf-fadeIn 0.12s ease-out" }}>
-      <div onClick={e => e.stopPropagation()} style={{ width: "min(640px, 94vw)", maxHeight: "84vh", display: "flex", flexDirection: "column", background: "var(--nf-dialog-bg)", border: "1px solid var(--nf-dialog-border)", borderRadius: 8, boxShadow: "var(--nf-shadow-lg)", overflow: "hidden" }}>
+      <div className="nf-modal-sheet nf-help-panel-sheet" onClick={e => e.stopPropagation()} style={{ width: "min(640px, 94vw)", maxHeight: "84vh", display: "flex", flexDirection: "column", background: "var(--nf-dialog-bg)", border: "1px solid var(--nf-dialog-border)", borderRadius: 8, boxShadow: "var(--nf-shadow-lg)", overflow: "hidden" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "14px 18px", borderBottom: "1px solid var(--nf-border)" }}>
           <span style={{ fontSize: 18 }}>✦</span>
           <div style={{ flex: 1 }}>
@@ -12757,8 +12757,8 @@ const CommandPalette = memo(({ open, onClose, project, onNavigate }) => {
   };
 
   return (
-    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.42)", zIndex: 9999, display: "flex", alignItems: "flex-start", justifyContent: "center", paddingTop: "10vh", backdropFilter: "blur(5px)" }}>
-      <div onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Command Center" style={{ width: "min(640px, 94vw)", background: "var(--nf-bg-raised)", border: "1px solid var(--nf-border)", borderRadius: 10, boxShadow: "0 18px 54px rgba(0,0,0,0.45)", overflow: "hidden" }}>
+    <div className="nf-modal-overlay nf-command-palette-overlay" onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.42)", zIndex: 9999, display: "flex", alignItems: "flex-start", justifyContent: "center", paddingTop: "10vh", backdropFilter: "blur(5px)" }}>
+      <div className="nf-modal-sheet nf-command-palette-sheet" onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Command Center" style={{ width: "min(640px, 94vw)", background: "var(--nf-bg-raised)", border: "1px solid var(--nf-border)", borderRadius: 10, boxShadow: "0 18px 54px rgba(0,0,0,0.45)", overflow: "hidden" }}>
         <div style={{ padding: "12px 16px 10px", borderBottom: "1px solid var(--nf-border)", background: "linear-gradient(135deg, var(--nf-accent-glow), transparent 68%)" }}>
           <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "baseline", marginBottom: 8 }}>
             <div>
@@ -12839,21 +12839,21 @@ const SaveIndicator = memo(({ status, fileLinked }) => {
   useEffect(() => { const t = setInterval(() => tick(c => c + 1), 10000); return () => clearInterval(t); }, []);
 
   if (status === "saving") return (
-    <div style={{ display: "flex", alignItems: "center", gap: 5, padding: "0 8px" }} role="status" aria-live="polite">
+    <div className="nf-save-indicator nf-save-indicator-saving" style={{ display: "flex", alignItems: "center", gap: 5, padding: "0 8px" }} role="status" aria-live="polite">
       <div style={{ width: 6, height: 6, borderRadius: 2, background: "var(--nf-accent-2)", animation: "nf-glyph-pulse-fast 0.7s ease-in-out infinite" }} />
       <span style={{ fontSize: 11, color: "var(--nf-accent-2)", fontWeight: 500 }}>Saving...</span>
     </div>
   );
 
   if (status === "error") return (
-    <div style={{ display: "flex", alignItems: "center", gap: 5, padding: "2px 8px", background: "var(--nf-error-bg)", borderRadius: 2 }} role="alert">
+    <div className="nf-save-indicator nf-save-indicator-error" style={{ display: "flex", alignItems: "center", gap: 5, padding: "2px 8px", background: "var(--nf-error-bg)", borderRadius: 2 }} role="alert">
       <Icons.X />
       <span style={{ fontSize: 11, color: "var(--nf-accent)", fontWeight: 600 }}>Save failed</span>
     </div>
   );
 
   return (
-    <div role="button" tabIndex={0} onClick={() => setShowDetail(d => !d)} style={{ display: "flex", alignItems: "center", gap: 4, cursor: "pointer", padding: "0 6px", borderRadius: 2, transition: "background 0.15s" }} title={`Saved ${timeAgo || ""}${fileLinked ? " · Auto-saving to file" : " · Auto-saving to browser"}\nCtrl+S to save manually`}>
+    <div className="nf-save-indicator" role="button" tabIndex={0} onClick={() => setShowDetail(d => !d)} style={{ display: "flex", alignItems: "center", gap: 4, cursor: "pointer", padding: "0 6px", borderRadius: 2, transition: "background 0.15s" }} title={`Saved ${timeAgo || ""}${fileLinked ? " · Auto-saving to file" : " · Auto-saving to browser"}\nCtrl+S to save manually`}>
       <div style={{ width: 5, height: 5, borderRadius: 2, background: "var(--nf-success)", opacity: 0.6, transition: "opacity 0.3s" }} />
       {(showDetail || status === "saved") && (
         <span style={{ fontSize: 11, color: "var(--nf-text-muted)", transition: "opacity 0.2s", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
@@ -15709,6 +15709,11 @@ export default function NovelForge() {
   const [imageGenAspect, setImageGenAspect] = useState(""); // Aspect ratio for single image
   const [showDrafts, setShowDrafts] = useState(false);
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
+  const [mobileSwitcherOpen, setMobileSwitcherOpen] = useState(false);
+  const [mobileSectionsOpen, setMobileSectionsOpen] = useState(false);
+  const [mobileSections, setMobileSections] = useState([]);
+  const [mobileActionsOpen, setMobileActionsOpen] = useState(false);
+  const [mobileCompact, setMobileCompact] = useState(() => { try { return localStorage.getItem("nf:mobileCompact") === "1"; } catch { return false; } });
   const [helpOpen, setHelpOpen] = useState(false);
   const [draftsChapterFilter, setDraftsChapterFilter] = useState(false);
   const [viewingDraftId, setViewingDraftId] = useState(null);
@@ -15776,6 +15781,143 @@ export default function NovelForge() {
       window.removeEventListener("orientationchange", check);
     };
   }, []);
+
+  // ─── MOBILE VIEWPORT / KEYBOARD GUARD ───
+  // Keeps fixed bars and bottom sheets out of the software keyboard area on iOS/Android.
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof document === "undefined") return;
+    let raf = 0;
+    const root = document.documentElement;
+    const readViewport = () => {
+      const vv = window.visualViewport;
+      const height = vv?.height || window.innerHeight || 0;
+      const width = vv?.width || window.innerWidth || 0;
+      const keyboardInset = Math.max(0, (window.innerHeight || height) - height - (vv?.offsetTop || 0));
+      const isPhoneWidth = (window.innerWidth || width) < 820;
+      const keyboardOpen = isPhoneWidth && keyboardInset > 80;
+      root.style.setProperty("--nf-real-vh", `${Math.max(320, Math.round(height))}px`);
+      root.style.setProperty("--nf-real-vw", `${Math.max(280, Math.round(width))}px`);
+      root.style.setProperty("--nf-keyboard-inset", `${Math.round(keyboardInset)}px`);
+      root.classList.toggle("nf-keyboard-open", keyboardOpen);
+      root.classList.toggle("nf-touch-viewport", window.matchMedia?.("(pointer: coarse)")?.matches || false);
+    };
+    const schedule = () => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(readViewport);
+    };
+    schedule();
+    window.addEventListener("resize", schedule, { passive: true });
+    window.addEventListener("orientationchange", schedule, { passive: true });
+    window.visualViewport?.addEventListener("resize", schedule, { passive: true });
+    window.visualViewport?.addEventListener("scroll", schedule, { passive: true });
+    return () => {
+      cancelAnimationFrame(raf);
+      window.removeEventListener("resize", schedule);
+      window.removeEventListener("orientationchange", schedule);
+      window.visualViewport?.removeEventListener("resize", schedule);
+      window.visualViewport?.removeEventListener("scroll", schedule);
+      root.classList.remove("nf-keyboard-open", "nf-touch-viewport");
+      root.style.removeProperty("--nf-real-vh");
+      root.style.removeProperty("--nf-real-vw");
+      root.style.removeProperty("--nf-keyboard-inset");
+    };
+  }, []);
+
+  // Keep the active bottom tab visible after programmatic navigation on phones.
+  useEffect(() => {
+    if (!isMobile || typeof document === "undefined") return;
+    const area = document.querySelector(".nf-tab-scroll-area");
+    const active = area?.querySelector(".nf-tab-btn.active");
+    active?.scrollIntoView?.({ behavior: "smooth", inline: "center", block: "nearest" });
+  }, [activeTab, isMobile]);
+
+
+  // ─── MOBILE SECTION NAVIGATOR ───
+  // Scans the active tab for visible headings/section cards and builds a jump list.
+  // This keeps long phone layouts usable after we collapse desktop grids into tall stacks.
+  const refreshMobileSections = useCallback(() => {
+    if (!isMobile || typeof document === "undefined") return;
+    const main = document.getElementById("nf-main-content");
+    if (!main) return;
+    const selector = [
+      ".nf-page-title",
+      ".nf-char-section-label",
+      ".nf-section-label",
+      ".nf-section-eyebrow",
+      ".nf-plot-edit-section-head",
+      ".nf-rel-edit-section-head",
+      ".nf-settings-desk-head",
+      ".nf-data-safety-head",
+      ".nf-export-guide-top",
+      ".nf-keepsake-desk-head",
+      "[data-nf-mobile-section]",
+      "h1", "h2", "h3"
+    ].join(",");
+    const seen = new Set();
+    const items = Array.from(main.querySelectorAll(selector)).map((el, idx) => {
+      const rect = el.getBoundingClientRect?.();
+      if (!rect || rect.width < 4 || rect.height < 4) return null;
+      const style = window.getComputedStyle(el);
+      if (style.display === "none" || style.visibility === "hidden") return null;
+      let label = el.getAttribute("data-nf-mobile-section") || el.getAttribute("aria-label") || el.textContent || "";
+      label = label.replace(/\s+/g, " ").replace(/✦|◇|•|⌘/g, "").trim();
+      label = label.replace(/^(Add|Save|Delete|Cancel|Generate|Apply)\b\s*/i, "").trim();
+      if (!label || label.length < 2) return null;
+      if (label.length > 64) label = label.slice(0, 61).trim() + "…";
+      const key = label.toLowerCase();
+      if (seen.has(key)) return null;
+      seen.add(key);
+      if (!el.id) el.id = `nf-mobile-section-${activeTab}-${idx}`;
+      return { id: el.id, label };
+    }).filter(Boolean).slice(0, 18);
+    setMobileSections(items);
+  }, [activeTab, isMobile]);
+
+  useEffect(() => {
+    if (!isMobile || typeof window === "undefined") return;
+    const run = () => refreshMobileSections();
+    const t1 = window.setTimeout(run, 80);
+    const t2 = window.setTimeout(run, 450);
+    const main = document.getElementById("nf-main-content");
+    let obs;
+    if (main && "MutationObserver" in window) {
+      obs = new MutationObserver(() => {
+        window.clearTimeout(obs._nfTimer);
+        obs._nfTimer = window.setTimeout(run, 160);
+      });
+      obs.observe(main, { childList: true, subtree: true, characterData: true });
+    }
+    return () => {
+      window.clearTimeout(t1);
+      window.clearTimeout(t2);
+      if (obs) {
+        window.clearTimeout(obs._nfTimer);
+        obs.disconnect();
+      }
+    };
+  }, [activeTab, activeChapterIdx, isMobile, project?.id, project?.updatedAt, refreshMobileSections]);
+
+  const jumpToMobileSection = useCallback((id) => {
+    if (typeof document === "undefined") return;
+    const el = document.getElementById(id);
+    if (!el) return;
+    setMobileSectionsOpen(false);
+    window.setTimeout(() => {
+      el.scrollIntoView({ behavior: "smooth", block: "start", inline: "nearest" });
+      el.classList.add("nf-mobile-section-pulse");
+      window.setTimeout(() => el.classList.remove("nf-mobile-section-pulse"), 900);
+    }, 40);
+  }, []);
+
+  useEffect(() => {
+    try { localStorage.setItem("nf:mobileCompact", mobileCompact ? "1" : "0"); } catch { /* silent */ }
+  }, [mobileCompact]);
+
+  useEffect(() => {
+    setMobileActionsOpen(false);
+    setMobileSectionsOpen(false);
+    setMobileSwitcherOpen(false);
+  }, [activeTab, activeProjectId]);
 
   // ─── LOAD ───
   useEffect(() => {
@@ -16067,6 +16209,64 @@ export default function NovelForge() {
     });
     lastTabRef.current = activeTab;
   }, [activeTab]);
+
+  // ─── MOBILE CHROME / INPUT STATE ───
+  // Phones need more usable vertical space. Hide the compact top chrome while scrolling down,
+  // bring it back on scroll-up/top, and mark focused-input state for CSS docks/sheets.
+  useEffect(() => {
+    if (!isMobile || typeof document === "undefined") return;
+    const root = document.documentElement;
+    let scrollEl = null;
+    let lastY = 0;
+    let ticking = false;
+
+    const setInputState = (on) => root.classList.toggle("nf-input-focused", !!on);
+    const onFocusIn = (e) => {
+      const target = e.target;
+      const tag = target?.tagName;
+      const editable = target?.isContentEditable;
+      if (editable || tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") {
+        setInputState(true);
+        setTimeout(() => target?.scrollIntoView?.({ block: "center", inline: "nearest", behavior: "smooth" }), 80);
+      }
+    };
+    const onFocusOut = () => setTimeout(() => {
+      const a = document.activeElement;
+      const tag = a?.tagName;
+      setInputState(a?.isContentEditable || tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT");
+    }, 60);
+
+    const bindScroll = () => {
+      scrollEl = document.querySelector(".nf-content-scroll") || document.querySelector(".nf-editor-area") || document.querySelector("#nf-main-content");
+      if (!scrollEl) return;
+      lastY = scrollEl.scrollTop || 0;
+      const onScroll = () => {
+        if (ticking) return;
+        ticking = true;
+        requestAnimationFrame(() => {
+          const y = scrollEl?.scrollTop || 0;
+          const dy = y - lastY;
+          const keyboardOpen = root.classList.contains("nf-keyboard-open") || root.classList.contains("nf-input-focused");
+          if (!keyboardOpen && y > 120 && dy > 10) root.classList.add("nf-mobile-chrome-hidden");
+          if (y < 40 || dy < -8 || keyboardOpen) root.classList.remove("nf-mobile-chrome-hidden");
+          lastY = y;
+          ticking = false;
+        });
+      };
+      scrollEl.addEventListener("scroll", onScroll, { passive: true });
+      return () => scrollEl?.removeEventListener("scroll", onScroll);
+    };
+
+    const unbindScroll = bindScroll();
+    document.addEventListener("focusin", onFocusIn, true);
+    document.addEventListener("focusout", onFocusOut, true);
+    return () => {
+      unbindScroll?.();
+      document.removeEventListener("focusin", onFocusIn, true);
+      document.removeEventListener("focusout", onFocusOut, true);
+      root.classList.remove("nf-input-focused", "nf-mobile-chrome-hidden");
+    };
+  }, [activeTab, activeProjectId, activeChapterIdx, isMobile]);
 
   // ─── GLOBAL KEYBOARD SHORTCUTS ───
   useEffect(() => {
@@ -30834,7 +31034,7 @@ Speech pattern: ${char.speechPattern || ""}` },
   // ════════════════════════════════════════
   return (
     <ThemeContext.Provider value={{ theme, toggle: toggleTheme }}>
-      <div className="nf-root">
+      <div className={`nf-root nf-tab-${activeTab} ${isMobile ? "nf-root-mobile" : ""} ${mobileCompact ? "nf-mobile-compact" : ""} ${focusMode ? "nf-focus-root" : ""}`}>
         {/* Accessibility: skip-to-content link for keyboard users */}
         <a href="#nf-main-content" className="nf-skip-link">Skip to main content</a>
         <style>{`
@@ -32072,6 +32272,2589 @@ Speech pattern: ${char.speechPattern || ""}` },
             .nf-send-btn:hover { transform: none !important; }
           }
 
+
+
+          /* ═══════════════════════════════════════════
+             MOBILE UX REDESIGN — v7
+             Phones get a different layout, not a squeezed desktop.
+          ═══════════════════════════════════════════ */
+          @media (max-width: 820px) {
+            :root {
+              --nf-mobile-nav-h: 76px;
+              --nf-mobile-radius: 14px;
+              --nf-mobile-pad: 14px;
+            }
+            html, body, #root { width: 100%; min-width: 0; overflow: hidden; }
+            .nf-root {
+              width: 100vw !important;
+              height: 100dvh !important;
+              overflow: hidden !important;
+              font-size: 14px !important;
+              background: var(--nf-bg-deep) !important;
+            }
+            .nf-root > div[style*="flex: 1"][style*="flex-direction: column"] {
+              min-width: 0 !important;
+              width: 100% !important;
+            }
+            #nf-main-content {
+              width: 100% !important;
+              min-width: 0 !important;
+              min-height: 0 !important;
+              overflow: hidden !important;
+              padding-bottom: calc(var(--nf-mobile-nav-h) + env(safe-area-inset-bottom, 0px)) !important;
+            }
+
+            /* Bottom app navigation: thumb-first, no project title crowding. */
+            .nf-tab-bar {
+              position: fixed !important;
+              left: 0 !important;
+              right: 0 !important;
+              top: auto !important;
+              bottom: 0 !important;
+              z-index: 240 !important;
+              min-height: var(--nf-mobile-nav-h) !important;
+              height: calc(var(--nf-mobile-nav-h) + env(safe-area-inset-bottom, 0px)) !important;
+              padding: 6px max(8px, env(safe-area-inset-left, 0px)) calc(6px + env(safe-area-inset-bottom, 0px)) max(8px, env(safe-area-inset-right, 0px)) !important;
+              gap: 6px !important;
+              border-top: 1px solid var(--nf-border) !important;
+              border-bottom: 0 !important;
+              background: color-mix(in srgb, var(--nf-bg) 94%, transparent) !important;
+              box-shadow: 0 -10px 32px rgba(0,0,0,0.34) !important;
+              backdrop-filter: blur(16px) !important;
+              -webkit-backdrop-filter: blur(16px) !important;
+              overflow: hidden !important;
+            }
+            .nf-tab-title, .nf-tab-group-label, .nf-save-indicator, .nf-tab-bar > div[style*="flex: 1"] { display: none !important; }
+            .nf-tab-bar > .nf-btn-icon:not(:first-child) { display: none !important; }
+            .nf-tab-bar > .nf-btn-icon:first-child {
+              flex: 0 0 46px !important;
+              width: 46px !important;
+              height: 56px !important;
+              min-width: 46px !important;
+              min-height: 56px !important;
+              margin: 0 !important;
+              padding: 0 !important;
+              border: 1px solid var(--nf-border) !important;
+              border-radius: 16px !important;
+              background: var(--nf-bg-raised) !important;
+              color: var(--nf-text) !important;
+              justify-content: center !important;
+            }
+            .nf-tab-scroll-area {
+              flex: 1 1 auto !important;
+              min-width: 0 !important;
+              height: 100% !important;
+              display: flex !important;
+              align-items: stretch !important;
+              gap: 6px !important;
+              overflow-x: auto !important;
+              overflow-y: hidden !important;
+              padding: 0 2px 2px !important;
+              scroll-snap-type: x proximity !important;
+              -webkit-overflow-scrolling: touch !important;
+              -webkit-mask-image: none !important;
+              scrollbar-width: none !important;
+            }
+            .nf-tab-scroll-area::-webkit-scrollbar { display: none !important; }
+            .nf-tab-btn {
+              flex: 0 0 68px !important;
+              min-width: 68px !important;
+              height: 56px !important;
+              min-height: 56px !important;
+              padding: 7px 6px !important;
+              border: 1px solid transparent !important;
+              border-radius: 16px !important;
+              background: transparent !important;
+              display: flex !important;
+              flex-direction: column !important;
+              justify-content: center !important;
+              align-items: center !important;
+              gap: 4px !important;
+              color: var(--nf-text-muted) !important;
+              scroll-snap-align: center !important;
+            }
+            .nf-tab-btn svg { width: 19px !important; height: 19px !important; }
+            .nf-tab-label {
+              display: block !important;
+              max-width: 58px !important;
+              overflow: hidden !important;
+              text-overflow: ellipsis !important;
+              white-space: nowrap !important;
+              font-size: 10px !important;
+              line-height: 1.1 !important;
+              font-weight: 750 !important;
+            }
+            .nf-tab-btn.active {
+              color: var(--nf-text) !important;
+              background: var(--nf-bg-surface) !important;
+              border-color: var(--nf-border-focus) !important;
+              box-shadow: inset 0 0 0 1px var(--nf-accent-glow) !important;
+            }
+            .nf-tab-cue {
+              position: absolute !important;
+              top: 5px !important;
+              right: 6px !important;
+              margin: 0 !important;
+              min-width: 15px !important;
+              padding: 1px 4px !important;
+              font-size: 8px !important;
+            }
+
+            /* Project list becomes a real drawer on phones. */
+            .nf-sidebar-open {
+              position: fixed !important;
+              inset: env(safe-area-inset-top, 0px) auto calc(var(--nf-mobile-nav-h) + env(safe-area-inset-bottom, 0px)) 0 !important;
+              z-index: 260 !important;
+              width: min(88vw, 360px) !important;
+              min-width: min(88vw, 360px) !important;
+              max-width: min(88vw, 360px) !important;
+              border-right: 1px solid var(--nf-border) !important;
+              box-shadow: 18px 0 40px rgba(0,0,0,0.45) !important;
+              border-radius: 0 18px 18px 0 !important;
+            }
+            .nf-sidebar-header { padding: 14px 16px !important; }
+            .nf-sidebar-list { padding: 8px !important; }
+            .nf-project-item { min-height: 54px !important; border-radius: 12px !important; padding: 12px !important; }
+            .nf-project-title { font-size: 16px !important; }
+
+            /* Write tab: side rail becomes a horizontal chapter filmstrip. */
+            .nf-write-layout {
+              flex-direction: column !important;
+              width: 100% !important;
+              min-width: 0 !important;
+              overflow: hidden !important;
+            }
+            .nf-chapter-sidebar {
+              order: 0 !important;
+              width: 100% !important;
+              min-width: 0 !important;
+              height: 82px !important;
+              min-height: 82px !important;
+              max-height: 82px !important;
+              border-right: 0 !important;
+              border-bottom: 1px solid var(--nf-border) !important;
+              display: flex !important;
+              flex-direction: row !important;
+              align-items: stretch !important;
+              background: var(--nf-bg-raised) !important;
+              overflow: hidden !important;
+            }
+            .nf-chapter-sidebar-header {
+              flex: 0 0 84px !important;
+              width: 84px !important;
+              padding: 8px !important;
+              border-bottom: 0 !important;
+              border-right: 1px solid var(--nf-border) !important;
+              flex-direction: column !important;
+              align-items: stretch !important;
+              justify-content: center !important;
+              gap: 6px !important;
+            }
+            .nf-chapter-sidebar-header .nf-section-label { font-size: 9px !important; text-align: center !important; }
+            .nf-chapter-sidebar-header .nf-btn-icon-sm {
+              width: 100% !important;
+              min-height: 34px !important;
+              justify-content: center !important;
+              border-radius: 10px !important;
+              font-size: 0 !important;
+              padding: 8px !important;
+            }
+            .nf-chapter-list {
+              flex: 1 1 auto !important;
+              min-width: 0 !important;
+              display: flex !important;
+              gap: 6px !important;
+              overflow-x: auto !important;
+              overflow-y: hidden !important;
+              padding: 8px !important;
+              scroll-snap-type: x proximity !important;
+              -webkit-overflow-scrolling: touch !important;
+              scrollbar-width: none !important;
+            }
+            .nf-chapter-list::-webkit-scrollbar { display: none !important; }
+            .nf-chapter-item {
+              flex: 0 0 124px !important;
+              width: 124px !important;
+              min-height: 64px !important;
+              margin: 0 !important;
+              padding: 10px !important;
+              border-left: 0 !important;
+              border-bottom: 3px solid transparent !important;
+              border-radius: 14px !important;
+              background: var(--nf-bg-deep) !important;
+              scroll-snap-align: start !important;
+            }
+            .nf-chapter-item.active { border-bottom-color: var(--nf-accent) !important; background: var(--nf-bg-surface) !important; }
+            .nf-chapter-item-title {
+              font-size: 12px !important;
+              line-height: 1.25 !important;
+              display: -webkit-box !important;
+              -webkit-line-clamp: 2 !important;
+              -webkit-box-orient: vertical !important;
+              overflow: hidden !important;
+              text-align: left !important;
+            }
+            .nf-chapter-item-meta { display: block !important; font-size: 9px !important; margin-top: 4px !important; }
+            .nf-editor-split { flex: 1 1 auto !important; min-height: 0 !important; min-width: 0 !important; width: 100% !important; }
+            .nf-text-editor { flex: 1 1 auto !important; min-width: 0 !important; width: 100% !important; }
+            .nf-chapter-header {
+              min-height: auto !important;
+              padding: 10px 12px !important;
+              gap: 8px !important;
+              flex-wrap: wrap !important;
+              align-items: center !important;
+              background: var(--nf-bg) !important;
+            }
+            .nf-chapter-title-input { flex: 1 1 180px !important; min-width: 0 !important; font-size: 18px !important; }
+            .nf-word-count { order: 3 !important; width: 100% !important; text-align: left !important; font-size: 10px !important; }
+            .nf-header-actions { margin-left: auto !important; display: flex !important; gap: 4px !important; overflow-x: auto !important; max-width: 100% !important; }
+            .nf-header-divider { display: none !important; }
+            .nf-rich-toolbar {
+              position: sticky !important;
+              top: 0 !important;
+              z-index: 20 !important;
+              min-height: 46px !important;
+              padding: 5px 8px !important;
+              overflow-x: auto !important;
+              overflow-y: hidden !important;
+              flex-wrap: nowrap !important;
+              background: var(--nf-bg-raised) !important;
+              border-bottom: 1px solid var(--nf-border) !important;
+              scrollbar-width: none !important;
+            }
+            .nf-rich-toolbar::-webkit-scrollbar { display: none !important; }
+            .nf-toolbar-btn { min-width: 42px !important; height: 42px !important; border-radius: 12px !important; }
+            .nf-toolbar-sep { flex: 0 0 1px !important; height: 28px !important; }
+            .nf-editor-contenteditable {
+              width: 100% !important;
+              max-width: none !important;
+              min-height: calc(100dvh - 260px) !important;
+              padding: 22px 18px 120px !important;
+              font-size: 17px !important;
+              line-height: 1.82 !important;
+              overflow-wrap: anywhere !important;
+            }
+            body.nf-zen-typography .nf-editor, body.nf-zen-typography [contenteditable="true"] { max-width: none !important; }
+
+            /* Non-write tabs: one clean scroll column. */
+            .nf-content-scroll {
+              width: 100% !important;
+              min-width: 0 !important;
+              padding: 16px var(--nf-mobile-pad) calc(112px + env(safe-area-inset-bottom, 0px)) !important;
+              overflow-x: hidden !important;
+              overflow-y: auto !important;
+              -webkit-overflow-scrolling: touch !important;
+              scroll-padding-bottom: 120px !important;
+            }
+            .nf-page-title { font-size: 23px !important; line-height: 1.12 !important; margin-bottom: 14px !important; }
+            .nf-hint { font-size: 13px !important; line-height: 1.55 !important; margin-bottom: 12px !important; }
+            .nf-card, .nf-char-section, .nf-settings-desk, .nf-world-view-card, .nf-keepsake-desk-card, .nf-data-safety-card, .nf-export-guide-card {
+              width: 100% !important;
+              max-width: 100% !important;
+              min-width: 0 !important;
+              border-radius: var(--nf-mobile-radius) !important;
+              padding: 14px !important;
+              margin-bottom: 12px !important;
+              overflow: visible !important;
+            }
+            .nf-card:hover, .nf-char-section:hover, .nf-polaroid:hover { transform: none !important; box-shadow: none !important; }
+            .nf-content-scroll [style*="grid-template-columns"],
+            .nf-card [style*="grid-template-columns"],
+            .nf-char-section [style*="grid-template-columns"],
+            .nf-settings-desk [style*="grid-template-columns"],
+            .nf-mobile-ai-sheet [style*="grid-template-columns"],
+            .nf-dialog [style*="grid-template-columns"] {
+              grid-template-columns: minmax(0, 1fr) !important;
+            }
+            .nf-content-scroll [style*="display: grid"],
+            .nf-card [style*="display: grid"],
+            .nf-char-section [style*="display: grid"] {
+              min-width: 0 !important;
+              max-width: 100% !important;
+            }
+            .nf-content-scroll [style*="display: flex"],
+            .nf-card [style*="display: flex"],
+            .nf-char-section [style*="display: flex"],
+            .nf-plot-edit-section [style*="display: flex"],
+            .nf-rel-edit-section [style*="display: flex"] {
+              min-width: 0 !important;
+              max-width: 100% !important;
+              flex-wrap: wrap !important;
+            }
+            .nf-content-scroll [style*="minWidth"],
+            .nf-content-scroll [style*="min-width"],
+            .nf-card [style*="minWidth"],
+            .nf-card [style*="min-width"] {
+              min-width: 0 !important;
+            }
+            .nf-content-scroll [style*="width: 260"], .nf-content-scroll [style*="width: 280"], .nf-content-scroll [style*="width: 300"],
+            .nf-content-scroll [style*="width: 320"], .nf-content-scroll [style*="width: 360"], .nf-content-scroll [style*="width: 420"] {
+              width: 100% !important;
+              max-width: 100% !important;
+            }
+
+            /* Touch-safe forms and action rows. */
+            .nf-input, .nf-select, .nf-textarea, .nf-chat-textarea, textarea, input, select {
+              max-width: 100% !important;
+              min-width: 0 !important;
+              font-size: 16px !important;
+              min-height: 46px !important;
+              border-radius: 12px !important;
+            }
+            .nf-textarea, textarea { line-height: 1.45 !important; }
+            .nf-label { font-size: 10px !important; letter-spacing: 0.08em !important; }
+            .nf-field { min-width: 0 !important; width: 100% !important; }
+            .nf-btn { min-height: 44px !important; border-radius: 12px !important; justify-content: center !important; }
+            .nf-btn-icon, .nf-btn-icon-sm { min-width: 42px !important; min-height: 42px !important; border-radius: 12px !important; justify-content: center !important; }
+            .nf-btn-micro { min-height: 36px !important; border-radius: 10px !important; padding: 8px 12px !important; }
+            .nf-content-scroll [style*="display: flex"] > .nf-btn,
+            .nf-card [style*="display: flex"] > .nf-btn,
+            .nf-char-section [style*="display: flex"] > .nf-btn {
+              flex: 1 1 150px !important;
+            }
+
+            /* Editable prompt dropdowns become bottom sheets. */
+            .nf-prompt-picker, .nf-portfolio-shot-picker, .nf-writer-mode-dropdown, .nf-config-prompt-picker {
+              width: 100% !important;
+              min-width: 0 !important;
+            }
+            .nf-prompt-trigger, .nf-portfolio-shot-trigger {
+              min-height: 46px !important;
+              border-radius: 12px !important;
+              font-size: 14px !important;
+              padding: 10px 12px !important;
+            }
+            .nf-prompt-menu, .nf-portfolio-shot-menu {
+              position: fixed !important;
+              left: 10px !important;
+              right: 10px !important;
+              top: auto !important;
+              bottom: calc(var(--nf-mobile-nav-h) + 10px + env(safe-area-inset-bottom, 0px)) !important;
+              width: auto !important;
+              min-width: 0 !important;
+              max-width: none !important;
+              max-height: min(58vh, 520px) !important;
+              overflow: auto !important;
+              z-index: 420 !important;
+              border-radius: 18px !important;
+              padding: 8px !important;
+              box-shadow: 0 -12px 40px rgba(0,0,0,0.44) !important;
+              background: var(--nf-dialog-bg) !important;
+            }
+            .nf-prompt-menu-row, .nf-portfolio-shot-menu-row {
+              min-height: 52px !important;
+              border-radius: 12px !important;
+              margin-bottom: 4px !important;
+            }
+            .nf-prompt-menu-label, .nf-portfolio-shot-menu-label {
+              min-height: 52px !important;
+              padding: 10px 12px !important;
+            }
+            .nf-prompt-menu-edit, .nf-portfolio-shot-menu-edit {
+              width: 48px !important;
+              min-width: 48px !important;
+              min-height: 48px !important;
+            }
+            .nf-prompt-menu-text, .nf-portfolio-shot-menu-text { font-size: 14px !important; }
+            .nf-prompt-menu-meta { font-size: 11px !important; }
+
+            /* Character / world / plot / relationship editing sections. */
+            .nf-char-jumpbar, .nf-writer-lab-tools, .nf-chat-actions, .nf-keepsake-quick-actions {
+              display: flex !important;
+              gap: 8px !important;
+              overflow-x: auto !important;
+              flex-wrap: nowrap !important;
+              padding-bottom: 4px !important;
+              scrollbar-width: none !important;
+            }
+            .nf-char-jumpbar::-webkit-scrollbar, .nf-writer-lab-tools::-webkit-scrollbar, .nf-chat-actions::-webkit-scrollbar { display: none !important; }
+            .nf-roster-row { min-height: 58px !important; border-radius: 14px !important; padding: 10px !important; }
+            .nf-pc-head, .nf-pc-body, .nf-pc-rel-header, .nf-world-view-card, .nf-plot-edit-section, .nf-rel-edit-section {
+              min-width: 0 !important;
+              max-width: 100% !important;
+            }
+            .nf-plot-edit-section, .nf-rel-edit-section {
+              border-radius: 14px !important;
+              padding: 14px !important;
+            }
+            .nf-plot-edit-section-head, .nf-rel-edit-section-head {
+              flex-direction: column !important;
+              align-items: stretch !important;
+              gap: 8px !important;
+            }
+            .nf-plot-number { width: 42px !important; height: 42px !important; min-width: 42px !important; }
+            .nf-rel-pulse-grid, .nf-stats-grid, .nf-settings-status-grid, .nf-data-safety-grid, .nf-export-guide, .nf-keepsake-desk-grid {
+              grid-template-columns: minmax(0, 1fr) !important;
+            }
+
+            /* Image and portfolio grids: no tiny thumbnails, no overlap. */
+            .nf-polaroid { border-radius: 12px !important; padding: 6px 6px 10px !important; min-width: 0 !important; }
+            .nf-polaroid img, .nf-world-view-card img, .nf-card img { max-width: 100% !important; height: auto !important; object-fit: cover !important; }
+            .nf-portfolio-package-main {
+              grid-template-columns: minmax(0, 1fr) !important;
+              gap: 8px !important;
+            }
+            .nf-portfolio-package-card { border-radius: 14px !important; padding: 10px !important; }
+            .nf-portfolio-generate-btn { min-height: 46px !important; font-size: 13px !important; border-radius: 12px !important; }
+            .nf-portfolio-generate-meta { font-size: 10px !important; }
+
+            /* Chat panels are bottom sheets on mobile. */
+            .nf-tab-ai-panel { display: none !important; }
+            .nf-mobile-ai-fab {
+              right: max(14px, env(safe-area-inset-right, 0px)) !important;
+              bottom: calc(var(--nf-mobile-nav-h) + 16px + env(safe-area-inset-bottom, 0px)) !important;
+              width: 56px !important;
+              height: 56px !important;
+              z-index: 210 !important;
+              box-shadow: 0 8px 24px rgba(0,0,0,0.38) !important;
+            }
+            .nf-mobile-ai-sheet {
+              height: min(82dvh, 720px) !important;
+              bottom: calc(var(--nf-mobile-nav-h) + env(safe-area-inset-bottom, 0px)) !important;
+              padding-bottom: 0 !important;
+              border-radius: 20px 20px 0 0 !important;
+              z-index: 230 !important;
+            }
+            .nf-mobile-ai-sheet-header { min-height: 56px !important; padding: 16px !important; }
+            .nf-chat-messages { padding: 12px !important; }
+            .nf-chat-input-area { padding: 10px 12px !important; gap: 8px !important; }
+            .nf-chat-textarea { min-height: 48px !important; max-height: 32dvh !important; }
+            .nf-send-btn { min-width: 48px !important; min-height: 48px !important; border-radius: 14px !important; }
+            .nf-chat-bubble { max-width: 92% !important; font-size: 14px !important; line-height: 1.55 !important; border-radius: 16px !important; }
+
+            /* Floating global widgets no longer cover content. */
+            .nf-utility-rail {
+              left: max(10px, env(safe-area-inset-left, 0px)) !important;
+              bottom: calc(var(--nf-mobile-nav-h) + 14px + env(safe-area-inset-bottom, 0px)) !important;
+              z-index: 205 !important;
+              flex-direction: row !important;
+              border-radius: 18px !important;
+              max-width: calc(100vw - 86px) !important;
+              overflow-x: auto !important;
+            }
+            .nf-utility-btn { width: 42px !important; height: 42px !important; min-width: 42px !important; border-radius: 14px !important; }
+            .nf-utility-label, .nf-utility-shortcut { display: none !important; }
+            .nf-ai-activity-panel {
+              left: 10px !important;
+              right: 10px !important;
+              bottom: calc(var(--nf-mobile-nav-h) + 78px + env(safe-area-inset-bottom, 0px)) !important;
+              width: auto !important;
+              max-height: 38dvh !important;
+              z-index: 215 !important;
+              border-radius: 16px !important;
+            }
+            .nf-ai-activity-body { max-height: 27dvh !important; }
+            .nf-toast {
+              left: 12px !important;
+              right: 12px !important;
+              bottom: calc(var(--nf-mobile-nav-h) + 12px + env(safe-area-inset-bottom, 0px)) !important;
+              width: auto !important;
+              max-width: none !important;
+              border-radius: 14px !important;
+            }
+
+            /* Modals/dialogs: full-width sheets instead of desktop popups. */
+            .nf-dialog, [role="dialog"] {
+              width: calc(100vw - 20px) !important;
+              max-width: calc(100vw - 20px) !important;
+              max-height: calc(100dvh - var(--nf-mobile-nav-h) - 24px) !important;
+              overflow: auto !important;
+              border-radius: 18px !important;
+              margin: 10px !important;
+            }
+            .nf-menu-scrim, .nf-menu-action { touch-action: manipulation !important; }
+            .nf-action-menu {
+              position: fixed !important;
+              left: 10px !important;
+              right: 10px !important;
+              bottom: calc(var(--nf-mobile-nav-h) + 10px + env(safe-area-inset-bottom, 0px)) !important;
+              top: auto !important;
+              width: auto !important;
+              max-height: 58dvh !important;
+              overflow: auto !important;
+              border-radius: 18px !important;
+              z-index: 430 !important;
+            }
+
+            /* Tables/large inline blocks: horizontal scroll inside their own box. */
+            table, pre, code { max-width: 100% !important; }
+            pre, table { overflow-x: auto !important; -webkit-overflow-scrolling: touch !important; }
+            .nf-context-preview, .nf-chapter-context-panel {
+              max-width: 100% !important;
+              overflow-x: auto !important;
+              border-radius: 14px !important;
+            }
+          }
+
+          @media (max-width: 520px) {
+            :root { --nf-mobile-nav-h: 72px; --nf-mobile-pad: 12px; }
+            .nf-tab-btn { flex-basis: 62px !important; min-width: 62px !important; height: 54px !important; }
+            .nf-tab-label { max-width: 54px !important; font-size: 9.5px !important; }
+            .nf-tab-bar > .nf-btn-icon:first-child { width: 44px !important; min-width: 44px !important; height: 54px !important; }
+            .nf-chapter-sidebar { height: 78px !important; min-height: 78px !important; max-height: 78px !important; }
+            .nf-chapter-sidebar-header { flex-basis: 72px !important; width: 72px !important; }
+            .nf-chapter-item { flex-basis: 108px !important; width: 108px !important; min-height: 60px !important; }
+            .nf-editor-contenteditable { padding: 18px 14px 118px !important; font-size: 16.5px !important; }
+            .nf-card, .nf-char-section, .nf-plot-edit-section, .nf-rel-edit-section { padding: 12px !important; }
+            .nf-btn { width: 100%; }
+            .nf-btn-icon, .nf-btn-icon-sm, .nf-btn-micro, .nf-toolbar-btn, .nf-tab-btn, .nf-send-btn { width: auto; }
+            .nf-content-scroll [style*="display: flex"] > .nf-btn-icon-sm,
+            .nf-content-scroll [style*="display: flex"] > .nf-btn-micro {
+              flex: 1 1 auto !important;
+            }
+            .nf-mobile-ai-fab { width: 54px !important; height: 54px !important; }
+            .nf-utility-rail { display: none !important; }
+          }
+
+          @media (max-width: 380px) {
+            :root { --nf-mobile-nav-h: 68px; --nf-mobile-pad: 10px; }
+            .nf-tab-btn { flex-basis: 56px !important; min-width: 56px !important; padding: 6px 4px !important; }
+            .nf-tab-label { display: none !important; }
+            .nf-tab-btn svg { width: 21px !important; height: 21px !important; }
+            .nf-tab-bar > .nf-btn-icon:first-child { width: 42px !important; min-width: 42px !important; }
+            .nf-chapter-sidebar-header { flex-basis: 62px !important; width: 62px !important; }
+            .nf-chapter-item { flex-basis: 96px !important; width: 96px !important; }
+            .nf-chapter-item-title { font-size: 11px !important; -webkit-line-clamp: 2 !important; }
+            .nf-chapter-item-meta { display: none !important; }
+            .nf-editor-contenteditable { padding: 16px 12px 112px !important; font-size: 16px !important; line-height: 1.78 !important; }
+            .nf-page-title { font-size: 21px !important; }
+            .nf-content-scroll { padding-left: 10px !important; padding-right: 10px !important; }
+          }
+
+
+          /* ═══════════════════════════════════════════
+             MOBILE UX REDESIGN — v8 continuation
+             Second pass: top context bar, dense editors, image lists,
+             heavy modals, and tab-specific overflow traps.
+          ═══════════════════════════════════════════ */
+          .nf-mobile-topbar { display: none; }
+          @media (max-width: 820px) {
+            :root {
+              --nf-mobile-topbar-h: 56px;
+              --nf-mobile-rail-gap: 10px;
+            }
+            #nf-main-content {
+              padding-top: var(--nf-mobile-topbar-h) !important;
+            }
+            #nf-main-content.nf-main-focus {
+              padding-top: 0 !important;
+            }
+            .nf-mobile-topbar {
+              display: flex !important;
+              position: fixed !important;
+              top: env(safe-area-inset-top, 0px) !important;
+              left: 0 !important;
+              right: 0 !important;
+              height: var(--nf-mobile-topbar-h) !important;
+              z-index: 245 !important;
+              align-items: center !important;
+              gap: 8px !important;
+              padding: 7px max(10px, env(safe-area-inset-left, 0px)) 7px max(10px, env(safe-area-inset-right, 0px)) !important;
+              background: color-mix(in srgb, var(--nf-bg) 94%, transparent) !important;
+              border-bottom: 1px solid var(--nf-border) !important;
+              box-shadow: 0 8px 22px rgba(0,0,0,0.22) !important;
+              backdrop-filter: blur(16px) !important;
+              -webkit-backdrop-filter: blur(16px) !important;
+            }
+            .nf-mobile-topbar .nf-btn-icon {
+              width: 42px !important;
+              height: 42px !important;
+              min-width: 42px !important;
+              min-height: 42px !important;
+              border-radius: 14px !important;
+              background: var(--nf-bg-raised) !important;
+              border: 1px solid var(--nf-border) !important;
+              color: var(--nf-text) !important;
+              margin: 0 !important;
+              flex: 0 0 auto !important;
+            }
+            .nf-mobile-topbar-title {
+              flex: 1 1 auto !important;
+              min-width: 0 !important;
+              display: flex !important;
+              flex-direction: column !important;
+              gap: 1px !important;
+            }
+            .nf-mobile-topbar-title span {
+              color: var(--nf-text) !important;
+              font-family: var(--nf-font-display) !important;
+              font-size: 16px !important;
+              line-height: 1.1 !important;
+              overflow: hidden !important;
+              text-overflow: ellipsis !important;
+              white-space: nowrap !important;
+            }
+            .nf-mobile-topbar-title small {
+              color: var(--nf-text-muted) !important;
+              font-size: 10px !important;
+              line-height: 1.1 !important;
+              overflow: hidden !important;
+              text-overflow: ellipsis !important;
+              white-space: nowrap !important;
+            }
+            .nf-mobile-topbar .nf-save-indicator {
+              display: flex !important;
+              flex: 0 0 auto !important;
+              max-width: 74px !important;
+              height: 34px !important;
+              align-items: center !important;
+              justify-content: center !important;
+              border: 1px solid var(--nf-border) !important;
+              border-radius: 999px !important;
+              background: var(--nf-bg-raised) !important;
+              padding: 0 8px !important;
+            }
+            .nf-mobile-topbar .nf-save-indicator span { display: none !important; }
+            .nf-tab-bar > .nf-btn-icon:first-child { display: none !important; }
+            .nf-tab-scroll-area { padding-left: 0 !important; }
+            .nf-sidebar-open { top: calc(var(--nf-mobile-topbar-h) + env(safe-area-inset-top, 0px)) !important; }
+
+            /* Page headers act like light section headers, not huge desktop mastheads. */
+            .nf-content-scroll > div:first-child[style*="display: flex"],
+            .nf-content-scroll > header:first-child,
+            .nf-settings-desk-head,
+            .nf-keepsake-desk-head,
+            .nf-data-safety-head,
+            .nf-export-guide-top {
+              position: sticky !important;
+              top: -1px !important;
+              z-index: 30 !important;
+              margin: -16px calc(var(--nf-mobile-pad) * -1) 12px !important;
+              padding: 12px var(--nf-mobile-pad) !important;
+              background: color-mix(in srgb, var(--nf-bg) 96%, transparent) !important;
+              border-bottom: 1px solid var(--nf-border) !important;
+              backdrop-filter: blur(12px) !important;
+              -webkit-backdrop-filter: blur(12px) !important;
+            }
+            .nf-page-title::after { display: none !important; }
+            .nf-section-eyebrow, .nf-section-label, .nf-label {
+              line-height: 1.25 !important;
+            }
+
+            /* Top-level desktop action clusters become scrollable shelves, not wrapping piles. */
+            .nf-header-actions,
+            .nf-compose-label-row,
+            .nf-writer-compose-row,
+            .nf-writer-lab-row,
+            .nf-settings-summary-pill,
+            .nf-data-safety-top,
+            .nf-export-guide-top,
+            .nf-settings-card-top,
+            .nf-keepsake-card-top {
+              min-width: 0 !important;
+              width: 100% !important;
+              max-width: 100% !important;
+            }
+            .nf-header-actions,
+            .nf-writer-lab-tools,
+            .nf-keepsake-quick-actions,
+            .nf-chat-actions,
+            .nf-settings-status-grid + div[style*="display: flex"],
+            .nf-content-scroll > div[style*="display: flex"][style*="gap"] {
+              overflow-x: auto !important;
+              overflow-y: hidden !important;
+              flex-wrap: nowrap !important;
+              -webkit-overflow-scrolling: touch !important;
+              scrollbar-width: none !important;
+              padding-bottom: 4px !important;
+            }
+            .nf-header-actions::-webkit-scrollbar,
+            .nf-writer-lab-tools::-webkit-scrollbar,
+            .nf-keepsake-quick-actions::-webkit-scrollbar,
+            .nf-chat-actions::-webkit-scrollbar { display: none !important; }
+            .nf-header-actions > *,
+            .nf-writer-lab-tools > *,
+            .nf-keepsake-quick-actions > *,
+            .nf-chat-actions > * { flex: 0 0 auto !important; }
+
+            /* Keep small controls small even after broad mobile button rules. */
+            .nf-btn-icon, .nf-btn-icon-sm, .nf-btn-micro, .nf-toolbar-btn,
+            .nf-prompt-menu-edit, .nf-portfolio-shot-menu-edit,
+            .nf-tab-btn, .nf-send-btn, .nf-utility-btn {
+              flex-shrink: 0 !important;
+            }
+            .nf-btn-micro { white-space: nowrap !important; }
+            .nf-content-scroll .nf-btn-micro,
+            .nf-card .nf-btn-micro,
+            .nf-char-section .nf-btn-micro {
+              width: auto !important;
+            }
+            .nf-content-scroll .nf-btn:not(.nf-btn-primary):not(.nf-btn-danger),
+            .nf-card .nf-btn:not(.nf-btn-primary):not(.nf-btn-danger),
+            .nf-char-section .nf-btn:not(.nf-btn-primary):not(.nf-btn-danger) {
+              min-width: 0 !important;
+            }
+
+            /* Write: reduce vertical chrome and stop editor jumpiness. */
+            .nf-chapter-header {
+              position: sticky !important;
+              top: 0 !important;
+              z-index: 25 !important;
+              background: var(--nf-bg) !important;
+              border-bottom: 1px solid var(--nf-border) !important;
+              padding: 8px 10px !important;
+              gap: 8px !important;
+            }
+            .nf-chapter-title-input {
+              font-size: 16px !important;
+              min-height: 42px !important;
+              padding: 9px 10px !important;
+            }
+            .nf-word-count, .nf-project-meta { font-size: 10px !important; }
+            .nf-mode-bar, .nf-rich-toolbar {
+              scroll-snap-type: x proximity !important;
+              gap: 6px !important;
+            }
+            .nf-mode-bar .nf-btn, .nf-rich-toolbar .nf-toolbar-btn { scroll-snap-align: start !important; }
+            .nf-writer-brief-panel,
+            .nf-scene-brief,
+            .nf-scene-direction-box,
+            .nf-writing-progress {
+              border-radius: 14px !important;
+              margin: 10px !important;
+              max-width: calc(100% - 20px) !important;
+            }
+            .nf-writing-progress {
+              display: grid !important;
+              grid-template-columns: minmax(0,1fr) minmax(0,1fr) !important;
+              gap: 8px !important;
+            }
+            .nf-writing-progress-session { grid-column: 1 / -1 !important; }
+            .nf-ghost {
+              padding: 12px 16px !important;
+              margin: 8px 10px !important;
+              border: 1px dashed var(--nf-border) !important;
+              border-radius: 12px !important;
+              opacity: 0.78 !important;
+            }
+            .nf-ghost-prose { font-size: 13px !important; line-height: 1.6 !important; }
+
+            /* Character / world / relationship cards: convert dense metadata into readable blocks. */
+            .nf-pc-head,
+            .nf-keepsake-card-top,
+            .nf-settings-card-top,
+            .nf-data-safety-top,
+            .nf-export-guide-top {
+              flex-wrap: nowrap !important;
+              align-items: flex-start !important;
+            }
+            .nf-pc-identity, .nf-pc-body, .nf-pc-section, .nf-pc-rel-section { min-width: 0 !important; }
+            .nf-pc-meta { gap: 5px !important; overflow-x: auto !important; flex-wrap: nowrap !important; padding-bottom: 2px !important; }
+            .nf-pc-meta::-webkit-scrollbar { display: none !important; }
+            .nf-pc-tag { flex: 0 0 auto !important; }
+            .nf-presence-strip {
+              overflow-x: auto !important;
+              overflow-y: hidden !important;
+              flex-wrap: nowrap !important;
+              padding: 8px 10px !important;
+              scroll-snap-type: x proximity !important;
+            }
+            .nf-presence-chip { flex: 0 0 auto !important; scroll-snap-align: start !important; }
+            .nf-presence-card {
+              left: 10px !important;
+              right: 10px !important;
+              bottom: calc(var(--nf-mobile-nav-h) + 10px + env(safe-area-inset-bottom,0px)) !important;
+              top: auto !important;
+              transform: none !important;
+              width: auto !important;
+              max-height: 56dvh !important;
+              border-radius: 18px !important;
+            }
+            .nf-org-tree {
+              overflow-x: auto !important;
+              overflow-y: hidden !important;
+              padding: 12px !important;
+              border-radius: 14px !important;
+              -webkit-overflow-scrolling: touch !important;
+            }
+            .nf-org-tree > * { min-width: max-content !important; }
+            .nf-rel-web-node { min-width: 132px !important; max-width: 180px !important; }
+            .nf-rel-web-tip {
+              left: 10px !important;
+              right: 10px !important;
+              width: auto !important;
+              max-width: none !important;
+              transform: none !important;
+            }
+
+            /* Images tab: list rows and review panels should not pretend to be desktop tables. */
+            .nf-content-scroll [style*="58px minmax(0,1fr) 95px 92px 72px"] {
+              grid-template-columns: 74px minmax(0,1fr) !important;
+              gap: 10px !important;
+            }
+            .nf-content-scroll [style*="58px minmax(0,1fr) 95px 92px 72px"] > :nth-child(n+3) {
+              display: none !important;
+            }
+            .nf-polaroid {
+              break-inside: avoid !important;
+              contain: content !important;
+            }
+            .nf-polaroid img {
+              aspect-ratio: 4 / 5 !important;
+              width: 100% !important;
+              max-height: 55dvh !important;
+            }
+            .nf-content-scroll [style*="repeat(auto-fill, minmax(92px"] {
+              grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+            }
+            .nf-content-scroll [style*="repeat(auto-fit, minmax(130px"] {
+              grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+            }
+            .nf-portfolio-package-card,
+            .nf-portfolio-package-main,
+            .nf-portfolio-shot-picker,
+            .nf-portfolio-generate-btn { width: 100% !important; }
+            .nf-portfolio-shot-count { display: block !important; margin-top: 3px !important; }
+
+            /* Settings and memory: dense admin surfaces need breathing room and horizontal islands. */
+            .nf-settings-desk,
+            .nf-keepsake-desk,
+            .nf-data-safety-panel,
+            .nf-export-guide,
+            .nf-settings-advanced-panel {
+              width: 100% !important;
+              max-width: 100% !important;
+              min-width: 0 !important;
+            }
+            .nf-settings-advanced-body {
+              padding: 12px !important;
+              max-height: none !important;
+              overflow: visible !important;
+            }
+            .nf-settings-next {
+              flex-direction: column !important;
+              align-items: stretch !important;
+              gap: 8px !important;
+            }
+            .nf-settings-next-title, .nf-settings-next-detail, .nf-settings-next-label,
+            .nf-data-safety-detail, .nf-keepsake-card-detail {
+              overflow-wrap: anywhere !important;
+            }
+
+            /* Fullscreen and portal modals: turn overflow-heavy tools into bottom sheets. */
+            body > div[style*="position: fixed"][style*="inset: 0"] {
+              padding: 0 !important;
+            }
+            body > div[style*="position: fixed"][style*="inset: 0"] > div,
+            .nf-dialog,
+            [role="dialog"] {
+              max-width: calc(100vw - 18px) !important;
+            }
+            body > div[style*="position: fixed"][style*="inset: 0"] > div[style*="maxWidth"],
+            body > div[style*="position: fixed"][style*="inset: 0"] > div[style*="max-width"] {
+              width: calc(100vw - 18px) !important;
+              max-width: calc(100vw - 18px) !important;
+              max-height: calc(100dvh - var(--nf-mobile-topbar-h) - var(--nf-mobile-nav-h) - 18px) !important;
+              overflow: auto !important;
+              border-radius: 18px !important;
+            }
+            body > div[style*="position: fixed"][style*="inset: 0"] [style*="grid-template-columns"] {
+              grid-template-columns: minmax(0,1fr) !important;
+            }
+            body > div[style*="position: fixed"][style*="inset: 0"] [style*="display: flex"] {
+              min-width: 0 !important;
+              max-width: 100% !important;
+              flex-wrap: wrap !important;
+            }
+            body > div[style*="position: fixed"][style*="inset: 0"] input,
+            body > div[style*="position: fixed"][style*="inset: 0"] select,
+            body > div[style*="position: fixed"][style*="inset: 0"] textarea {
+              font-size: 16px !important;
+              min-width: 0 !important;
+              max-width: 100% !important;
+            }
+
+            /* Touch / keyboard ergonomics. */
+            input[type="checkbox"], input[type="radio"] {
+              min-width: 22px !important;
+              min-height: 22px !important;
+            }
+            label { min-width: 0 !important; }
+            [style*="whiteSpace: nowrap"], [style*="white-space: nowrap"] {
+              max-width: 100% !important;
+            }
+            [style*="fontFamily: var(--nf-font-mono)"], [style*="font-family: var(--nf-font-mono)"] {
+              overflow-wrap: anywhere !important;
+            }
+          }
+
+          @media (max-width: 520px) {
+            .nf-mobile-topbar { height: 54px !important; }
+            #nf-main-content { padding-top: 54px !important; }
+            .nf-mobile-topbar .nf-btn-icon { width: 40px !important; height: 40px !important; min-width: 40px !important; min-height: 40px !important; }
+            .nf-mobile-topbar-title span { font-size: 15px !important; }
+            .nf-mobile-topbar-title small { font-size: 9.5px !important; }
+            .nf-mobile-topbar .nf-save-indicator { max-width: 36px !important; padding: 0 !important; }
+            .nf-content-scroll [style*="repeat(auto-fill, minmax(92px"] { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+            .nf-content-scroll [style*="repeat(auto-fit, minmax(130px"] { grid-template-columns: minmax(0, 1fr) !important; }
+            .nf-writing-progress { grid-template-columns: minmax(0,1fr) !important; }
+            .nf-mobile-topbar .nf-btn-icon[aria-label="Find and replace"] { display: none !important; }
+          }
+
+          @media (max-width: 380px) {
+            .nf-mobile-topbar { gap: 6px !important; padding-left: 8px !important; padding-right: 8px !important; }
+            .nf-mobile-topbar .nf-btn-icon { width: 38px !important; height: 38px !important; min-width: 38px !important; min-height: 38px !important; border-radius: 12px !important; }
+            .nf-mobile-topbar-title small { display: none !important; }
+            .nf-tab-scroll-area { gap: 4px !important; }
+            .nf-page-title { font-size: 20px !important; }
+            .nf-btn-micro { padding-left: 10px !important; padding-right: 10px !important; }
+          }
+
+          /* ═══════════════════════════════════════════
+             MOBILE UX REDESIGN — v9 continuation
+             Hardening pass for nested panes, portal tools, and overflow traps.
+          ═══════════════════════════════════════════ */
+          @media (max-width: 820px) {
+            /* Universal anti-overflow rules. These are deliberately scoped to phone layouts. */
+            .nf-root, .nf-root * { box-sizing: border-box !important; }
+            .nf-root * { min-width: 0; }
+            .nf-content-scroll, .nf-editor-area, .nf-text-editor, .nf-editor-split,
+            .nf-card, .nf-char-section, .nf-world-view-card, .nf-plot-edit-section,
+            .nf-rel-edit-section, .nf-settings-desk, .nf-keepsake-desk {
+              max-width: 100% !important;
+              overflow-wrap: anywhere !important;
+            }
+            .nf-content-scroll {
+              overscroll-behavior: contain !important;
+              -webkit-overflow-scrolling: touch !important;
+            }
+            .nf-content-scroll > * {
+              max-width: 100% !important;
+            }
+            .nf-content-scroll img,
+            .nf-content-scroll video,
+            .nf-content-scroll canvas,
+            .nf-content-scroll svg {
+              max-width: 100% !important;
+            }
+            .nf-content-scroll table {
+              display: block !important;
+              width: 100% !important;
+              overflow-x: auto !important;
+              -webkit-overflow-scrolling: touch !important;
+            }
+
+            /* Inputs: bigger touch targets, no iOS zoom, sane width. */
+            .nf-input, .nf-select, .nf-textarea, .nf-textarea-sm,
+            .nf-scene-textarea, .nf-chat-textarea,
+            input, select, textarea {
+              font-size: 16px !important;
+              max-width: 100% !important;
+              min-width: 0 !important;
+            }
+            .nf-field { min-width: 0 !important; width: 100% !important; }
+            .nf-label, .nf-section-label, .nf-card-title { overflow-wrap: anywhere !important; }
+            .nf-input-compact { min-height: 40px !important; }
+            textarea { min-height: 72px !important; }
+
+            /* Inline action rows become scrollable action rails instead of wrapping into piles. */
+            .nf-content-scroll [style*="display: flex"][style*="justify-content: space-between"],
+            .nf-content-scroll [style*="display:flex"][style*="justify-content:space-between"],
+            .nf-content-scroll [style*="display: flex"][style*="align-items: center"],
+            .nf-content-scroll [style*="display:flex"][style*="alignItems: center"] {
+              min-width: 0 !important;
+            }
+            .nf-header-actions,
+            .nf-chat-actions,
+            .nf-writer-lab-tools,
+            .nf-keepsake-quick-actions,
+            .nf-content-scroll [style*="gap: 6"][style*="display: flex"] {
+              overflow-x: auto !important;
+              overflow-y: hidden !important;
+              flex-wrap: nowrap !important;
+              -webkit-overflow-scrolling: touch !important;
+              scrollbar-width: none !important;
+            }
+            .nf-content-scroll [style*="gap: 6"][style*="display: flex"]::-webkit-scrollbar { display: none !important; }
+            .nf-content-scroll [style*="gap: 6"][style*="display: flex"] > * { flex: 0 0 auto !important; }
+
+            /* Broad grid collapse for desktop-only inline grids that slipped through earlier passes. */
+            .nf-content-scroll [style*="grid-template-columns: 1fr 1fr"],
+            .nf-content-scroll [style*="grid-template-columns: repeat(2"],
+            .nf-content-scroll [style*="grid-template-columns: repeat(3"],
+            .nf-content-scroll [style*="grid-template-columns: repeat(4"],
+            .nf-content-scroll [style*="gridTemplateColumns: '1fr 1fr'"],
+            .nf-content-scroll [style*="gridTemplateColumns"] {
+              grid-template-columns: minmax(0, 1fr) !important;
+            }
+            .nf-content-scroll [style*="grid-template-columns: minmax(260px"],
+            .nf-content-scroll [style*="grid-template-columns: minmax(280px"],
+            .nf-content-scroll [style*="grid-template-columns: minmax(300px"],
+            .nf-content-scroll [style*="grid-template-columns: 260px"],
+            .nf-content-scroll [style*="grid-template-columns: 280px"],
+            .nf-content-scroll [style*="grid-template-columns: 300px"] {
+              grid-template-columns: minmax(0, 1fr) !important;
+            }
+            .nf-content-scroll [style*="grid-column: 1 / -1"],
+            .nf-content-scroll [style*="gridColumn: '1 / -1'"] {
+              grid-column: auto !important;
+            }
+
+            /* Cards and dense sections: consistent phone rhythm. */
+            .nf-card, .nf-char-section, .nf-world-view-card,
+            .nf-plot-edit-section, .nf-rel-edit-section,
+            .nf-settings-status-card, .nf-data-safety-card,
+            .nf-export-guide-card, .nf-keepsake-desk-card {
+              border-radius: 16px !important;
+              padding: 14px !important;
+              margin-bottom: 12px !important;
+            }
+            .nf-plot-edit-section-head,
+            .nf-rel-edit-section-head,
+            .nf-data-safety-head,
+            .nf-settings-desk-head,
+            .nf-keepsake-desk-head {
+              flex-direction: column !important;
+              align-items: stretch !important;
+              gap: 8px !important;
+            }
+            .nf-plot-edit-section-meta,
+            .nf-rel-edit-section-meta {
+              width: fit-content !important;
+              max-width: 100% !important;
+              white-space: normal !important;
+            }
+            .nf-stats-grid, .nf-settings-status-grid,
+            .nf-data-safety-grid, .nf-keepsake-desk-grid {
+              grid-template-columns: minmax(0, 1fr) !important;
+              gap: 10px !important;
+            }
+
+            /* Prompt menus: bottom sheet polish and safe row hit areas. */
+            .nf-prompt-menu, .nf-portfolio-shot-menu {
+              left: 8px !important;
+              right: 8px !important;
+              width: auto !important;
+              max-width: none !important;
+              max-height: min(68dvh, 520px) !important;
+              border-radius: 18px 18px 0 0 !important;
+              bottom: calc(var(--nf-mobile-nav-h) + env(safe-area-inset-bottom, 0px)) !important;
+              top: auto !important;
+              overflow: auto !important;
+              -webkit-overflow-scrolling: touch !important;
+            }
+            .nf-prompt-menu-row, .nf-portfolio-shot-menu-row {
+              min-height: 52px !important;
+              padding: 12px 10px 12px 14px !important;
+              gap: 10px !important;
+            }
+            .nf-prompt-menu-edit, .nf-portfolio-shot-menu-edit {
+              width: 40px !important;
+              height: 40px !important;
+              min-width: 40px !important;
+              min-height: 40px !important;
+            }
+            .nf-prompt-trigger, .nf-portfolio-shot-trigger { min-height: 46px !important; }
+
+            /* Portal tools are now real bottom sheets on phones. */
+            .nf-modal-overlay,
+            .nf-command-palette-overlay,
+            .nf-help-panel-overlay,
+            .nf-white-room-overlay,
+            .nf-timeline-overlay,
+            .nf-rel-web-overlay {
+              align-items: flex-end !important;
+              justify-content: stretch !important;
+              padding: 0 !important;
+            }
+            .nf-modal-sheet,
+            .nf-command-palette-sheet,
+            .nf-help-panel-sheet,
+            .nf-white-room-sheet,
+            .nf-timeline-sheet,
+            .nf-rel-web-sheet {
+              width: 100vw !important;
+              max-width: 100vw !important;
+              height: min(88dvh, calc(100dvh - var(--nf-mobile-topbar-h) - 6px)) !important;
+              max-height: min(88dvh, calc(100dvh - var(--nf-mobile-topbar-h) - 6px)) !important;
+              border-radius: 20px 20px 0 0 !important;
+              border-left: 0 !important;
+              border-right: 0 !important;
+              border-bottom: 0 !important;
+              overflow: hidden !important;
+            }
+            .nf-modal-sheet::before,
+            .nf-command-palette-sheet::before,
+            .nf-help-panel-sheet::before,
+            .nf-white-room-sheet::before,
+            .nf-timeline-sheet::before,
+            .nf-rel-web-sheet::before {
+              content: "";
+              display: block;
+              width: 42px;
+              height: 4px;
+              border-radius: 999px;
+              background: var(--nf-border);
+              opacity: .9;
+              margin: 8px auto 0;
+              flex: 0 0 auto;
+            }
+            .nf-command-palette-sheet > div:first-child,
+            .nf-help-panel-sheet > div:first-child,
+            .nf-white-room-sheet > div:first-child,
+            .nf-timeline-sheet > div:first-child,
+            .nf-rel-web-sheet > div:first-child {
+              padding-left: 14px !important;
+              padding-right: 14px !important;
+            }
+            .nf-command-palette-sheet input,
+            .nf-help-panel-sheet input,
+            .nf-white-room-sheet input,
+            .nf-white-room-sheet select,
+            .nf-white-room-sheet textarea {
+              font-size: 16px !important;
+            }
+            .nf-command-palette-sheet [style*="flexWrap: wrap"],
+            .nf-command-palette-sheet [style*="flex-wrap: wrap"],
+            .nf-help-panel-sheet [style*="display: flex"][style*="gap"] {
+              flex-wrap: nowrap !important;
+              overflow-x: auto !important;
+              -webkit-overflow-scrolling: touch !important;
+              scrollbar-width: none !important;
+            }
+            .nf-command-palette-sheet [style*="flexWrap: wrap"]::-webkit-scrollbar,
+            .nf-command-palette-sheet [style*="flex-wrap: wrap"]::-webkit-scrollbar,
+            .nf-help-panel-sheet [style*="display: flex"][style*="gap"]::-webkit-scrollbar { display: none !important; }
+
+            /* White Room: selection grid stacks, result stays readable. */
+            .nf-white-room-sheet [style*="grid-template-columns: 1fr auto 1fr"],
+            .nf-white-room-sheet [style*="grid-template-columns: 1fr 1fr"] {
+              grid-template-columns: minmax(0, 1fr) !important;
+              gap: 10px !important;
+            }
+            .nf-white-room-sheet [style*="fontSize: 20"][style*="paddingBottom"] {
+              display: none !important;
+            }
+            .nf-white-room-sheet [style*="font-family: var(--nf-font-prose)"],
+            .nf-white-room-sheet [style*="fontFamily: var(--nf-font-prose)"] {
+              font-size: 15px !important;
+              line-height: 1.75 !important;
+              max-height: 42dvh !important;
+            }
+
+            /* Timeline: readable cards, no tiny desktop lanes. */
+            .nf-timeline-sheet [style*="padding: 20px 24px"] {
+              padding: 14px !important;
+            }
+            .nf-timeline-sheet [style*="margin-left: 72px"],
+            .nf-timeline-sheet [style*="marginLeft: 72"] {
+              margin-left: 0 !important;
+            }
+            .nf-timeline-sheet [style*="width: 56"],
+            .nf-timeline-sheet [style*="left: -72"] {
+              position: static !important;
+              width: auto !important;
+              margin-bottom: 8px !important;
+            }
+            .nf-timeline-sheet [style*="display: grid"] {
+              grid-template-columns: minmax(0, 1fr) !important;
+            }
+
+            /* Relationship Web: top controls become rails; canvas owns the rest. */
+            .nf-rel-web-sheet {
+              height: calc(100dvh - var(--nf-mobile-topbar-h) - 2px) !important;
+              max-height: calc(100dvh - var(--nf-mobile-topbar-h) - 2px) !important;
+            }
+            .nf-rel-web-sheet > div:first-of-type,
+            .nf-rel-web-sheet > div:nth-of-type(2) {
+              flex-wrap: nowrap !important;
+              overflow-x: auto !important;
+              overflow-y: hidden !important;
+              -webkit-overflow-scrolling: touch !important;
+              scrollbar-width: none !important;
+              gap: 8px !important;
+            }
+            .nf-rel-web-sheet > div:first-of-type::-webkit-scrollbar,
+            .nf-rel-web-sheet > div:nth-of-type(2)::-webkit-scrollbar { display: none !important; }
+            .nf-rel-web-sheet > div:first-of-type > *,
+            .nf-rel-web-sheet > div:nth-of-type(2) > * { flex: 0 0 auto !important; }
+            .nf-rel-web-sheet > div:first-of-type > div:first-child {
+              min-width: min(62vw, 360px) !important;
+            }
+            .nf-rel-web-sheet > div:nth-of-type(3) {
+              min-height: 0 !important;
+              touch-action: none !important;
+            }
+            .nf-wl {
+              left: 10px !important;
+              right: 10px !important;
+              bottom: 10px !important;
+              max-height: 22dvh !important;
+              border-radius: 14px !important;
+              opacity: .94 !important;
+            }
+            .nf-rel-web-tip {
+              left: 10px !important;
+              right: 10px !important;
+              top: auto !important;
+              bottom: calc(var(--nf-mobile-nav-h) + 10px + env(safe-area-inset-bottom,0px)) !important;
+              width: auto !important;
+              max-width: none !important;
+              max-height: 42dvh !important;
+              overflow: auto !important;
+              border-radius: 16px !important;
+            }
+
+            /* Clean reader: phone reading mode, not desktop print preview. */
+            .nf-clean-view-modal {
+              padding-top: env(safe-area-inset-top, 0px) !important;
+              padding-bottom: env(safe-area-inset-bottom, 0px) !important;
+            }
+            .nf-clean-view-modal > div:first-of-type {
+              padding: 10px 12px !important;
+              gap: 8px !important;
+              position: sticky !important;
+              top: 0 !important;
+              z-index: 4 !important;
+              background: var(--nf-bg-deep) !important;
+            }
+            .nf-clean-reader {
+              padding: 28px 18px 88px !important;
+              font-size: 17px !important;
+              line-height: 1.85 !important;
+              max-width: 100% !important;
+            }
+            .nf-clean-view-modal > div:last-of-type {
+              display: none !important;
+            }
+
+            /* Editor images: mobile has no hover, so image controls must be visible. */
+            .nf-editor-contenteditable figure.nf-img-wrapper {
+              margin: 18px 0 !important;
+              border-radius: 14px !important;
+              overflow: hidden !important;
+            }
+            .nf-editor-contenteditable figure.nf-img-wrapper:hover { outline: none !important; }
+            .nf-editor-contenteditable .nf-img-handle,
+            .nf-editor-contenteditable .nf-img-actions {
+              display: flex !important;
+              opacity: .92 !important;
+            }
+            .nf-editor-contenteditable .nf-img-handle {
+              top: 8px !important;
+              right: 8px !important;
+              min-height: 32px !important;
+              align-items: center !important;
+              border-radius: 999px !important;
+              padding: 7px 10px !important;
+            }
+            .nf-editor-contenteditable .nf-img-actions {
+              top: 8px !important;
+              left: 8px !important;
+              gap: 6px !important;
+            }
+            .nf-editor-contenteditable .nf-img-actions button {
+              min-width: 34px !important;
+              min-height: 34px !important;
+              border-radius: 999px !important;
+            }
+
+            /* Image workspaces: phone-first grids and details. */
+            .nf-polaroid { border-radius: 16px !important; }
+            .nf-polaroid img { border-radius: 12px !important; object-fit: cover !important; }
+            .nf-content-scroll [style*="columns"],
+            .nf-content-scroll [style*="columnCount"],
+            .nf-content-scroll [style*="column-count"] {
+              columns: auto !important;
+              column-count: auto !important;
+              display: grid !important;
+              grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+              gap: 12px !important;
+            }
+            .nf-content-scroll [style*="aspect-ratio"],
+            .nf-content-scroll [style*="aspectRatio"] {
+              max-width: 100% !important;
+            }
+
+            /* Floating widgets avoid topbar/bottom nav and keyboard. */
+            .nf-ai-activity-panel,
+            .nf-utility-rail,
+            .nf-action-menu,
+            .nf-chapter-action-menu {
+              max-width: calc(100vw - 20px) !important;
+            }
+            .nf-ai-activity-panel {
+              left: 10px !important;
+              right: 10px !important;
+              bottom: calc(var(--nf-mobile-nav-h) + 10px + env(safe-area-inset-bottom,0px)) !important;
+              width: auto !important;
+              max-height: 40dvh !important;
+            }
+            .nf-ai-activity-body { max-height: 28dvh !important; }
+            .nf-action-menu,
+            .nf-chapter-action-menu {
+              position: fixed !important;
+              left: 8px !important;
+              right: 8px !important;
+              top: auto !important;
+              bottom: calc(var(--nf-mobile-nav-h) + 8px + env(safe-area-inset-bottom,0px)) !important;
+              width: auto !important;
+              max-height: 60dvh !important;
+              overflow: auto !important;
+              border-radius: 18px !important;
+            }
+          }
+
+          @media (max-width: 520px) {
+            .nf-modal-sheet,
+            .nf-command-palette-sheet,
+            .nf-help-panel-sheet,
+            .nf-white-room-sheet,
+            .nf-timeline-sheet,
+            .nf-rel-web-sheet {
+              height: calc(100dvh - 54px) !important;
+              max-height: calc(100dvh - 54px) !important;
+              border-radius: 18px 18px 0 0 !important;
+            }
+            .nf-command-palette-sheet [style*="grid-template-columns: 28px"] {
+              grid-template-columns: 34px minmax(0,1fr) !important;
+            }
+            .nf-command-palette-sheet [style*="grid-template-columns: 28px"] > :last-child {
+              display: none !important;
+            }
+            .nf-help-panel-sheet [style*="display: flex"][style*="gap: 8"] {
+              flex-direction: column !important;
+              align-items: stretch !important;
+            }
+            .nf-content-scroll [style*="columns"],
+            .nf-content-scroll [style*="columnCount"],
+            .nf-content-scroll [style*="column-count"] {
+              grid-template-columns: minmax(0, 1fr) !important;
+            }
+          }
+
+
+
+          /* ═══════════════════════════════════════════
+             MOBILE UX REDESIGN — v10 continuation
+             Fixes keyboard overlap, landscape phones, dense rows, and hidden overflow.
+          ═══════════════════════════════════════════ */
+          @media (max-width: 820px) {
+            :root {
+              --nf-mobile-bottom-safe: calc(var(--nf-mobile-nav-h) + env(safe-area-inset-bottom, 0px));
+              --nf-mobile-top-safe: calc(var(--nf-mobile-topbar-h, 56px) + env(safe-area-inset-top, 0px));
+              --nf-mobile-sheet-h: calc(var(--nf-real-vh, 100dvh) - var(--nf-mobile-top-safe) - 4px);
+            }
+
+            /* Real viewport units from JS beat buggy mobile browser chrome. */
+            .nf-root {
+              height: var(--nf-real-vh, 100dvh) !important;
+              max-height: var(--nf-real-vh, 100dvh) !important;
+              overscroll-behavior: none !important;
+            }
+            #nf-main-content {
+              height: calc(var(--nf-real-vh, 100dvh) - var(--nf-mobile-top-safe)) !important;
+              max-height: calc(var(--nf-real-vh, 100dvh) - var(--nf-mobile-top-safe)) !important;
+              overscroll-behavior: contain !important;
+            }
+            .nf-content-scroll,
+            .nf-tab-content,
+            .nf-editor-area,
+            .nf-text-editor,
+            .nf-tab-main,
+            .nf-tab-shell {
+              min-width: 0 !important;
+              max-width: 100% !important;
+              overscroll-behavior: contain !important;
+            }
+
+            /* Broad but safe overflow clamps for old inline desktop widths. */
+            .nf-content-scroll > *,
+            .nf-tab-content > *,
+            .nf-modal-sheet > *,
+            .nf-mobile-ai-sheet > *,
+            .nf-card > *,
+            .nf-char-section > *,
+            .nf-world-view-card > *,
+            .nf-plot-edit-section > *,
+            .nf-rel-edit-section > * {
+              max-width: 100% !important;
+              min-width: 0 !important;
+            }
+            .nf-content-scroll [style*="width: 1000"],
+            .nf-content-scroll [style*="width: 900"],
+            .nf-content-scroll [style*="width: 800"],
+            .nf-content-scroll [style*="min-width"],
+            .nf-content-scroll [style*="minWidth"],
+            .nf-modal-sheet [style*="min-width"],
+            .nf-modal-sheet [style*="minWidth"],
+            .nf-mobile-ai-sheet [style*="min-width"],
+            .nf-mobile-ai-sheet [style*="minWidth"] {
+              min-width: 0 !important;
+              width: 100% !important;
+              max-width: 100% !important;
+            }
+            .nf-content-scroll [style*="white-space: nowrap"],
+            .nf-content-scroll [style*="whiteSpace: 'nowrap'"],
+            .nf-modal-sheet [style*="white-space: nowrap"],
+            .nf-modal-sheet [style*="whiteSpace: 'nowrap'"] {
+              white-space: normal !important;
+            }
+
+            /* Rows that used to be desktop toolbars become swipe rails or stacked cards. */
+            .nf-content-scroll [style*="display: flex"][style*="align-items: center"],
+            .nf-content-scroll [style*="display: flex"][style*="alignItems: 'center'"],
+            .nf-content-scroll [style*="display: flex"][style*="justify-content: space-between"],
+            .nf-content-scroll [style*="display: flex"][style*="justifyContent: 'space-between'"] {
+              max-width: 100% !important;
+              min-width: 0 !important;
+            }
+            .nf-toolbar-row,
+            .nf-action-row,
+            .nf-card-actions,
+            .nf-section-actions,
+            .nf-filter-row,
+            .nf-image-toolbar,
+            .nf-settings-actions,
+            .nf-plot-actions,
+            .nf-rel-actions,
+            .nf-world-actions {
+              display: flex !important;
+              flex-wrap: nowrap !important;
+              overflow-x: auto !important;
+              overflow-y: hidden !important;
+              gap: 8px !important;
+              padding-bottom: 2px !important;
+              -webkit-overflow-scrolling: touch !important;
+              scrollbar-width: none !important;
+            }
+            .nf-toolbar-row::-webkit-scrollbar,
+            .nf-action-row::-webkit-scrollbar,
+            .nf-card-actions::-webkit-scrollbar,
+            .nf-section-actions::-webkit-scrollbar,
+            .nf-filter-row::-webkit-scrollbar,
+            .nf-image-toolbar::-webkit-scrollbar,
+            .nf-settings-actions::-webkit-scrollbar,
+            .nf-plot-actions::-webkit-scrollbar,
+            .nf-rel-actions::-webkit-scrollbar,
+            .nf-world-actions::-webkit-scrollbar { display: none !important; }
+            .nf-toolbar-row > *,
+            .nf-action-row > *,
+            .nf-card-actions > *,
+            .nf-section-actions > *,
+            .nf-filter-row > *,
+            .nf-image-toolbar > *,
+            .nf-settings-actions > *,
+            .nf-plot-actions > *,
+            .nf-rel-actions > *,
+            .nf-world-actions > * { flex: 0 0 auto !important; }
+
+            /* Generic table/list fallback: if a real table appears, it scrolls instead of breaking layout. */
+            table {
+              display: block !important;
+              width: 100% !important;
+              max-width: 100% !important;
+              overflow-x: auto !important;
+              border-collapse: separate !important;
+              -webkit-overflow-scrolling: touch !important;
+            }
+            thead, tbody, tr { max-width: 100% !important; }
+            th, td { min-width: 120px !important; white-space: normal !important; }
+
+            /* Inputs use full-width rows unless they are tiny icon controls. */
+            .nf-content-scroll input:not([type="checkbox"]):not([type="radio"]),
+            .nf-content-scroll textarea,
+            .nf-content-scroll select,
+            .nf-modal-sheet input:not([type="checkbox"]):not([type="radio"]),
+            .nf-modal-sheet textarea,
+            .nf-modal-sheet select,
+            .nf-mobile-ai-sheet input:not([type="checkbox"]):not([type="radio"]),
+            .nf-mobile-ai-sheet textarea,
+            .nf-mobile-ai-sheet select {
+              max-width: 100% !important;
+              min-width: 0 !important;
+            }
+            textarea {
+              min-height: 92px !important;
+              resize: vertical !important;
+            }
+            input:focus, textarea:focus, select:focus, [contenteditable="true"]:focus {
+              scroll-margin-top: calc(var(--nf-mobile-top-safe) + 12px) !important;
+              scroll-margin-bottom: calc(var(--nf-mobile-bottom-safe) + 140px) !important;
+            }
+
+            /* Keyboard mode: nav hides, sheets and chat move to the visible viewport. */
+            html.nf-keyboard-open .nf-mobile-topbar {
+              transform: translateY(calc(-100% - env(safe-area-inset-top, 0px))) !important;
+              transition: transform 0.14s ease-out !important;
+            }
+            html.nf-keyboard-open .nf-tab-bar {
+              transform: translateY(calc(100% + env(safe-area-inset-bottom, 0px))) !important;
+              transition: transform 0.14s ease-out !important;
+              pointer-events: none !important;
+            }
+            html.nf-keyboard-open #nf-main-content {
+              padding-bottom: 8px !important;
+              height: var(--nf-real-vh, 100dvh) !important;
+              max-height: var(--nf-real-vh, 100dvh) !important;
+            }
+            html.nf-keyboard-open .nf-mobile-ai-fab,
+            html.nf-keyboard-open .nf-utility-rail,
+            html.nf-keyboard-open .nf-ai-activity-panel {
+              display: none !important;
+            }
+            html.nf-keyboard-open .nf-mobile-ai-sheet,
+            html.nf-keyboard-open .nf-prompt-menu,
+            html.nf-keyboard-open .nf-portfolio-shot-menu,
+            html.nf-keyboard-open .nf-action-menu,
+            html.nf-keyboard-open .nf-chapter-action-menu {
+              bottom: 0 !important;
+              max-height: calc(var(--nf-real-vh, 100dvh) - 10px) !important;
+            }
+            html.nf-keyboard-open .nf-modal-overlay,
+            html.nf-keyboard-open .nf-command-palette-overlay,
+            html.nf-keyboard-open .nf-help-panel-overlay,
+            html.nf-keyboard-open .nf-white-room-overlay,
+            html.nf-keyboard-open .nf-timeline-overlay,
+            html.nf-keyboard-open .nf-rel-web-overlay {
+              align-items: stretch !important;
+            }
+            html.nf-keyboard-open .nf-modal-sheet,
+            html.nf-keyboard-open .nf-command-palette-sheet,
+            html.nf-keyboard-open .nf-help-panel-sheet,
+            html.nf-keyboard-open .nf-white-room-sheet,
+            html.nf-keyboard-open .nf-timeline-sheet,
+            html.nf-keyboard-open .nf-rel-web-sheet {
+              height: var(--nf-real-vh, 100dvh) !important;
+              max-height: var(--nf-real-vh, 100dvh) !important;
+              border-radius: 0 !important;
+            }
+
+            /* Sticky sheet headers/footers so save/apply buttons don't disappear on long forms. */
+            .nf-modal-sheet > div:first-child,
+            .nf-command-palette-sheet > div:first-child,
+            .nf-help-panel-sheet > div:first-child,
+            .nf-white-room-sheet > div:first-child,
+            .nf-timeline-sheet > div:first-child,
+            .nf-rel-web-sheet > div:first-child,
+            .nf-mobile-ai-sheet-header {
+              position: sticky !important;
+              top: 0 !important;
+              z-index: 10 !important;
+              background: var(--nf-dialog-bg, var(--nf-bg)) !important;
+            }
+            .nf-modal-sheet > div:last-child:has(.nf-btn),
+            .nf-fill-review-actions,
+            .nf-dialog-actions,
+            .nf-sheet-actions,
+            .nf-prompt-editor-actions {
+              position: sticky !important;
+              bottom: 0 !important;
+              z-index: 10 !important;
+              background: color-mix(in srgb, var(--nf-dialog-bg, var(--nf-bg)) 94%, transparent) !important;
+              backdrop-filter: blur(12px) !important;
+              -webkit-backdrop-filter: blur(12px) !important;
+              padding-bottom: max(12px, env(safe-area-inset-bottom, 0px)) !important;
+            }
+
+            /* Editor: keep prose comfortable and stop embedded media from creating sideways scroll. */
+            .nf-editor-contenteditable {
+              padding-left: max(16px, env(safe-area-inset-left, 0px)) !important;
+              padding-right: max(16px, env(safe-area-inset-right, 0px)) !important;
+              overflow-wrap: anywhere !important;
+              word-break: normal !important;
+              -webkit-text-size-adjust: 100% !important;
+            }
+            .nf-editor-contenteditable p,
+            .nf-editor-contenteditable div,
+            .nf-editor-contenteditable blockquote,
+            .nf-editor-contenteditable li {
+              max-width: 100% !important;
+            }
+            .nf-editor-contenteditable img,
+            .nf-editor-contenteditable video,
+            .nf-editor-contenteditable canvas,
+            .nf-editor-contenteditable iframe {
+              max-width: 100% !important;
+              height: auto !important;
+            }
+            .nf-editor-contenteditable pre,
+            .nf-editor-contenteditable code {
+              max-width: 100% !important;
+              white-space: pre-wrap !important;
+              overflow-wrap: anywhere !important;
+            }
+
+            /* Dense generated-review panels become mobile cards. */
+            .nf-fill-review-field,
+            .nf-review-field,
+            .nf-ai-review-field,
+            .nf-diff-row,
+            .nf-change-row {
+              display: grid !important;
+              grid-template-columns: minmax(0, 1fr) !important;
+              gap: 8px !important;
+              padding: 12px !important;
+              border-radius: 14px !important;
+              background: var(--nf-bg-raised) !important;
+            }
+            .nf-fill-review-field label,
+            .nf-review-field label,
+            .nf-ai-review-field label {
+              display: flex !important;
+              align-items: flex-start !important;
+              gap: 10px !important;
+            }
+
+            /* Image detail/library: phone cards instead of cramped desktop metadata columns. */
+            .nf-image-detail,
+            .nf-image-detail-panel,
+            .nf-library-detail,
+            .nf-image-inspector {
+              width: 100% !important;
+              max-width: 100% !important;
+              min-width: 0 !important;
+            }
+            .nf-image-detail img,
+            .nf-library-detail img,
+            .nf-image-inspector img {
+              max-height: min(56dvh, 520px) !important;
+              width: 100% !important;
+              object-fit: contain !important;
+            }
+            .nf-image-grid,
+            .nf-gallery-grid,
+            .nf-portfolio-grid,
+            .nf-moodboard-grid,
+            .nf-reference-grid {
+              grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+              gap: 10px !important;
+            }
+            .nf-image-card,
+            .nf-gallery-card,
+            .nf-portfolio-card,
+            .nf-reference-card {
+              min-width: 0 !important;
+              border-radius: 16px !important;
+              overflow: hidden !important;
+            }
+
+            /* Long pill/tag rows get a rail instead of wrapping over content. */
+            .nf-tag-row,
+            .nf-chip-row,
+            .nf-pill-row,
+            .nf-status-row,
+            .nf-mode-row {
+              display: flex !important;
+              flex-wrap: nowrap !important;
+              overflow-x: auto !important;
+              overflow-y: hidden !important;
+              gap: 8px !important;
+              -webkit-overflow-scrolling: touch !important;
+              scrollbar-width: none !important;
+            }
+            .nf-tag-row::-webkit-scrollbar,
+            .nf-chip-row::-webkit-scrollbar,
+            .nf-pill-row::-webkit-scrollbar,
+            .nf-status-row::-webkit-scrollbar,
+            .nf-mode-row::-webkit-scrollbar { display: none !important; }
+            .nf-tag-row > *, .nf-chip-row > *, .nf-pill-row > *, .nf-status-row > *, .nf-mode-row > * { flex: 0 0 auto !important; }
+          }
+
+          /* Coarse-pointer tablets: use safer collapsed grids without fully switching to phone chrome. */
+          @media (min-width: 821px) and (max-width: 1100px) and (pointer: coarse) {
+            .nf-content-scroll [style*="grid-template-columns: repeat(3"],
+            .nf-content-scroll [style*="grid-template-columns: repeat(4"],
+            .nf-content-scroll [style*="gridTemplateColumns: 'repeat(3"],
+            .nf-content-scroll [style*="gridTemplateColumns: 'repeat(4"] {
+              grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+            }
+            .nf-content-scroll [style*="grid-template-columns: 280px 1fr"],
+            .nf-content-scroll [style*="grid-template-columns: 300px 1fr"],
+            .nf-content-scroll [style*="grid-template-columns: 320px 1fr"],
+            .nf-content-scroll [style*="gridTemplateColumns: '280px 1fr'"],
+            .nf-content-scroll [style*="gridTemplateColumns: '300px 1fr'"],
+            .nf-content-scroll [style*="gridTemplateColumns: '320px 1fr'"] {
+              grid-template-columns: minmax(0, 1fr) !important;
+            }
+            .nf-ai-panel,
+            .nf-tab-ai-panel {
+              width: min(38vw, 360px) !important;
+              min-width: min(38vw, 360px) !important;
+            }
+            .nf-editor-contenteditable {
+              padding-left: 34px !important;
+              padding-right: 34px !important;
+            }
+          }
+
+          /* Landscape phones: height is the bottleneck. Remove vertical chrome bulk. */
+          @media (max-width: 920px) and (max-height: 540px) and (orientation: landscape) {
+            :root {
+              --nf-mobile-topbar-h: 44px;
+              --nf-mobile-nav-h: 58px;
+              --nf-mobile-pad: 10px;
+            }
+            .nf-mobile-topbar { height: 44px !important; min-height: 44px !important; }
+            .nf-mobile-topbar-title small { display: none !important; }
+            .nf-tab-bar { height: calc(58px + env(safe-area-inset-bottom, 0px)) !important; min-height: 58px !important; padding-top: 4px !important; }
+            .nf-tab-btn { height: 46px !important; min-height: 46px !important; flex-basis: 62px !important; min-width: 62px !important; }
+            .nf-tab-label { font-size: 9px !important; }
+            .nf-chapter-sidebar { height: 58px !important; min-height: 58px !important; max-height: 58px !important; }
+            .nf-chapter-sidebar-header { flex-basis: 70px !important; width: 70px !important; padding: 5px !important; }
+            .nf-chapter-item { min-height: 44px !important; width: 116px !important; flex-basis: 116px !important; padding: 7px !important; }
+            .nf-rich-toolbar { min-height: 40px !important; }
+            .nf-toolbar-btn { height: 36px !important; min-width: 36px !important; }
+            .nf-chapter-header { display: none !important; }
+            .nf-modal-sheet,
+            .nf-command-palette-sheet,
+            .nf-help-panel-sheet,
+            .nf-white-room-sheet,
+            .nf-timeline-sheet,
+            .nf-rel-web-sheet,
+            .nf-mobile-ai-sheet {
+              height: calc(var(--nf-real-vh, 100dvh) - 4px) !important;
+              max-height: calc(var(--nf-real-vh, 100dvh) - 4px) !important;
+              border-radius: 12px 12px 0 0 !important;
+            }
+          }
+
+          @media (max-width: 380px) {
+            .nf-image-grid,
+            .nf-gallery-grid,
+            .nf-portfolio-grid,
+            .nf-moodboard-grid,
+            .nf-reference-grid {
+              grid-template-columns: minmax(0, 1fr) !important;
+            }
+            .nf-tab-btn { flex-basis: 60px !important; min-width: 60px !important; }
+            .nf-tab-label { max-width: 52px !important; font-size: 9px !important; }
+            .nf-mobile-topbar .nf-btn-icon { width: 38px !important; min-width: 38px !important; }
+            .nf-btn, .nf-btn-secondary, .nf-btn-primary { padding-left: 10px !important; padding-right: 10px !important; }
+            .nf-editor-contenteditable { font-size: 15.5px !important; line-height: 1.72 !important; }
+          }
+
+
+
+          /* ═══════════════════════════════════════════
+             MOBILE UX REDESIGN — v11 continuation
+             Tab-specific phone behavior, sticky docks, focus ergonomics, and card compression.
+          ═══════════════════════════════════════════ */
+          @media (max-width: 820px) {
+            .nf-root-mobile {
+              isolation: isolate !important;
+              touch-action: manipulation !important;
+            }
+            html.nf-mobile-chrome-hidden:not(.nf-keyboard-open):not(.nf-input-focused) .nf-mobile-topbar {
+              transform: translateY(calc(-1 * var(--nf-mobile-topbar-h, 56px) - env(safe-area-inset-top, 0px))) !important;
+              opacity: 0 !important;
+              pointer-events: none !important;
+            }
+            .nf-mobile-topbar {
+              transition: transform .18s ease, opacity .18s ease !important;
+              will-change: transform, opacity !important;
+            }
+            html.nf-input-focused .nf-mobile-topbar {
+              transform: translateY(0) !important;
+              opacity: 1 !important;
+            }
+
+            /* Tab-specific vertical budgets. */
+            .nf-root-mobile.nf-tab-write #nf-main-content { padding-bottom: 0 !important; }
+            .nf-root-mobile.nf-tab-write .nf-content-scroll { padding-bottom: calc(var(--nf-mobile-bottom-safe) + 34px) !important; }
+            .nf-root-mobile.nf-tab-images .nf-content-scroll,
+            .nf-root-mobile.nf-tab-characters .nf-content-scroll,
+            .nf-root-mobile.nf-tab-world .nf-content-scroll,
+            .nf-root-mobile.nf-tab-plot .nf-content-scroll,
+            .nf-root-mobile.nf-tab-relationships .nf-content-scroll,
+            .nf-root-mobile.nf-tab-memory .nf-content-scroll,
+            .nf-root-mobile.nf-tab-settings .nf-content-scroll {
+              padding-bottom: calc(var(--nf-mobile-bottom-safe) + 24px) !important;
+            }
+
+            /* First row in each tab becomes a compact local toolbar, not a giant wrapping header. */
+            .nf-content-scroll > div:first-child[style*="justify-content: space-between"],
+            .nf-content-scroll > div:first-child[style*="justifyContent"],
+            .nf-content-scroll > header:first-child {
+              position: sticky !important;
+              top: 0 !important;
+              z-index: 20 !important;
+              margin: -12px -10px 12px !important;
+              padding: 10px !important;
+              background: color-mix(in srgb, var(--nf-bg) 92%, transparent) !important;
+              backdrop-filter: blur(14px) !important;
+              -webkit-backdrop-filter: blur(14px) !important;
+              border-bottom: 1px solid var(--nf-border) !important;
+              display: flex !important;
+              align-items: center !important;
+              gap: 8px !important;
+              overflow-x: auto !important;
+              overflow-y: hidden !important;
+              scrollbar-width: none !important;
+            }
+            .nf-content-scroll > div:first-child[style*="justify-content: space-between"]::-webkit-scrollbar,
+            .nf-content-scroll > div:first-child[style*="justifyContent"]::-webkit-scrollbar,
+            .nf-content-scroll > header:first-child::-webkit-scrollbar { display: none !important; }
+            .nf-content-scroll > div:first-child[style*="justify-content: space-between"] > *,
+            .nf-content-scroll > div:first-child[style*="justifyContent"] > *,
+            .nf-content-scroll > header:first-child > * { flex: 0 0 auto !important; }
+            .nf-content-scroll > div:first-child[style*="justify-content: space-between"] h1,
+            .nf-content-scroll > div:first-child[style*="justify-content: space-between"] h2,
+            .nf-content-scroll > div:first-child[style*="justify-content: space-between"] h3,
+            .nf-content-scroll > header:first-child h1,
+            .nf-content-scroll > header:first-child h2,
+            .nf-content-scroll > header:first-child h3 {
+              font-size: 16px !important;
+              line-height: 1.1 !important;
+              white-space: nowrap !important;
+              max-width: 54vw !important;
+              overflow: hidden !important;
+              text-overflow: ellipsis !important;
+            }
+
+            /* Turn dense form sections into breathing cards. */
+            .nf-char-section,
+            .nf-world-view-card,
+            .nf-plot-edit-section,
+            .nf-rel-edit-section,
+            .nf-settings-section,
+            .nf-memory-section,
+            .nf-card,
+            .nf-panel {
+              border-radius: 16px !important;
+              padding: 14px !important;
+              margin-bottom: 12px !important;
+              min-width: 0 !important;
+              overflow: hidden !important;
+            }
+            .nf-char-section h3,
+            .nf-world-view-card h3,
+            .nf-plot-edit-section h3,
+            .nf-rel-edit-section h3,
+            .nf-settings-section h3,
+            .nf-card h3 {
+              font-size: 13px !important;
+              letter-spacing: .08em !important;
+              text-transform: uppercase !important;
+              color: var(--nf-text-dim) !important;
+              margin-bottom: 10px !important;
+            }
+
+            /* Fields: labels above controls, not squashed beside them. */
+            .nf-field-row,
+            .nf-form-row,
+            .nf-setting-row,
+            .nf-preference-row,
+            .nf-metadata-row {
+              display: grid !important;
+              grid-template-columns: minmax(0, 1fr) !important;
+              gap: 7px !important;
+              align-items: stretch !important;
+            }
+            .nf-field-row label, .nf-form-row label, .nf-setting-row label, .nf-preference-row label, .nf-metadata-row label,
+            .nf-label {
+              max-width: 100% !important;
+              white-space: normal !important;
+            }
+
+            /* Bottom action docks for generated review and editor-adjacent tools. */
+            .nf-fill-review-actions,
+            .nf-dialog-actions,
+            .nf-sheet-actions,
+            .nf-prompt-editor-actions,
+            .nf-modal-sheet > div:last-child:has(.nf-btn) {
+              display: flex !important;
+              gap: 8px !important;
+              overflow-x: auto !important;
+              align-items: center !important;
+            }
+            .nf-fill-review-actions .nf-btn,
+            .nf-dialog-actions .nf-btn,
+            .nf-sheet-actions .nf-btn,
+            .nf-prompt-editor-actions .nf-btn {
+              flex: 0 0 auto !important;
+              min-width: 112px !important;
+            }
+            .nf-fill-review-actions .nf-btn-primary,
+            .nf-dialog-actions .nf-btn-primary,
+            .nf-sheet-actions .nf-btn-primary,
+            .nf-prompt-editor-actions .nf-btn-primary {
+              flex: 1 0 148px !important;
+            }
+
+            /* Image-heavy tabs: detail panes turn into full-width cards under thumbnails. */
+            .nf-root-mobile.nf-tab-images [style*="grid-template-columns: 240px"],
+            .nf-root-mobile.nf-tab-images [style*="grid-template-columns: 260px"],
+            .nf-root-mobile.nf-tab-images [style*="grid-template-columns: 280px"],
+            .nf-root-mobile.nf-tab-images [style*="grid-template-columns: 300px"],
+            .nf-root-mobile.nf-tab-images [style*="grid-template-columns: 320px"] {
+              grid-template-columns: minmax(0, 1fr) !important;
+            }
+            .nf-root-mobile.nf-tab-images img {
+              max-width: 100% !important;
+              height: auto !important;
+            }
+            .nf-root-mobile.nf-tab-images .nf-polaroid {
+              transform: none !important;
+            }
+
+            /* Relationship and plot cards: summary first, secondary metadata below. */
+            .nf-root-mobile.nf-tab-relationships [style*="grid-template-columns: 1fr 1fr"],
+            .nf-root-mobile.nf-tab-relationships [style*="grid-template-columns: 220px"],
+            .nf-root-mobile.nf-tab-plot [style*="grid-template-columns: 1fr 1fr"],
+            .nf-root-mobile.nf-tab-plot [style*="grid-template-columns: 220px"],
+            .nf-root-mobile.nf-tab-world [style*="grid-template-columns: 1fr 1fr"],
+            .nf-root-mobile.nf-tab-world [style*="grid-template-columns: 220px"] {
+              grid-template-columns: minmax(0, 1fr) !important;
+            }
+
+            /* Menus/pickers feel like native mobile pickers. */
+            .nf-prompt-menu,
+            .nf-portfolio-shot-menu,
+            .nf-action-menu,
+            .nf-chapter-action-menu {
+              border-radius: 22px 22px 0 0 !important;
+              padding-top: 10px !important;
+              box-shadow: 0 -18px 44px rgba(0,0,0,.34) !important;
+            }
+            .nf-prompt-menu::before,
+            .nf-portfolio-shot-menu::before,
+            .nf-action-menu::before,
+            .nf-chapter-action-menu::before {
+              content: "" !important;
+              display: block !important;
+              width: 42px !important;
+              height: 4px !important;
+              margin: 0 auto 8px !important;
+              border-radius: 999px !important;
+              background: var(--nf-border) !important;
+              opacity: .9 !important;
+            }
+            .nf-prompt-row,
+            .nf-prompt-option,
+            .nf-portfolio-shot-row,
+            .nf-dropdown-edit-row {
+              min-height: 50px !important;
+              border-radius: 14px !important;
+            }
+
+            /* Typography: prevent giant decorative headings from eating the whole phone. */
+            .nf-content-scroll h1 { font-size: clamp(22px, 7vw, 32px) !important; line-height: 1.05 !important; }
+            .nf-content-scroll h2 { font-size: clamp(18px, 5.6vw, 25px) !important; line-height: 1.1 !important; }
+            .nf-content-scroll h3 { font-size: clamp(15px, 4.6vw, 19px) !important; line-height: 1.18 !important; }
+
+            /* Tap feedback without hover-only affordances. */
+            .nf-btn:active, .nf-btn-primary:active, .nf-btn-secondary:active, .nf-btn-icon:active,
+            .nf-tab-btn:active, .nf-prompt-row:active, .nf-portfolio-shot-row:active {
+              transform: scale(.985) !important;
+              transition: transform .08s ease !important;
+            }
+          }
+
+          @media (max-width: 430px) {
+            .nf-mobile-topbar-title span { max-width: 150px !important; }
+            .nf-mobile-topbar-title small { max-width: 170px !important; }
+            .nf-content-scroll > div:first-child[style*="justify-content: space-between"] h1,
+            .nf-content-scroll > div:first-child[style*="justify-content: space-between"] h2,
+            .nf-content-scroll > div:first-child[style*="justify-content: space-between"] h3,
+            .nf-content-scroll > header:first-child h1,
+            .nf-content-scroll > header:first-child h2,
+            .nf-content-scroll > header:first-child h3 { max-width: 46vw !important; }
+            .nf-fill-review-actions .nf-btn-primary,
+            .nf-dialog-actions .nf-btn-primary,
+            .nf-sheet-actions .nf-btn-primary,
+            .nf-prompt-editor-actions .nf-btn-primary { flex-basis: 132px !important; }
+          }
+
+
+
+          /* ═══════════════════════════════════════════
+             MOBILE UX REDESIGN — v12 continuation
+             Workspace switcher, compact chapter jumping, and safer mobile sticky layers.
+          ═══════════════════════════════════════════ */
+          @media (max-width: 820px) {
+            .nf-mobile-topbar-title {
+              appearance: none !important;
+              border: 0 !important;
+              background: transparent !important;
+              color: inherit !important;
+              text-align: left !important;
+              min-width: 0 !important;
+              flex: 1 1 auto !important;
+              display: flex !important;
+              flex-direction: column !important;
+              gap: 2px !important;
+              padding: 4px 6px !important;
+              border-radius: 12px !important;
+              cursor: pointer !important;
+              -webkit-tap-highlight-color: transparent !important;
+            }
+            .nf-mobile-topbar-title:active { background: var(--nf-bg-hover) !important; transform: scale(.99) !important; }
+            .nf-mobile-topbar-title::after {
+              content: "⌄" !important;
+              position: absolute !important;
+              right: 6px !important;
+              top: 50% !important;
+              transform: translateY(-50%) !important;
+              color: var(--nf-text-muted) !important;
+              font-size: 12px !important;
+            }
+            .nf-mobile-switcher-scrim {
+              position: fixed !important;
+              inset: 0 !important;
+              z-index: 9800 !important;
+              background: rgba(0,0,0,.44) !important;
+              display: flex !important;
+              align-items: flex-end !important;
+              padding: 0 !important;
+            }
+            .nf-mobile-switcher-sheet {
+              width: 100% !important;
+              max-height: min(86dvh, calc(var(--nf-real-vh, 100dvh) - env(safe-area-inset-top,0px) - 12px)) !important;
+              overflow: auto !important;
+              -webkit-overflow-scrolling: touch !important;
+              background: var(--nf-bg) !important;
+              border: 1px solid var(--nf-border) !important;
+              border-bottom: 0 !important;
+              border-radius: 24px 24px 0 0 !important;
+              box-shadow: 0 -28px 80px rgba(0,0,0,.48) !important;
+              padding: 10px 12px calc(var(--nf-mobile-bottom-safe, 74px) + 14px) !important;
+            }
+            .nf-mobile-switcher-handle {
+              width: 42px !important;
+              height: 4px !important;
+              border-radius: 999px !important;
+              background: var(--nf-border) !important;
+              margin: 0 auto 12px !important;
+            }
+            .nf-mobile-switcher-head {
+              position: sticky !important;
+              top: -10px !important;
+              z-index: 2 !important;
+              display: flex !important;
+              align-items: center !important;
+              justify-content: space-between !important;
+              gap: 12px !important;
+              padding: 4px 0 12px !important;
+              background: color-mix(in srgb, var(--nf-bg) 94%, transparent) !important;
+              backdrop-filter: blur(14px) !important;
+              -webkit-backdrop-filter: blur(14px) !important;
+            }
+            .nf-mobile-switcher-kicker {
+              font-size: 10px !important;
+              letter-spacing: .12em !important;
+              text-transform: uppercase !important;
+              color: var(--nf-text-muted) !important;
+              margin-bottom: 2px !important;
+            }
+            .nf-mobile-switcher-title {
+              font-size: 17px !important;
+              font-weight: 650 !important;
+              color: var(--nf-text) !important;
+              max-width: 72vw !important;
+              overflow: hidden !important;
+              text-overflow: ellipsis !important;
+              white-space: nowrap !important;
+            }
+            .nf-mobile-switcher-tabs {
+              display: grid !important;
+              grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+              gap: 8px !important;
+              margin-bottom: 14px !important;
+            }
+            .nf-mobile-switcher-tab {
+              min-height: 70px !important;
+              border: 1px solid var(--nf-border) !important;
+              border-radius: 16px !important;
+              background: var(--nf-bg-raised) !important;
+              color: var(--nf-text-dim) !important;
+              display: flex !important;
+              flex-direction: column !important;
+              align-items: center !important;
+              justify-content: center !important;
+              gap: 5px !important;
+              padding: 8px 6px !important;
+              position: relative !important;
+              min-width: 0 !important;
+            }
+            .nf-mobile-switcher-tab.active {
+              color: var(--nf-text) !important;
+              border-color: var(--nf-accent) !important;
+              background: var(--nf-accent-glow) !important;
+              box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--nf-accent) 36%, transparent) !important;
+            }
+            .nf-mobile-switcher-tab-icon svg { width: 20px !important; height: 20px !important; }
+            .nf-mobile-switcher-tab-text {
+              font-size: 11px !important;
+              line-height: 1.1 !important;
+              max-width: 100% !important;
+              overflow: hidden !important;
+              text-overflow: ellipsis !important;
+              white-space: nowrap !important;
+            }
+            .nf-mobile-switcher-cue {
+              position: absolute !important;
+              top: 6px !important;
+              right: 6px !important;
+              font-size: 9px !important;
+              padding: 1px 5px !important;
+              border-radius: 999px !important;
+            }
+            .nf-mobile-switcher-section-title {
+              font-size: 10px !important;
+              letter-spacing: .12em !important;
+              text-transform: uppercase !important;
+              color: var(--nf-text-muted) !important;
+              margin: 4px 0 8px !important;
+            }
+            .nf-mobile-switcher-chapter-list {
+              display: flex !important;
+              gap: 8px !important;
+              overflow-x: auto !important;
+              -webkit-overflow-scrolling: touch !important;
+              scrollbar-width: none !important;
+              padding-bottom: 12px !important;
+              margin-bottom: 12px !important;
+            }
+            .nf-mobile-switcher-chapter-list::-webkit-scrollbar { display: none !important; }
+            .nf-mobile-switcher-chapter {
+              flex: 0 0 130px !important;
+              min-height: 58px !important;
+              border-radius: 15px !important;
+              border: 1px solid var(--nf-border) !important;
+              background: var(--nf-bg-raised) !important;
+              color: var(--nf-text) !important;
+              padding: 8px !important;
+              text-align: left !important;
+              display: flex !important;
+              flex-direction: column !important;
+              gap: 4px !important;
+            }
+            .nf-mobile-switcher-chapter.active {
+              border-color: var(--nf-accent) !important;
+              background: var(--nf-accent-glow) !important;
+            }
+            .nf-mobile-switcher-chapter span { font-size: 10px !important; color: var(--nf-accent) !important; font-weight: 700 !important; }
+            .nf-mobile-switcher-chapter small {
+              font-size: 11px !important;
+              color: var(--nf-text-dim) !important;
+              overflow: hidden !important;
+              text-overflow: ellipsis !important;
+              display: -webkit-box !important;
+              -webkit-line-clamp: 2 !important;
+              -webkit-box-orient: vertical !important;
+            }
+            .nf-mobile-switcher-actions {
+              display: grid !important;
+              grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+              gap: 8px !important;
+            }
+            .nf-mobile-switcher-action {
+              min-height: 48px !important;
+              border: 1px solid var(--nf-border) !important;
+              border-radius: 14px !important;
+              background: var(--nf-bg-raised) !important;
+              color: var(--nf-text) !important;
+              display: flex !important;
+              align-items: center !important;
+              justify-content: center !important;
+              gap: 8px !important;
+              font-size: 12px !important;
+              min-width: 0 !important;
+            }
+            .nf-mobile-switcher-action svg { width: 16px !important; height: 16px !important; }
+
+            /* Late pass: protect against legacy fixed helpers and inline panels sitting under the keyboard/nav. */
+            html.nf-keyboard-open .nf-mobile-switcher-sheet {
+              max-height: calc(var(--nf-real-vh, 100dvh) - 8px) !important;
+              padding-bottom: calc(var(--nf-keyboard-inset, 0px) + 16px) !important;
+            }
+            .nf-root-mobile [style*="position: fixed"][style*="bottom: 72px"],
+            .nf-root-mobile [style*="position:fixed"][style*="bottom:72px"] {
+              left: 10px !important;
+              right: 10px !important;
+              bottom: calc(var(--nf-mobile-bottom-safe, 74px) + 10px) !important;
+              width: auto !important;
+              max-width: none !important;
+              max-height: 56dvh !important;
+              border-radius: 18px !important;
+            }
+            .nf-root-mobile .nf-content-scroll > *:last-child { margin-bottom: calc(var(--nf-mobile-bottom-safe, 74px) + 12px) !important; }
+          }
+
+          @media (max-width: 390px) {
+            .nf-mobile-switcher-tabs { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+            .nf-mobile-switcher-tab { min-height: 62px !important; }
+            .nf-mobile-switcher-actions { grid-template-columns: minmax(0, 1fr) !important; }
+            .nf-mobile-switcher-chapter { flex-basis: 118px !important; }
+          }
+
+
+
+          /* ═══════════════════════════════════════════
+             MOBILE UX REDESIGN — v13 continuation
+             Section navigator, collapsible-feeling density, safer local toolbars,
+             and aggressive fixes for long phone stacks.
+          ═══════════════════════════════════════════ */
+          .nf-mobile-sections-scrim { display: none; }
+          @media (max-width: 820px) {
+            .nf-mobile-section-pulse {
+              animation: nf-mobile-section-pulse 850ms ease-out 1 !important;
+              scroll-margin-top: calc(var(--nf-mobile-topbar-h, 56px) + 14px) !important;
+            }
+            @keyframes nf-mobile-section-pulse {
+              0% { box-shadow: 0 0 0 0 var(--nf-accent-glow); }
+              35% { box-shadow: 0 0 0 4px var(--nf-accent-glow); }
+              100% { box-shadow: 0 0 0 0 transparent; }
+            }
+            .nf-mobile-sections-scrim {
+              display: flex !important;
+              position: fixed !important;
+              inset: 0 !important;
+              z-index: 360 !important;
+              align-items: flex-end !important;
+              justify-content: stretch !important;
+              background: rgba(0,0,0,0.42) !important;
+              backdrop-filter: blur(5px) !important;
+              -webkit-backdrop-filter: blur(5px) !important;
+            }
+            .nf-mobile-sections-sheet {
+              width: 100vw !important;
+              max-width: 100vw !important;
+              max-height: min(72dvh, calc(var(--nf-real-vh, 100dvh) - var(--nf-mobile-top-safe, 56px) - 8px)) !important;
+              padding: 0 max(12px, env(safe-area-inset-left, 0px)) calc(var(--nf-mobile-bottom-safe, 76px) + 12px) max(12px, env(safe-area-inset-right, 0px)) !important;
+              background: var(--nf-dialog-bg) !important;
+              border: 1px solid var(--nf-dialog-border) !important;
+              border-left: 0 !important;
+              border-right: 0 !important;
+              border-bottom: 0 !important;
+              border-radius: 22px 22px 0 0 !important;
+              box-shadow: 0 -18px 48px rgba(0,0,0,0.38) !important;
+              overflow: auto !important;
+              -webkit-overflow-scrolling: touch !important;
+              animation: nf-slideUp 0.18s ease-out !important;
+            }
+            .nf-mobile-sections-handle {
+              width: 46px !important;
+              height: 4px !important;
+              border-radius: 999px !important;
+              background: var(--nf-border) !important;
+              margin: 9px auto 8px !important;
+            }
+            .nf-mobile-sections-head {
+              position: sticky !important;
+              top: 0 !important;
+              z-index: 2 !important;
+              display: flex !important;
+              align-items: center !important;
+              justify-content: space-between !important;
+              gap: 10px !important;
+              padding: 8px 0 10px !important;
+              background: var(--nf-dialog-bg) !important;
+              border-bottom: 1px solid var(--nf-border) !important;
+            }
+            .nf-mobile-sections-actions {
+              display: grid !important;
+              grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+              gap: 8px !important;
+              padding: 12px 0 !important;
+            }
+            .nf-mobile-sections-list {
+              display: grid !important;
+              grid-template-columns: minmax(0, 1fr) !important;
+              gap: 7px !important;
+              padding-bottom: 12px !important;
+            }
+            .nf-mobile-sections-row {
+              min-height: 50px !important;
+              border: 1px solid var(--nf-border) !important;
+              border-radius: 15px !important;
+              background: var(--nf-bg-raised) !important;
+              color: var(--nf-text) !important;
+              display: grid !important;
+              grid-template-columns: 34px minmax(0, 1fr) !important;
+              align-items: center !important;
+              gap: 10px !important;
+              padding: 8px 12px !important;
+              text-align: left !important;
+            }
+            .nf-mobile-sections-row span {
+              color: var(--nf-accent) !important;
+              font-family: var(--nf-font-mono) !important;
+              font-size: 11px !important;
+              opacity: .85 !important;
+            }
+            .nf-mobile-sections-row strong {
+              color: var(--nf-text-dim) !important;
+              font-size: 13px !important;
+              font-weight: 600 !important;
+              overflow: hidden !important;
+              text-overflow: ellipsis !important;
+              white-space: nowrap !important;
+            }
+            .nf-mobile-sections-empty {
+              padding: 24px 10px 28px !important;
+              text-align: center !important;
+              color: var(--nf-text-muted) !important;
+              font-size: 12px !important;
+              line-height: 1.5 !important;
+            }
+
+            /* Long tabs now read as stacked mobile cards rather than one endless wall. */
+            .nf-root-mobile .nf-content-scroll > .nf-card,
+            .nf-root-mobile .nf-content-scroll > .nf-char-section,
+            .nf-root-mobile .nf-content-scroll > .nf-world-view-card,
+            .nf-root-mobile .nf-content-scroll > .nf-plot-edit-section,
+            .nf-root-mobile .nf-content-scroll > .nf-rel-edit-section,
+            .nf-root-mobile .nf-content-scroll > section,
+            .nf-root-mobile .nf-content-scroll > article {
+              box-shadow: 0 8px 24px rgba(0,0,0,0.14) !important;
+              contain: layout paint !important;
+            }
+            .nf-root-mobile .nf-content-scroll > .nf-card + .nf-card,
+            .nf-root-mobile .nf-content-scroll > .nf-char-section + .nf-char-section,
+            .nf-root-mobile .nf-content-scroll > .nf-world-view-card + .nf-world-view-card,
+            .nf-root-mobile .nf-content-scroll > .nf-plot-edit-section + .nf-plot-edit-section,
+            .nf-root-mobile .nf-content-scroll > .nf-rel-edit-section + .nf-rel-edit-section {
+              margin-top: 12px !important;
+            }
+
+            /* Local sticky headers: only the first real row sticks; nested headers should not stack over it. */
+            .nf-root-mobile .nf-content-scroll .nf-card .nf-card,
+            .nf-root-mobile .nf-content-scroll .nf-char-section .nf-card,
+            .nf-root-mobile .nf-content-scroll .nf-plot-edit-section .nf-card,
+            .nf-root-mobile .nf-content-scroll .nf-rel-edit-section .nf-card {
+              box-shadow: none !important;
+              contain: none !important;
+            }
+            .nf-root-mobile .nf-content-scroll [style*="position: sticky"] {
+              max-width: 100% !important;
+            }
+
+            /* Mobile buttons inside forms: full-width primary, compact secondary rails. */
+            .nf-root-mobile .nf-content-scroll form,
+            .nf-root-mobile .nf-content-scroll .nf-form,
+            .nf-root-mobile .nf-content-scroll [class*="form"] {
+              min-width: 0 !important;
+            }
+            .nf-root-mobile .nf-content-scroll .nf-btn-primary:not(.nf-send-btn):not(.nf-tab-btn):not(.nf-btn-icon) {
+              min-height: 46px !important;
+            }
+            .nf-root-mobile .nf-content-scroll textarea,
+            .nf-root-mobile .nf-content-scroll [contenteditable="true"] {
+              scroll-margin-bottom: calc(var(--nf-keyboard-inset, 0px) + 130px) !important;
+            }
+
+            /* Horizontal rails get edge fades so users know they can swipe. */
+            .nf-header-actions,
+            .nf-writer-lab-tools,
+            .nf-keepsake-quick-actions,
+            .nf-chat-actions,
+            .nf-mode-bar,
+            .nf-rich-toolbar,
+            .nf-content-scroll [style*="overflow-x: auto"] {
+              mask-image: linear-gradient(to right, transparent 0, #000 14px, #000 calc(100% - 14px), transparent 100%) !important;
+              -webkit-mask-image: linear-gradient(to right, transparent 0, #000 14px, #000 calc(100% - 14px), transparent 100%) !important;
+            }
+
+            /* Dense metadata pills wrap into readable chips, not smashed text. */
+            .nf-root-mobile [class*="meta"],
+            .nf-root-mobile [class*="Meta"],
+            .nf-root-mobile [class*="pill"],
+            .nf-root-mobile [class*="Pill"] {
+              max-width: 100% !important;
+            }
+            .nf-root-mobile .nf-tab-cue,
+            .nf-root-mobile .nf-mobile-switcher-cue {
+              white-space: nowrap !important;
+            }
+
+            /* When keyboard is open, keep only the content and the active sheet. */
+            html.nf-keyboard-open .nf-mobile-sections-sheet {
+              max-height: calc(var(--nf-real-vh, 100dvh) - 8px) !important;
+              padding-bottom: calc(var(--nf-keyboard-inset, 0px) + 14px) !important;
+            }
+            html.nf-keyboard-open .nf-mobile-section-btn,
+            html.nf-keyboard-open .nf-mobile-topbar .nf-save-indicator {
+              display: none !important;
+            }
+          }
+
+          @media (max-width: 380px) {
+            .nf-mobile-section-btn { display: none !important; }
+            .nf-mobile-sections-actions { grid-template-columns: minmax(0, 1fr) !important; }
+            .nf-mobile-sections-row { grid-template-columns: 28px minmax(0, 1fr) !important; padding-left: 10px !important; padding-right: 10px !important; }
+          }
+
+
+
+          /* ═══════════════════════════════════════════
+             MOBILE UX REDESIGN — v14 continuation
+             Thumb action tray, compact mode, and less hunt-and-peck navigation.
+          ═══════════════════════════════════════════ */
+          .nf-mobile-actions-scrim { display: none; }
+          @media (max-width: 820px) {
+            .nf-mobile-action-btn {
+              font-weight: 800 !important;
+              letter-spacing: 0.06em !important;
+            }
+            .nf-mobile-actions-scrim {
+              display: flex !important;
+              position: fixed !important;
+              inset: 0 !important;
+              z-index: 365 !important;
+              align-items: flex-end !important;
+              justify-content: stretch !important;
+              background: rgba(0,0,0,0.44) !important;
+              backdrop-filter: blur(5px) !important;
+              -webkit-backdrop-filter: blur(5px) !important;
+            }
+            .nf-mobile-actions-sheet {
+              width: 100vw !important;
+              max-width: 100vw !important;
+              max-height: min(78dvh, calc(var(--nf-real-vh, 100dvh) - 8px)) !important;
+              padding: 0 max(12px, env(safe-area-inset-left, 0px)) calc(var(--nf-mobile-bottom-safe, 76px) + 12px) max(12px, env(safe-area-inset-right, 0px)) !important;
+              background: var(--nf-dialog-bg) !important;
+              border: 1px solid var(--nf-dialog-border) !important;
+              border-left: 0 !important;
+              border-right: 0 !important;
+              border-bottom: 0 !important;
+              border-radius: 22px 22px 0 0 !important;
+              box-shadow: 0 -18px 48px rgba(0,0,0,0.38) !important;
+              overflow: auto !important;
+              -webkit-overflow-scrolling: touch !important;
+              animation: nf-slideUp 0.18s ease-out !important;
+            }
+            .nf-mobile-actions-handle {
+              width: 46px !important;
+              height: 4px !important;
+              border-radius: 999px !important;
+              background: var(--nf-border) !important;
+              margin: 9px auto 8px !important;
+            }
+            .nf-mobile-actions-head {
+              position: sticky !important;
+              top: 0 !important;
+              z-index: 2 !important;
+              display: flex !important;
+              align-items: center !important;
+              justify-content: space-between !important;
+              gap: 10px !important;
+              padding: 8px 0 10px !important;
+              background: var(--nf-dialog-bg) !important;
+              border-bottom: 1px solid var(--nf-border) !important;
+            }
+            .nf-mobile-actions-grid {
+              display: grid !important;
+              grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+              gap: 9px !important;
+              padding: 12px 0 10px !important;
+            }
+            .nf-mobile-action-card {
+              min-height: 70px !important;
+              border: 1px solid var(--nf-border) !important;
+              border-radius: 16px !important;
+              background: var(--nf-bg-raised) !important;
+              color: var(--nf-text) !important;
+              display: grid !important;
+              grid-template-columns: 32px minmax(0, 1fr) !important;
+              grid-template-rows: auto auto !important;
+              column-gap: 9px !important;
+              row-gap: 2px !important;
+              align-items: center !important;
+              padding: 10px 11px !important;
+              text-align: left !important;
+              -webkit-tap-highlight-color: transparent !important;
+              touch-action: manipulation !important;
+            }
+            .nf-mobile-action-card > span {
+              grid-row: 1 / span 2 !important;
+              width: 32px !important;
+              height: 32px !important;
+              border-radius: 11px !important;
+              display: inline-flex !important;
+              align-items: center !important;
+              justify-content: center !important;
+              background: var(--nf-bg-surface) !important;
+              color: var(--nf-accent) !important;
+              font-size: 13px !important;
+              font-weight: 800 !important;
+              font-family: var(--nf-font-mono) !important;
+            }
+            .nf-mobile-action-card strong {
+              min-width: 0 !important;
+              overflow: hidden !important;
+              text-overflow: ellipsis !important;
+              white-space: nowrap !important;
+              color: var(--nf-text) !important;
+              font-size: 13px !important;
+              line-height: 1.15 !important;
+              font-weight: 700 !important;
+            }
+            .nf-mobile-action-card small {
+              min-width: 0 !important;
+              overflow: hidden !important;
+              text-overflow: ellipsis !important;
+              white-space: nowrap !important;
+              color: var(--nf-text-muted) !important;
+              font-size: 10.5px !important;
+              line-height: 1.2 !important;
+            }
+            .nf-mobile-action-card:active,
+            .nf-mobile-action-card-ai {
+              border-color: var(--nf-border-focus) !important;
+              background: linear-gradient(135deg, var(--nf-bg-raised), var(--nf-accent-glow)) !important;
+            }
+
+            /* Compact mode: user-controlled, not automatic. It reduces vertical waste without hiding data. */
+            .nf-root-mobile.nf-mobile-compact .nf-content-scroll { gap: 8px !important; }
+            .nf-root-mobile.nf-mobile-compact .nf-card,
+            .nf-root-mobile.nf-mobile-compact .nf-char-section,
+            .nf-root-mobile.nf-mobile-compact .nf-world-view-card,
+            .nf-root-mobile.nf-mobile-compact .nf-plot-edit-section,
+            .nf-root-mobile.nf-mobile-compact .nf-rel-edit-section,
+            .nf-root-mobile.nf-mobile-compact section,
+            .nf-root-mobile.nf-mobile-compact article {
+              padding: 10px !important;
+              border-radius: 14px !important;
+            }
+            .nf-root-mobile.nf-mobile-compact h1,
+            .nf-root-mobile.nf-mobile-compact h2,
+            .nf-root-mobile.nf-mobile-compact h3,
+            .nf-root-mobile.nf-mobile-compact .nf-page-title,
+            .nf-root-mobile.nf-mobile-compact .nf-card-title {
+              margin-bottom: 6px !important;
+              line-height: 1.18 !important;
+            }
+            .nf-root-mobile.nf-mobile-compact .nf-input,
+            .nf-root-mobile.nf-mobile-compact .nf-select,
+            .nf-root-mobile.nf-mobile-compact .nf-field-input,
+            .nf-root-mobile.nf-mobile-compact textarea {
+              min-height: 42px !important;
+            }
+            .nf-root-mobile.nf-mobile-compact textarea:not(:focus) {
+              max-height: 160px !important;
+            }
+            .nf-root-mobile.nf-mobile-compact .nf-btn:not(.nf-btn-icon):not(.nf-tab-btn),
+            .nf-root-mobile.nf-mobile-compact button:not(.nf-btn-icon):not(.nf-tab-btn):not(.nf-mobile-action-card) {
+              min-height: 40px !important;
+            }
+            .nf-root-mobile.nf-mobile-compact [style*="gap: 16px"] { gap: 10px !important; }
+            .nf-root-mobile.nf-mobile-compact [style*="padding: 16px"] { padding: 10px !important; }
+            .nf-root-mobile.nf-mobile-compact [style*="margin-bottom: 16px"] { margin-bottom: 10px !important; }
+
+            /* Tabs with lots of thumb controls get a safer local bottom buffer. */
+            .nf-root-mobile.nf-tab-images .nf-content-scroll,
+            .nf-root-mobile.nf-tab-characters .nf-content-scroll,
+            .nf-root-mobile.nf-tab-world .nf-content-scroll,
+            .nf-root-mobile.nf-tab-plot .nf-content-scroll,
+            .nf-root-mobile.nf-tab-relationships .nf-content-scroll,
+            .nf-root-mobile.nf-tab-settings .nf-content-scroll {
+              padding-bottom: calc(var(--nf-mobile-bottom-safe, 76px) + 24px) !important;
+            }
+
+            html.nf-keyboard-open .nf-mobile-actions-sheet {
+              max-height: calc(var(--nf-real-vh, 100dvh) - 8px) !important;
+              padding-bottom: calc(var(--nf-keyboard-inset, 0px) + 14px) !important;
+            }
+          }
+
+          @media (max-width: 390px) {
+            .nf-mobile-actions-grid { grid-template-columns: minmax(0, 1fr) !important; }
+            .nf-mobile-action-card { min-height: 58px !important; }
+            .nf-mobile-action-card small { display: none !important; }
+          }
+
           /* G12: Print stylesheet — show only editor content */
           @media print {
             .nf-root { display: block; height: auto; overflow: visible; }
@@ -32248,7 +35031,172 @@ Speech pattern: ${char.speechPattern || ""}` },
                 <SaveIndicator status={saveStatus} fileLinked={fileLinked} />
               </div>
             )}
-            <main id="nf-main-content" role="main" style={{ flex: 1, display: "flex", overflow: "hidden" }}>
+            {!focusMode && (
+              <div className="nf-mobile-topbar" aria-label="Mobile workspace header">
+                <button onClick={() => setShowProjectList(!showProjectList)} className="nf-btn-icon" aria-label="Projects"><Icons.Menu /></button>
+                <button type="button" className="nf-mobile-topbar-title" onClick={() => setMobileSwitcherOpen(true)} aria-label="Open mobile workspace switcher">
+                  <span>{tabs.find(t => t.id === activeTab)?.label || "Workspace"}</span>
+                  <small title={project.title}>{project.title}</small>
+                </button>
+                <SaveIndicator status={saveStatus} fileLinked={fileLinked} />
+                <button className="nf-btn-icon" onClick={() => setCommandPaletteOpen(true)} aria-label="Command Center">⌘</button>
+                <button className="nf-btn-icon nf-mobile-section-btn" onClick={() => { refreshMobileSections(); setMobileSectionsOpen(true); }} aria-label="Jump to section">▤</button>
+                <button className="nf-btn-icon nf-mobile-action-btn" onClick={() => setMobileActionsOpen(true)} aria-label="Open mobile action tray">⋯</button>
+                <button className="nf-btn-icon" onClick={() => setFindReplaceOpen(true)} aria-label="Find and replace"><Icons.Search /></button>
+              </div>
+            )}
+            {mobileSwitcherOpen && !focusMode && project && (
+              <div className="nf-mobile-switcher-scrim" role="presentation" onClick={() => setMobileSwitcherOpen(false)}>
+                <div className="nf-mobile-switcher-sheet" role="dialog" aria-modal="true" aria-label="Workspace switcher" onClick={(e) => e.stopPropagation()}>
+                  <div className="nf-mobile-switcher-handle" />
+                  <div className="nf-mobile-switcher-head">
+                    <div>
+                      <div className="nf-mobile-switcher-kicker">Workspace</div>
+                      <div className="nf-mobile-switcher-title" title={project.title}>{project.title}</div>
+                    </div>
+                    <button type="button" className="nf-btn-icon" onClick={() => setMobileSwitcherOpen(false)} aria-label="Close workspace switcher"><Icons.X /></button>
+                  </div>
+                  <div className="nf-mobile-switcher-tabs" role="tablist" aria-label="Mobile tabs">
+                    {tabs.map(t => {
+                      const cue = tabCues[t.id];
+                      return (
+                        <button key={t.id} type="button" role="tab" aria-selected={t.id === activeTab} className={`nf-mobile-switcher-tab ${t.id === activeTab ? "active" : ""}`} onClick={() => {
+                          if (activeTab === "write" && t.id !== "write") {
+                            if (editorRef.current) { pushUndo(); syncEditorContent(); }
+                          }
+                          setActiveTab(t.id);
+                          setMobileSwitcherOpen(false);
+                        }}>
+                          <span className="nf-mobile-switcher-tab-icon">{t.icon}</span>
+                          <span className="nf-mobile-switcher-tab-text">{t.label}</span>
+                          {cue && <span className={`nf-mobile-switcher-cue nf-tab-cue-${cue.tone}`}>{cue.label}</span>}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {activeTab === "write" && project.chapters?.length > 0 && (
+                    <div className="nf-mobile-switcher-chapters" aria-label="Chapters">
+                      <div className="nf-mobile-switcher-section-title">Chapters</div>
+                      <div className="nf-mobile-switcher-chapter-list">
+                        {project.chapters.map((ch, idx) => (
+                          <button key={ch.id || idx} type="button" className={`nf-mobile-switcher-chapter ${idx === activeChapterIdx ? "active" : ""}`} onClick={() => {
+                            if (editorRef.current) { pushUndo(); syncEditorContent(); }
+                            setActiveChapterIdx(idx);
+                            forceRepopulateEditor();
+                            setMobileSwitcherOpen(false);
+                          }}>
+                            <span>Ch {idx + 1}</span>
+                            <small title={ch.title}>{ch.title || "Untitled"}</small>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  <div className="nf-mobile-switcher-actions" aria-label="Quick actions">
+                    <button type="button" className="nf-mobile-switcher-action" onClick={() => { setShowProjectList(true); setMobileSwitcherOpen(false); }}><Icons.Menu /> Projects</button>
+                    <button type="button" className="nf-mobile-switcher-action" onClick={() => { setCommandPaletteOpen(true); setMobileSwitcherOpen(false); }}>⌘ Command</button>
+                    <button type="button" className="nf-mobile-switcher-action" onClick={() => { setImageLibraryOpen(true); setMobileSwitcherOpen(false); }}>▦ Images</button>
+                    <button type="button" className="nf-mobile-switcher-action" onClick={() => { setHelpOpen(true); setMobileSwitcherOpen(false); }}>? Help</button>
+                    <button type="button" className="nf-mobile-switcher-action" onClick={() => { setSentenceGardenOpen(true); setMobileSwitcherOpen(false); }}>🌿 Garden</button>
+                    <button type="button" className="nf-mobile-switcher-action" onClick={() => { toggleTheme(); setMobileSwitcherOpen(false); }}>{theme === "dark" ? <Icons.Sun /> : <Icons.Moon />} Theme</button>
+                  </div>
+                </div>
+              </div>
+            )}
+            {mobileSectionsOpen && !focusMode && project && (
+              <div className="nf-mobile-sections-scrim" role="presentation" onClick={() => setMobileSectionsOpen(false)}>
+                <div className="nf-mobile-sections-sheet" role="dialog" aria-modal="true" aria-label="Sections in current tab" onClick={(e) => e.stopPropagation()}>
+                  <div className="nf-mobile-sections-handle" />
+                  <div className="nf-mobile-sections-head">
+                    <div>
+                      <div className="nf-mobile-switcher-kicker">Current tab</div>
+                      <div className="nf-mobile-switcher-title">{tabs.find(t => t.id === activeTab)?.label || "Sections"}</div>
+                    </div>
+                    <button type="button" className="nf-btn-icon" onClick={() => setMobileSectionsOpen(false)} aria-label="Close sections"><Icons.X /></button>
+                  </div>
+                  <div className="nf-mobile-sections-actions">
+                    <button type="button" className="nf-mobile-switcher-action" onClick={() => {
+                      setMobileSectionsOpen(false);
+                      window.setTimeout(() => document.getElementById("nf-main-content")?.scrollTo?.({ top: 0, behavior: "smooth" }), 40);
+                    }}>↑ Top</button>
+                    <button type="button" className="nf-mobile-switcher-action" onClick={() => { setCommandPaletteOpen(true); setMobileSectionsOpen(false); }}>⌘ Command</button>
+                  </div>
+                  {mobileSections.length > 0 ? (
+                    <div className="nf-mobile-sections-list">
+                      {mobileSections.map((item, idx) => (
+                        <button key={item.id} type="button" className="nf-mobile-sections-row" onClick={() => jumpToMobileSection(item.id)}>
+                          <span>{String(idx + 1).padStart(2, "0")}</span>
+                          <strong>{item.label}</strong>
+                        </button>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="nf-mobile-sections-empty">No clear section headings found here yet.</div>
+                  )}
+                </div>
+              </div>
+            )}
+            {mobileActionsOpen && !focusMode && project && (
+              <div className="nf-mobile-actions-scrim" role="presentation" onClick={() => setMobileActionsOpen(false)}>
+                <div className="nf-mobile-actions-sheet" role="dialog" aria-modal="true" aria-label="Mobile actions" onClick={(e) => e.stopPropagation()}>
+                  <div className="nf-mobile-actions-handle" />
+                  <div className="nf-mobile-actions-head">
+                    <div>
+                      <div className="nf-mobile-switcher-kicker">Quick actions</div>
+                      <div className="nf-mobile-switcher-title">{tabs.find(t => t.id === activeTab)?.label || "Workspace"}</div>
+                    </div>
+                    <button type="button" className="nf-btn-icon" onClick={() => setMobileActionsOpen(false)} aria-label="Close actions"><Icons.X /></button>
+                  </div>
+                  <div className="nf-mobile-actions-grid">
+                    <button type="button" className="nf-mobile-action-card" onClick={() => { setCommandPaletteOpen(true); setMobileActionsOpen(false); }}><span>⌘</span><strong>Command</strong><small>Search actions</small></button>
+                    <button type="button" className="nf-mobile-action-card" onClick={() => { refreshMobileSections(); setMobileSectionsOpen(true); setMobileActionsOpen(false); }}><span>▤</span><strong>Sections</strong><small>Jump in tab</small></button>
+                    <button type="button" className="nf-mobile-action-card" onClick={() => { setFindReplaceOpen(true); setMobileActionsOpen(false); }}><span><Icons.Search /></span><strong>Find</strong><small>Search text</small></button>
+                    <button type="button" className="nf-mobile-action-card" onClick={() => { setImageLibraryOpen(true); setMobileActionsOpen(false); }}><span>▦</span><strong>Images</strong><small>Library</small></button>
+                    <button type="button" className="nf-mobile-action-card" onClick={() => { setHelpOpen(true); setMobileActionsOpen(false); }}><span>?</span><strong>Help</strong><small>Guide</small></button>
+                    <button type="button" className="nf-mobile-action-card" onClick={() => { setMobileCompact(v => !v); setMobileActionsOpen(false); }}><span>{mobileCompact ? "↕" : "↔"}</span><strong>{mobileCompact ? "Comfort" : "Compact"}</strong><small>{mobileCompact ? "More space" : "Less clutter"}</small></button>
+                    {settings.apiKey && ["write", "characters", "world", "plot", "relationships"].includes(activeTab) && (
+                      <button type="button" className="nf-mobile-action-card nf-mobile-action-card-ai" onClick={() => { setShowAiMobile(prev => prev === activeTab ? false : activeTab); setMobileActionsOpen(false); }}><span>AI</span><strong>{showAiMobile === activeTab ? "Hide AI" : "AI chat"}</strong><small>This tab</small></button>
+                    )}
+                    {activeTab === "write" && (
+                      <>
+                        <button type="button" className="nf-mobile-action-card" onClick={() => { setToolsMenuOpen(true); setMobileActionsOpen(false); }}><span>✦</span><strong>Write tools</strong><small>Draft actions</small></button>
+                        <button type="button" className="nf-mobile-action-card" onClick={() => { setChapterMenuOpen(true); setMobileActionsOpen(false); }}><span>Ch</span><strong>Chapter</strong><small>Chapter menu</small></button>
+                        <button type="button" className="nf-mobile-action-card" onClick={() => { setShowDrafts(true); setMobileActionsOpen(false); }}><span>☰</span><strong>Drafts</strong><small>Saved takes</small></button>
+                        <button type="button" className="nf-mobile-action-card" onClick={() => { setShowMemoryPreview(true); setMobileActionsOpen(false); }}><span>◌</span><strong>Memory</strong><small>Context preview</small></button>
+                        <button type="button" className="nf-mobile-action-card" onClick={() => { setFocusMode(true); setMobileActionsOpen(false); }}><span>◐</span><strong>Focus</strong><small>Editor only</small></button>
+                      </>
+                    )}
+                    {activeTab === "characters" && (
+                      <>
+                        <button type="button" className="nf-mobile-action-card" onClick={() => { setCharToolsOpen(v => !v); setMobileActionsOpen(false); }}><span>♙</span><strong>Char tools</strong><small>Autopilot</small></button>
+                        <button type="button" className="nf-mobile-action-card" onClick={() => { setCharViewMode(prev => prev === "edit" ? "preview" : "edit"); setMobileActionsOpen(false); }}><span>✎</span><strong>{charViewMode === "edit" ? "Preview" : "Edit"}</strong><small>Character view</small></button>
+                      </>
+                    )}
+                    {activeTab === "world" && (
+                      <button type="button" className="nf-mobile-action-card" onClick={() => { setShowWorldTools(v => !v); setMobileActionsOpen(false); }}><span>◎</span><strong>World tools</strong><small>Atlas tools</small></button>
+                    )}
+                    {activeTab === "plot" && (
+                      <button type="button" className="nf-mobile-action-card" onClick={() => { setShowPlotTools(v => !v); setMobileActionsOpen(false); }}><span>◇</span><strong>Plot tools</strong><small>Outline tools</small></button>
+                    )}
+                    {activeTab === "relationships" && (
+                      <button type="button" className="nf-mobile-action-card" onClick={() => { setShowRelTools(v => !v); setMobileActionsOpen(false); }}><span>♡</span><strong>Rel tools</strong><small>Draft/sync</small></button>
+                    )}
+                    {activeTab === "images" && (
+                      <>
+                        <button type="button" className="nf-mobile-action-card" onClick={() => { setImageMode("create"); setMobileActionsOpen(false); }}><span>＋</span><strong>Create</strong><small>Image tools</small></button>
+                        <button type="button" className="nf-mobile-action-card" onClick={() => { setImageToolsOpen(v => !v); setMobileActionsOpen(false); }}><span>⚙</span><strong>Image tools</strong><small>Filters</small></button>
+                      </>
+                    )}
+                    {activeTab === "settings" && (
+                      <button type="button" className="nf-mobile-action-card" onClick={() => { setConfigEditorOpen(true); setMobileActionsOpen(false); }}><span>⚙</span><strong>Prompts</strong><small>Config editor</small></button>
+                    )}
+                    <button type="button" className="nf-mobile-action-card" onClick={() => { toggleTheme(); setMobileActionsOpen(false); }}><span>{theme === "dark" ? <Icons.Sun /> : <Icons.Moon />}</span><strong>Theme</strong><small>{theme}</small></button>
+                    <button type="button" className="nf-mobile-action-card" onClick={() => { document.getElementById("nf-main-content")?.scrollTo?.({ top: 0, behavior: "smooth" }); setMobileActionsOpen(false); }}><span>↑</span><strong>Top</strong><small>Scroll up</small></button>
+                  </div>
+                </div>
+              </div>
+            )}
+            <main id="nf-main-content" className={focusMode ? "nf-main-focus" : ""} role="main" style={{ flex: 1, display: "flex", overflow: "hidden" }}>
               {activeTab === "write" && renderWrite()}
               {activeTab === "characters" && renderCharacters()}
               {activeTab === "world" && renderWorld()}
