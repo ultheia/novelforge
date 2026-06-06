@@ -1,6 +1,6 @@
-// APP_UPDATE_TIMESTAMP: 20260606_173000_Jakarta
-// FILE_NAME: App_mod_dropdown_option_system_v5_20260606.jsx
-// FIX_MARKER: dropdown-option-system-portfolio-v5
+// APP_UPDATE_TIMESTAMP: 20260606_193000_Jakarta
+// FILE_NAME: App_mod_character_dossier_image_prompts_v6_20260606.jsx
+// FIX_MARKER: character-dossier-image-prompt-variables-v6
 import { useState, useEffect, useRef, useCallback, useMemo, useReducer, memo, createContext, useContext, Fragment } from "react";
 import { createPortal } from "react-dom";
 
@@ -858,7 +858,9 @@ const escapePromptHtml = (text = "") => String(text || "")
 
 const PROMPT_PLACEHOLDER_RE = /\{\{\s*([\w.]+)\s*\}\}/g;
 const IMAGE_PROMPT_RUNTIME_VARIABLES = new Set([
-  "characterName", "character", "characters", "charactersList", "identity", "identitySeed", "subjectDescription",
+  "characterName", "character", "characters", "charactersList", "characterVisualDossier", "characterDossier", "identity", "identitySeed", "subjectDescription",
+  "characterAge", "characterGender", "characterGenderNoun", "characterPronouns", "characterPronounSubject", "characterPronounObject", "characterPronounPossessive",
+  "characterEthnicity", "characterEthnicityPhrase", "characterPresence", "characterHeight", "characterWeight", "characterBuild", "characterPhysique", "characterAppearance", "characterSkinTone", "characterSkinTonePhrase", "characterBodyHair", "characterBodyHairPhrase", "characterVLines", "characterVLinesPhrase", "characterLookAlike", "characterFaceLine", "characterPermanentMarks",
   "wardrobe", "wardrobeSeed", "wardrobePhrase", "clothingDesign",
   "sceneText", "context", "world", "worldView", "style", "sourcePrompt", "task", "variant",
   "timeOfDay", "cameraAngle", "ratio", "defaultRatio", "aspectRatio",
@@ -1816,8 +1818,8 @@ const _stripPovPrefix = (povString) => (povString || "").replace(POV_PREFIX_RE, 
 // detection) must reference these so the lists can never drift apart. Drift was causing the
 // AI to never be asked for — or to silently drop — fields that the editor actually renders.
 const CHARACTER_TEXT_FIELDS = [
-  "gender","age","pronouns","orientation","aliases","occupation","height","build","tags",
-  "appearance","personality","backstory","desires","shortTermGoals","longTermGoals",
+  "gender","age","pronouns","orientation","aliases","occupation","height","weight","build","ethnicity","skinTone","bodyHair","vLines","tags",
+  "appearance","lookAlike","permanentMarks","personality","backstory","desires","shortTermGoals","longTermGoals",
   "speechPattern","voiceSamples","habits","fears","flaws","strengths","skills",
   "internalConflict","externalConflict","signatureItems","secrets","hiddenSecrets",
   "allegiances","arc","canonNotes",
@@ -4948,7 +4950,12 @@ const createDefaultCharacter = () => ({
   voiceSamples: "",
   allegiances: "",
   height: "",
+  weight: "",
   build: "",
+  ethnicity: "",
+  skinTone: "",
+  bodyHair: "",
+  vLines: "",
   permanentMarks: "", // tattoos, scars, birthmarks — permanent body features fed to Editorial Studio (NOT daily clothing)
   orientation: "",
   isBulk: false,
@@ -5013,12 +5020,12 @@ const DEFAULT_CHARACTER_TEMPLATES_UX = [
   { id: "main_romantic_lead", label: "Main Romantic Lead", role: "love interest", mode: "write", visibleFieldsJSON: '["name","role","appearance","personality","desires","speechPattern","arc"]', pinnedFieldsJSON: '["appearance","personality","speechPattern","desires","arc"]', defaultValuesJSON: '{"status":"alive"}', active: "TRUE", notes: "" },
   { id: "minor_character", label: "Minor Character", role: "minor", mode: "write", visibleFieldsJSON: '["name","role","appearance","personality"]', pinnedFieldsJSON: '["appearance","personality"]', defaultValuesJSON: '{"status":"alive"}', active: "TRUE", notes: "" },
   { id: "villain_antagonist", label: "Villain / Antagonist", role: "antagonist", mode: "continuity", visibleFieldsJSON: '["name","role","desires","fears","secrets","arc"]', pinnedFieldsJSON: '["desires","secrets","arc"]', defaultValuesJSON: '{"status":"alive"}', active: "TRUE", notes: "" },
-  { id: "visual_character", label: "Visual Character", role: "supporting", mode: "art", visibleFieldsJSON: '["name","role","lookAlike","appearance","height","build","artWardrobe"]', pinnedFieldsJSON: '["lookAlike","appearance","artWardrobe"]', defaultValuesJSON: '{"status":"alive"}', active: "TRUE", notes: "" },
+  { id: "visual_character", label: "Visual Character", role: "supporting", mode: "art", visibleFieldsJSON: '["name","role","lookAlike","age","pronouns","ethnicity","height","weight","build","skinTone","bodyHair","vLines","appearance","permanentMarks","artWardrobe"]', pinnedFieldsJSON: '["lookAlike","age","height","weight","appearance","skinTone","artWardrobe"]', defaultValuesJSON: '{"status":"alive"}', active: "TRUE", notes: "" },
   { id: "mystery_suspect", label: "Mystery Suspect", role: "supporting", mode: "continuity", visibleFieldsJSON: '["name","role","secrets","hiddenSecrets","canonNotes","arc"]', pinnedFieldsJSON: '["secrets","hiddenSecrets","canonNotes"]', defaultValuesJSON: '{"status":"alive"}', active: "TRUE", notes: "" },
 ];
 const CHAR_FIELD_LABELS_UX = {
   name: "Name", role: "Role", status: "Status", gender: "Gender", pronouns: "Pronouns", age: "Age", orientation: "Orientation",
-  lookAlike: "Look-alike", image: "Portrait", appearance: "Appearance", height: "Height", build: "Build", permanentMarks: "Permanent marks",
+  lookAlike: "Look-alike", image: "Portrait", appearance: "Appearance", height: "Height", weight: "Weight", build: "Build", ethnicity: "Ethnicity / descent", skinTone: "Skin tone", bodyHair: "Body hair", vLines: "V-lines", permanentMarks: "Permanent marks",
   artWardrobe: "Wardrobe", artAccessories: "Accessories", personality: "Personality", speechPattern: "Speech pattern", voiceSamples: "Voice samples",
   desires: "Desires", shortTermGoals: "Short-term goals", longTermGoals: "Long-term goals", fears: "Fears", flaws: "Flaws", strengths: "Strengths",
   skills: "Skills", habits: "Habits", backstory: "Backstory", arc: "Arc", signatureItems: "Signature items", secrets: "Open secrets",
@@ -5026,7 +5033,7 @@ const CHAR_FIELD_LABELS_UX = {
   canonNotes: "Canon notes", notes: "Author notes",
 };
 const CHAR_USED_BY_TAGS = {
-  appearance: ["Writing", "Art"], lookAlike: ["Art"], permanentMarks: ["Art", "Continuity"], artWardrobe: ["Art"], artAccessories: ["Art"], image: ["UI"],
+  appearance: ["Writing", "Art"], lookAlike: ["Art"], height: ["Art"], weight: ["Art"], build: ["Art"], ethnicity: ["Art"], skinTone: ["Art"], bodyHair: ["Art"], vLines: ["Art"], permanentMarks: ["Art", "Continuity"], artWardrobe: ["Art"], artAccessories: ["Art"], image: ["UI"],
   personality: ["Writing"], speechPattern: ["Writing"], voiceSamples: ["Writing"], desires: ["Writing"], arc: ["Writing", "Continuity"],
   backstory: ["Writing after reveal"], secrets: ["Writing"], hiddenSecrets: ["Writing after reveal"], currentEmotionalState: ["Writing", "Continuity"],
   obligationsOwed: ["Continuity"], knowledgeState: ["Continuity"], canonNotes: ["Writing"], notes: ["Private"],
@@ -5231,7 +5238,7 @@ const CONFIG_PROMPT_EDITOR_TABLES = [
 ];
 const CONFIG_TEXT_PROMPT_TABLE_KEYS = new Set(PROMPT_TEMPLATE_TABLE_KEYS);
 const CONFIG_SCHEMA_VERSION = "4";
-const PROMPT_STRUCTURE_RELEASE = "dropdown-option-system-portfolio-v5-2026-06-06";
+const PROMPT_STRUCTURE_RELEASE = "character-dossier-image-prompt-variables-v6-2026-06-06";
 const cfgBool = (value, fallback = true) => {
   if (value == null || value === "") return fallback;
   if (typeof value === "boolean") return value;
@@ -5282,9 +5289,20 @@ const imagePromptValue = (v, fallback = "") => {
   if (Array.isArray(v)) return v.filter(Boolean).join(", ") || fallback;
   return String(v);
 };
+
+const DEFAULT_IMAGE_CHARACTER_DOSSIER_TEMPLATE = `{{characterName}} is a Pokemon that mimic a {{characterAge}} {{characterGenderNoun}} {{characterEthnicityPhrase}} with a
+
+{{characterPresence}}. {{characterPronounSubject}} stands at {{characterHeight}} and weighs around {{characterWeight}}. {{characterPronounPossessive}}
+
+physique is {{characterPhysique}}. {{characterAppearance}}
+
+{{characterSkinTonePhrase}} {{characterBodyHairPhrase}} {{characterVLinesPhrase}}
+
+{{characterFaceLine}}`;
+const DEFAULT_IMAGE_CHARACTER_DOSSIER_BLOCK = "{{characterVisualDossier}}";
 const buildUniversalImagePromptTemplate = (vars = {}) => {
   const charactersList = imagePromptValue(vars.charactersList || vars.characterNames || vars.characterName, "{{charactersList}}");
-  const characterDescriptions = imagePromptValue(vars.characterDescriptions || vars.characters || vars.character || vars.identitySeed || vars.identity || vars.subjectDescription, "{{characterDescriptions}}");
+  const characterDescriptions = imagePromptValue(vars.characterDescriptions || vars.characterVisualDossier || vars.characterDossier || vars.characters || vars.character || vars.identitySeed || vars.identity || vars.subjectDescription, "{{characterVisualDossier}}");
   const clothingNames = imagePromptValue(vars.clothingNames || vars.characterNames || vars.charactersList || vars.characterName, charactersList || "{{charactersList}}");
   const clothingDesign = imagePromptValue(vars.clothingDesign || vars.wardrobeSeed || vars.wardrobe || vars.wardrobePhrase, "{{clothingDesign}}");
   const activity = imagePromptValue(vars.activity || vars.sceneText || vars.task || vars.portfolioDirection || vars.editorialStudioDirection || vars.sourcePrompt, "{{activity}}");
@@ -5401,7 +5419,7 @@ const portfolioHardcodedVarsForPromptRow = (row = {}) => {
   const shotDirection = extractPromptBlock(user, "DIRECTION") || "Portfolio shot direction selected inside the app.";
   return {
     charactersList: "{{characterName}}",
-    characterDescriptions: "{{identity}}",
+    characterDescriptions: DEFAULT_IMAGE_CHARACTER_DOSSIER_TEMPLATE,
     clothingNames: "{{characterName}}",
     clothingDesign: "{{wardrobe}}",
     activity: `${packageLabel}. ${packageStyle}\n\n${shotLabel}. ${shotDirection}`,
@@ -5413,22 +5431,22 @@ const portfolioHardcodedVarsForPromptRow = (row = {}) => {
 const universalImageTemplateVarsForPromptRow = (row = {}) => {
   const id = String(row?.id || "");
   if (id === "scene.imagePrompt" || id === "image.scenePromptDirector") {
-    return { charactersList: "{{charactersList}}", characterDescriptions: "{{characters}}", clothingDesign: "{{wardrobeSeed}}", activity: "{{sceneText}}", backdrop: "{{context}}\n{{world}}\n{{worldView}}", timeOfDay: "{{timeOfDay}}", cameraAngle: "{{cameraAngle}}" };
+    return { charactersList: "{{charactersList}}", characterDescriptions: "{{characterVisualDossier}}\n\nAdditional cast context:\n{{characters}}", clothingNames: "{{charactersList}}", clothingDesign: "{{wardrobeSeed}}", activity: "{{sceneText}}", backdrop: "{{context}}\n{{world}}\n{{worldView}}", timeOfDay: "{{timeOfDay}}", cameraAngle: "{{cameraAngle}}" };
   }
   if (id === "character.studio.quickPortrait") {
-    return { charactersList: "{{characterName}}", characterDescriptions: "{{subjectDescription}}", clothingNames: "{{characterName}}", clothingDesign: "{{wardrobe}}", activity: "strict upper-body model catalogue portrait for {{characterName}}", backdrop: "pure solid white (#FFFFFF) catalogue background, no objects", timeOfDay: "studio session with flat even catalogue lighting", cameraAngle: "3:4 portrait, eye-level, centered, shoulders and upper chest visible, crop at mid-torso" };
+    return { charactersList: "{{characterName}}", characterDescriptions: DEFAULT_IMAGE_CHARACTER_DOSSIER_TEMPLATE, clothingNames: "{{characterName}}", clothingDesign: "{{wardrobe}}", activity: "strict upper-body model catalogue portrait for {{characterName}}", backdrop: "pure solid white (#FFFFFF) catalogue background, no objects", timeOfDay: "studio session with flat even catalogue lighting", cameraAngle: "3:4 portrait, eye-level, centered, shoulders and upper chest visible, crop at mid-torso" };
   }
   if (id === "image.characterReference" || id === "character.studio.artVariant") {
-    return { charactersList: "{{characterName}}", characterDescriptions: "{{identitySeed}}", clothingNames: "{{characterName}}", clothingDesign: "{{wardrobeSeed}}", activity: "{{task}}\n{{variant}}", backdrop: "{{context}}", timeOfDay: "{{timeOfDay}}", cameraAngle: "{{cameraAngle}}\n{{ratio}}" };
+    return { charactersList: "{{characterName}}", characterDescriptions: DEFAULT_IMAGE_CHARACTER_DOSSIER_TEMPLATE + "\n\nAdditional identity seed:\n{{identitySeed}}", clothingNames: "{{characterName}}", clothingDesign: "{{wardrobeSeed}}", activity: "{{task}}\n{{variant}}", backdrop: "{{context}}", timeOfDay: "{{timeOfDay}}", cameraAngle: "{{cameraAngle}}\n{{ratio}}" };
   }
   if (id.startsWith("character.studio.portfolio.")) {
     return portfolioHardcodedVarsForPromptRow(row);
   }
   if (id === "character.studio.portfolioShot") {
-    return { charactersList: "{{characterName}}", characterDescriptions: "{{identity}}", clothingNames: "{{characterName}}", clothingDesign: "{{wardrobe}}", activity: "{{portfolioDirection}}", backdrop: "{{portfolioStyle}}", timeOfDay: "studio session time; use the selected package lighting direction", cameraAngle: "{{portfolioShotLabel}}\n{{portfolioShotDirection}}\n\nSAME-PERSON LOCK: " + portfolioSamePersonLockText + "\n\nREALISM CONTRACT: " + portfolioRealismContractText };
+    return { charactersList: "{{characterName}}", characterDescriptions: DEFAULT_IMAGE_CHARACTER_DOSSIER_TEMPLATE, clothingNames: "{{characterName}}", clothingDesign: "{{wardrobe}}", activity: "{{portfolioDirection}}", backdrop: "{{portfolioStyle}}", timeOfDay: "studio session time; use the selected package lighting direction", cameraAngle: "{{portfolioShotLabel}}\n{{portfolioShotDirection}}\n\nSAME-PERSON LOCK: " + portfolioSamePersonLockText + "\n\nREALISM CONTRACT: " + portfolioRealismContractText };
   }
   if (id === "character.studio.editorial") {
-    return { charactersList: "{{characterName}}", characterDescriptions: "{{identity}}", clothingNames: "{{characterName}}", clothingDesign: "{{editorialStudioDirection}}", activity: "{{editorialStudioDirection}}", backdrop: "{{editorialAuthority}}", timeOfDay: "{{timeOfDay}}", cameraAngle: "{{cameraAngle}}" };
+    return { charactersList: "{{characterName}}", characterDescriptions: DEFAULT_IMAGE_CHARACTER_DOSSIER_TEMPLATE, clothingNames: "{{characterName}}", clothingDesign: "{{editorialStudioDirection}}", activity: "{{editorialStudioDirection}}", backdrop: "{{editorialAuthority}}", timeOfDay: "{{timeOfDay}}", cameraAngle: "{{cameraAngle}}" };
   }
   if (id === "world.orgGroupPhotoPrompt") {
     return { charactersList: "{{memberDescs}}", characterDescriptions: "{{members}}", clothingNames: "{{memberDescs}}", clothingDesign: "formal group portrait wardrobe appropriate to each role; do not add unrelated clothing", activity: "formal group portrait for {{orgName}}; higher ranks center/front", backdrop: "{{organizationDescription}}\n{{organizationPurpose}}", timeOfDay: "{{timeOfDay}}", cameraAngle: "formal group portrait, 4:3, all visible members framed clearly" };
@@ -5437,8 +5455,8 @@ const universalImageTemplateVarsForPromptRow = (row = {}) => {
 };
 const universalImageTemplateVarsForImageTemplateRow = (row = {}) => {
   const id = String(row?.id || "");
-  if (id === "charArt.reference" || id === "character_portrait") return { charactersList: "{{characterName}}", characterDescriptions: "{{identitySeed}}", clothingNames: "{{characterName}}", clothingDesign: "{{wardrobeSeed}}", activity: "portrait/reference image for {{characterName}}", backdrop: "{{context}}", timeOfDay: "{{timeOfDay}}", cameraAngle: "{{cameraAngle}}\n{{defaultRatio}}\n{{ratio}}" };
-  if (id === "scene.illustration" || id === "chapter_illustration") return { charactersList: "{{charactersList}}", characterDescriptions: "{{characters}}", clothingDesign: "{{wardrobeSeed}}", activity: "{{sceneText}}", backdrop: "{{context}}\n{{world}}", timeOfDay: "{{timeOfDay}}", cameraAngle: "{{cameraAngle}}\n{{defaultRatio}}\n{{ratio}}" };
+  if (id === "charArt.reference" || id === "character_portrait") return { charactersList: "{{characterName}}", characterDescriptions: DEFAULT_IMAGE_CHARACTER_DOSSIER_TEMPLATE + "\n\nAdditional identity seed:\n{{identitySeed}}", clothingNames: "{{characterName}}", clothingDesign: "{{wardrobeSeed}}", activity: "portrait/reference image for {{characterName}}", backdrop: "{{context}}", timeOfDay: "{{timeOfDay}}", cameraAngle: "{{cameraAngle}}\n{{defaultRatio}}\n{{ratio}}" };
+  if (id === "scene.illustration" || id === "chapter_illustration") return { charactersList: "{{charactersList}}", characterDescriptions: "{{characterVisualDossier}}\n\nAdditional cast context:\n{{characters}}", clothingNames: "{{charactersList}}", clothingDesign: "{{wardrobeSeed}}", activity: "{{sceneText}}", backdrop: "{{context}}\n{{world}}", timeOfDay: "{{timeOfDay}}", cameraAngle: "{{cameraAngle}}\n{{defaultRatio}}\n{{ratio}}" };
   return { sourcePrompt: row?.promptTemplate || "Use the source prompt exactly." };
 };
 const inlineAppOwnedImagePromptConstants = (text = "") => String(text || "")
@@ -5462,21 +5480,32 @@ const imagePromptNeedsRebuild = (text = "") => {
   const t = String(text || "");
   return /\{\{\s*(package(?:\.[\w]+)?|packageKey|packageStyle|shot(?:\.[\w]+)?|shotKey|shotLabel|shotDirection|samePersonLock|realismContract|lookAlikeLock|authority|studioDirection|world\.description|organization\.description|item\.description|item\.orgPurpose)\s*\}\}/.test(t);
 };
+const imagePromptNeedsDossierUpgrade = (row = {}) => {
+  const id = String(row?.id || "");
+  const text = String(row?.user || row?.promptTemplate || "");
+  if (!hasUniversalImagePromptStructure(text)) return false;
+  if (id === "world.orgGroupPhotoPrompt") return false;
+  if (id === "scene.imagePrompt" || id === "image.scenePromptDirector" || id === "scene.illustration" || id === "chapter_illustration") return !text.includes("{{characterVisualDossier}}");
+  if (isUniversalImageStructurePromptId(id) || UNIVERSAL_IMAGE_STRUCTURE_IMAGE_TEMPLATE_IDS.has(id)) {
+    return !(text.includes("{{characterAge}}") && text.includes("{{characterPronounSubject}}") && text.includes("{{characterHeight}}") && text.includes("{{characterFaceLine}}"));
+  }
+  return false;
+};
 const structurePromptTemplateRowForImageCreation = (row = {}) => {
   if (!isUniversalImageStructurePromptId(row?.id)) return row;
-  const mustRebuild = !hasUniversalImagePromptStructure(row.user) || imagePromptNeedsRebuild(row.user);
+  const mustRebuild = !hasUniversalImagePromptStructure(row.user) || imagePromptNeedsRebuild(row.user) || imagePromptNeedsDossierUpgrade(row);
   const nextUser = mustRebuild ? buildUniversalImagePromptTemplate(universalImageTemplateVarsForPromptRow(row)) : inlineAppOwnedImagePromptConstants(row.user);
   return { ...row, user: nextUser, version: Math.max(Number(row.version || 1), 11), notes: `${row.notes || ""}${String(row.notes || "").includes("Universal 1-7 image structure") ? "" : " Universal 1-7 image structure applied."}${String(row.notes || "").includes("Image variable taxonomy v4") ? "" : " Image variable taxonomy v4."}`.trim() };
 };
 const structureImagePromptTemplateRowForImageCreation = (row = {}) => {
   if (!UNIVERSAL_IMAGE_STRUCTURE_IMAGE_TEMPLATE_IDS.has(String(row?.id || ""))) return row;
-  const mustRebuild = !hasUniversalImagePromptStructure(row.promptTemplate) || imagePromptNeedsRebuild(row.promptTemplate);
+  const mustRebuild = !hasUniversalImagePromptStructure(row.promptTemplate) || imagePromptNeedsRebuild(row.promptTemplate) || imagePromptNeedsDossierUpgrade(row);
   const nextPromptTemplate = mustRebuild ? buildUniversalImagePromptTemplate(universalImageTemplateVarsForImageTemplateRow(row)) : inlineAppOwnedImagePromptConstants(row.promptTemplate);
   return { ...row, promptTemplate: nextPromptTemplate, notes: `${row.notes || ""}${String(row.notes || "").includes("Universal 1-7 image structure") ? "" : " Universal 1-7 image structure applied."}${String(row.notes || "").includes("Image variable taxonomy v4") ? "" : " Image variable taxonomy v4."}`.trim() };
 };
 const structureImageTemplateRowForImageCreation = (row = {}) => {
   if (!UNIVERSAL_IMAGE_STRUCTURE_IMAGE_TEMPLATE_IDS.has(String(row?.id || ""))) return row;
-  const mustRebuild = !hasUniversalImagePromptStructure(row.promptTemplate) || imagePromptNeedsRebuild(row.promptTemplate);
+  const mustRebuild = !hasUniversalImagePromptStructure(row.promptTemplate) || imagePromptNeedsRebuild(row.promptTemplate) || imagePromptNeedsDossierUpgrade(row);
   const nextPromptTemplate = mustRebuild ? buildUniversalImagePromptTemplate(universalImageTemplateVarsForImageTemplateRow(row)) : inlineAppOwnedImagePromptConstants(row.promptTemplate);
   return { ...row, promptTemplate: nextPromptTemplate, notes: `${row.notes || ""}${String(row.notes || "").includes("Universal 1-7 image structure") ? "" : " Universal 1-7 image structure applied."}${String(row.notes || "").includes("Image variable taxonomy v4") ? "" : " Image variable taxonomy v4."}`.trim() };
 };
@@ -5501,7 +5530,7 @@ const applyUniversalImagePromptStructure = (prompt = "", opts = {}) => {
   const activity = imagePromptValue(opts.activity || opts.sceneText || opts.task || opts.sourcePrompt || rawPrompt, rawPrompt);
   const vars = {
     charactersList: opts.charactersList || opts.characterNames || opts.characterName || "character(s) described in the source prompt",
-    characterDescriptions: opts.characterDescriptions || opts.characters || opts.character || opts.identitySeed || opts.identity || opts.subjectDescription || "Use the character identity details from the source prompt exactly.",
+    characterDescriptions: opts.characterVisualDossier || opts.characterDossier || opts.characterDescriptions || opts.characters || (opts.character && typeof opts.character === "object" ? buildCharacterImageDossier(opts.character) : opts.character) || opts.identitySeed || opts.identity || opts.subjectDescription || "Use the character identity details from the source prompt exactly.",
     clothingNames: opts.clothingNames || opts.characterNames || opts.characterName || opts.charactersList || "character(s) described in the source prompt",
     clothingDesign: opts.clothingDesign || opts.wardrobeSeed || opts.wardrobe || opts.wardrobePhrase || "Use the clothing, wardrobe, and condition described in the source prompt exactly; do not add anything else.",
     activity: `${activity}${rawPrompt && activity !== rawPrompt ? `\n\nSource prompt to infuse into this activity and all visual choices:\n${rawPrompt}` : ""}`,
@@ -6440,6 +6469,55 @@ const renderConfigTemplate = (template = "", vars = {}) => String(template || ""
   for (const part of parts) cur = cur?.[part];
   return cur == null ? "" : String(cur);
 });
+
+const imagePromptPronounParts = (char = {}) => {
+  const rawPronouns = String(char?.pronouns || "").toLowerCase();
+  const rawGender = String(char?.gender || "").toLowerCase();
+  if (rawPronouns.startsWith("she") || rawGender === "female" || rawGender === "woman" || rawGender === "trans woman") return { subject: "She", object: "her", possessive: "Her", genderNoun: "woman" };
+  if (rawPronouns.startsWith("they") || rawGender.includes("non-binary") || rawGender.includes("agender") || rawGender.includes("gender")) return { subject: "They", object: "them", possessive: "Their", genderNoun: "person" };
+  return { subject: "He", object: "him", possessive: "His", genderNoun: "man" };
+};
+const imagePromptCharacterDossierVars = (char = {}) => {
+  const p = imagePromptPronounParts(char);
+  const name = String(char?.name || "this character").trim() || "this character";
+  const ethnicityRaw = String(char?.ethnicity || char?.ancestry || char?.heritage || "European descent").trim();
+  const ethnicityPhrase = /^of\b/i.test(ethnicityRaw) ? ethnicityRaw : `of ${ethnicityRaw}`;
+  const appearance = String(char?.appearance || char?.bodyDescription || char?.visualDescription || char?.build || "body and appearance details from the character profile").trim();
+  const build = String(char?.physique || char?.bodyType || char?.build || appearance || "body and appearance details from the character profile").trim();
+  const skin = String(char?.skinTone || char?.skin || "").trim();
+  const bodyHair = String(char?.bodyHair || "").trim();
+  const vLines = String(char?.vLines || char?.vLine || "").trim();
+  const lookAlike = String(char?.lookAlike || char?.faceClaim || "").trim();
+  return {
+    characterName: name,
+    characterAge: char?.age ? String(char.age).trim() + (String(char.age).match(/year/i) ? "" : "-year-old") : "adult",
+    characterGender: char?.gender || p.genderNoun,
+    characterGenderNoun: p.genderNoun,
+    characterPronouns: char?.pronouns || (p.genderNoun === "woman" ? "she/her" : p.genderNoun === "person" ? "they/them" : "he/him"),
+    characterPronounSubject: p.subject,
+    characterPronounObject: p.object,
+    characterPronounPossessive: p.possessive,
+    characterEthnicity: ethnicityRaw,
+    characterEthnicityPhrase: ethnicityPhrase,
+    characterPresence: char?.presence || char?.visualPresence || "commanding, composed presence",
+    characterHeight: char?.height || "unspecified height",
+    characterWeight: char?.weight || "unspecified weight",
+    characterBuild: char?.build || "unspecified build",
+    characterPhysique: build,
+    characterAppearance: appearance,
+    characterSkinTone: skin,
+    characterSkinTonePhrase: skin ? `${p.possessive} skin is ${skin}.` : "",
+    characterBodyHair: bodyHair,
+    characterBodyHairPhrase: bodyHair ? `Body hair is ${bodyHair}.` : "",
+    characterVLines: vLines,
+    characterVLinesPhrase: vLines ? `${p.possessive} v-lines are ${vLines}.` : "",
+    characterLookAlike: lookAlike,
+    characterFaceLine: lookAlike ? `${p.possessive} face is... let's say most people will mistake ${p.object} with ${lookAlike}. Hahaha.` : `${p.possessive} face follows the character profile exactly; no separate look-alike is set.`,
+    characterPermanentMarks: char?.permanentMarks || "",
+  };
+};
+const buildCharacterImageDossier = (char = {}, template = DEFAULT_IMAGE_CHARACTER_DOSSIER_TEMPLATE) => renderConfigTemplate(template, imagePromptCharacterDossierVars(char)).replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+const buildCharactersImageDossier = (chars = []) => (Array.isArray(chars) ? chars : []).map(c => buildCharacterImageDossier(c)).filter(Boolean).join("\n\n");
 const allTextPromptRows = (config = {}) => mergePromptTemplateRows(
   ...PROMPT_TEMPLATE_TABLE_KEYS.map(k => config?.[k] || []),
   config?.promptTemplates || []
@@ -10978,7 +11056,7 @@ const modelPortfolioPackagesFromConfig = (config = {}) => {
 };
 const buildPortfolioShotPromptUser = (pkg = {}, shot = {}, pkgKey = "portfolio") => buildUniversalImagePromptTemplate({
   charactersList: "{{characterName}}",
-  characterDescriptions: "{{identity}}",
+  characterDescriptions: DEFAULT_IMAGE_CHARACTER_DOSSIER_TEMPLATE,
   clothingNames: "{{characterName}}",
   clothingDesign: "{{wardrobe}}",
   activity: `${pkg.label || "Model portfolio"}. ${pkg.style || ""}\n\n${shot.label || "Portfolio shot"}. ${shot.direction || ""}`,
@@ -18401,6 +18479,8 @@ Then 2-3 sentences describing the specific scene idea, character actions, and em
     const [kind, ...rest] = String(variant || "portrait").split(":");
     const variantValue = rest.join(":");
     const identitySeed = buildCharacterIdentitySeed(char);
+    const characterVisualDossier = buildCharacterImageDossier(char);
+    const characterDossierVars = imagePromptCharacterDossierVars(char);
     const wardrobeSeed = buildCharacterWardrobeSeed(char, kind === "outfit" ? variantValue : "");
     const label = kind === "model-sheet" ? "Model sheet"
       : kind === "relight" ? `Lighting — ${variantValue}`
@@ -18434,7 +18514,7 @@ Rules:
 - Fully clothed, tasteful character-design reference art.
 - Photorealistic skin, real fabric texture, natural lighting, no illustration, no CGI look.`;
     const prompt = liveTpl?.user
-      ? renderConfigTemplate(liveTpl.user, { character: char, characterName: char?.name || "the character", identitySeed: identitySeed || buildCharacterArtPrompt(char), wardrobeSeed, task, variant, variantKind: kind, variantValue })
+      ? renderConfigTemplate(liveTpl.user, { character: char, characterName: char?.name || "the character", characterVisualDossier, characterDossier: characterVisualDossier, ...characterDossierVars, identitySeed: identitySeed || buildCharacterArtPrompt(char), wardrobeSeed, task, variant, variantKind: kind, variantValue })
       : fallbackPrompt;
     return { prompt: prompt || fallbackPrompt, ratio, caption: label };
   }, [buildCharacterArtPrompt, buildCharacterIdentitySeed, buildCharacterWardrobeSeed]);
@@ -18442,7 +18522,7 @@ Rules:
   const runCharacterArtJob = useCallback(async (job) => {
     setCharacterArtJobs(prev => ({ ...prev, [job.id]: { ...job, status: "generating", error: "", updatedAt: new Date().toISOString() } }));
     try {
-      const img = await _genSingleImageRef.current(job.prompt, job.ratio, null, { title: job.caption || "Generate character art", detail: "Building character image", promptKind: "character", promptId: "character.studio.artVariant", characterName: job.char?.name, identitySeed: buildCharacterIdentitySeed(job.char || {}), wardrobeSeed: buildCharacterWardrobeSeed(job.char || {}) });
+      const img = await _genSingleImageRef.current(job.prompt, job.ratio, null, { title: job.caption || "Generate character art", detail: "Building character image", promptKind: "character", promptId: "character.studio.artVariant", characterName: job.char?.name, characterVisualDossier: buildCharacterImageDossier(job.char || {}), identitySeed: buildCharacterIdentitySeed(job.char || {}), wardrobeSeed: buildCharacterWardrobeSeed(job.char || {}) });
       if (!img) throw new Error("Image API returned no image");
       const c = (project?.characters || []).find(x => x.id === job.charId) || job.char || {};
       const imageId = uid();
@@ -18571,7 +18651,9 @@ Rules:
     if (!pkg) return;
     const selectedShots = shotKey && shotKey !== "all" ? pkg.shots.filter(s => s.key === shotKey) : pkg.shots;
     if (!selectedShots.length) { showToast("Pick a valid portfolio shot", "error"); return; }
-    const identity = buildEditorialIdentityBase(char);
+    const identity = buildCharacterImageDossier(char) || buildEditorialIdentityBase(char);
+    const characterVisualDossier = identity;
+    const characterDossierVars = imagePromptCharacterDossierVars(char);
     const wardrobe = (wardrobeOverride || "").trim() || charWardrobe(char);
     // Shared photoreal contract applied to every shot in the set.
     const realism = "Render as a real human being, photographed, not illustrated: lifelike skin with visible pores, fine texture, subtle imperfections, natural subsurface tones, realistic individual hair strands, true-to-life fabric. Shot on a full-frame camera, 85mm lens. Visuals only; nothing a camera could not capture. No illustration, no painting, no CGI look. Always sweaty with glossy baby oil allover";
@@ -18638,7 +18720,7 @@ Rules:
         const shotTpl = await getPortfolioShotTemplate(shot);
         const prompt = shotTpl?.user
           ? renderConfigTemplate(shotTpl.user, {
-              character: char, characterName: char.name || "a person", identity, wardrobe,
+              character: char, characterName: char.name || "a person", identity, characterVisualDossier, characterDossier: characterVisualDossier, ...characterDossierVars, wardrobe,
               wardrobePhrase: wardrobe ? `, wearing ${wardrobe}` : "",
               portfolioPackageLabel: pkg.label,
               portfolioShotLabel: shot.label,
@@ -18655,7 +18737,7 @@ ${shot.label}. ${shot.direction}`,
           : fallbackPrompt;
         // Text-only identity lock: never pass previous portfolio shots or style images as references.
         let img = null;
-        try { img = await _genSingleImageRef.current(prompt, shot.framing, null, { title: `${portfolioLabel} · ${shot.label}`, detail: `Portfolio shot ${i + 1}/${total}`, promptKind: "character", promptId: `character.studio.portfolio.${pkgKey}.${shot.key}`, characterName: char.name, identity, wardrobe, activity: `${pkg.style} ${shot.direction}`, backdrop: pkg.style, cameraAngle: `${shot.label}: ${shot.direction}` }); } catch { img = null; }
+        try { img = await _genSingleImageRef.current(prompt, shot.framing, null, { title: `${portfolioLabel} · ${shot.label}`, detail: `Portfolio shot ${i + 1}/${total}`, promptKind: "character", promptId: `character.studio.portfolio.${pkgKey}.${shot.key}`, characterName: char.name, identity, characterVisualDossier, wardrobe, activity: `${pkg.style} ${shot.direction}`, backdrop: pkg.style, cameraAngle: `${shot.label}: ${shot.direction}` }); } catch { img = null; }
         if (img) {
           const shotItem = { id: uid(), data: img, caption: shot.label, shotKey: shot.key, addedAt: new Date().toISOString(), genKind: `portfolio:${pkgKey}`, genPrompt: prompt, aspectRatio: shot.framing, portfolioId, qa: _lastImageQaRef.current };
           results.push(shotItem);
@@ -18732,7 +18814,9 @@ ${shot.label}. ${shot.direction}`,
     if (!settings.apiKey) { showToast("Add an API key in Settings first", "error"); return; }
     // Identity ONLY (face, body, permanent marks) — NOT appearance freeform / signature items / occupation.
     // All wardrobe, pose, optics, lighting come from the studio controls.
-    const identity = buildEditorialIdentityBase(char);
+    const identity = buildCharacterImageDossier(char) || buildEditorialIdentityBase(char);
+    const characterVisualDossier = identity;
+    const characterDossierVars = imagePromptCharacterDossierVars(char);
     const fragments = buildEditorialStudioFragments(studio);
     const tall = studio?.submersion?.on || (studio?.wind?.dir && studio.wind.dir !== "none") || studio?.garmentLayers?.length || studio?.framing?.preset === "full-body";
     const ratio = tall ? "3:4" : "3:4";
@@ -18754,7 +18838,7 @@ ${authority}
 === EDITORIAL STUDIO DIRECTION (this is the authoritative styling — follow every item precisely; all visual, camera-capturable only) ===
 ${studioDirection}`;
     let prompt = liveEditorialTpl?.user
-      ? renderConfigTemplate(liveEditorialTpl.user, { character: char, characterName: char.name || "a person", identity, authority, studio, studioDirection, editorialAuthority: authority, editorialStudioDirection: studioDirection })
+      ? renderConfigTemplate(liveEditorialTpl.user, { character: char, characterName: char.name || "a person", identity, characterVisualDossier, characterDossier: characterVisualDossier, ...characterDossierVars, authority, studio, studioDirection, editorialAuthority: authority, editorialStudioDirection: studioDirection })
       : fallbackPrompt;
     setEditorialBusy(true);
     showToast("Generating in studio…", "info");
@@ -18770,7 +18854,7 @@ ${studioDirection}`;
 
 ${liveStyleRefTpl?.user ? renderConfigTemplate(liveStyleRefTpl.user, { character: char, studio }) : "Use the attached image ONLY as a loose reference for color grading, grain, and overall mood. Do NOT copy its clothing, pose, or background — those are defined by the direction above."}`;
       }
-      const img = await _genSingleImageRef.current(prompt, ratio, refs, { title: "Editorial Studio", detail: "Generating character editorial image", promptKind: "character", promptId: "character.studio.editorial", characterName: char.name, identity, clothingDesign: studioDirection, activity: studioDirection, backdrop: authority, cameraAngle: ratio });
+      const img = await _genSingleImageRef.current(prompt, ratio, refs, { title: "Editorial Studio", detail: "Generating character editorial image", promptKind: "character", promptId: "character.studio.editorial", characterName: char.name, identity, characterVisualDossier, clothingDesign: studioDirection, activity: studioDirection, backdrop: authority, cameraAngle: ratio });
       if (img) {
         const prev = char.moodBoard || [];
         const parentId = prev.length ? prev[prev.length - 1].id : null;
@@ -23349,7 +23433,7 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
 
                 // Mark main prompt as done
                 if (imagePromptAbortRef.current === abortController) {
-                  const structuredAiPrompt = applyUniversalImagePromptStructure(aiPrompt || jsFallback || "", { promptKind: "scene", promptId: "image.scenePromptDirector", charactersList: contextData.mentionedChars.map(c => c.name).join(", ") || "characters described in the selected text", characterDescriptions: contextData.mentionedChars.map(c => `${c.name}: ${_stripFacialClauses(c.appearance) || "appearance not set"}${c.lookAlike ? `; face is exactly ${c.lookAlike}'s face` : ""}`).join("\n\n"), activity: effectiveText.slice(0, 12000), backdrop: contextData._backdropRaw || "Use the selected scene location.", timeOfDay: contextData._timeRaw || "Determine from scene", cameraAngle: contextData._cameraDefaults || "50mm f/2.8" });
+                  const structuredAiPrompt = applyUniversalImagePromptStructure(aiPrompt || jsFallback || "", { promptKind: "scene", promptId: "image.scenePromptDirector", charactersList: contextData.mentionedChars.map(c => c.name).join(", ") || "characters described in the selected text", characterVisualDossier: buildCharactersImageDossier(contextData.mentionedChars), characterDescriptions: buildCharactersImageDossier(contextData.mentionedChars), activity: effectiveText.slice(0, 12000), backdrop: contextData._backdropRaw || "Use the selected scene location.", timeOfDay: contextData._timeRaw || "Determine from scene", cameraAngle: contextData._cameraDefaults || "50mm f/2.8" });
                   setImagePromptData(prev => prev ? { ...prev, prompt: structuredAiPrompt || "(AI returned empty)", isGenerating: false } : null);
                   imagePromptAbortRef.current = null;
                 }
@@ -25770,6 +25854,8 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                       showToast("Generating portrait...", "info");
                       try {
                         const wardrobe = charWardrobe(editingChar);
+                        const characterVisualDossier = buildCharacterImageDossier(editingChar);
+                        const characterDossierVars = imagePromptCharacterDossierVars(editingChar);
                         const lookAlikeLock = editingChar.lookAlike ? `The face is exactly ${editingChar.lookAlike}'s — unmistakably ${editingChar.lookAlike}'s face. Do not alter or describe individual facial features.` : "";
                         const subjectDescription = `${_stripFacialClauses(editingChar.appearance) || ""}${editingChar.build ? `, build: ${editingChar.build}` : ""}${wardrobe ? `, wearing ${wardrobe}` : ""}${lookAlikeLock ? `
 ${lookAlikeLock}` : ""}`;
@@ -25781,10 +25867,10 @@ ${lookAlikeLock}` : ""}`;
                         const livePortraitTpl = await getLivePromptTemplate("character.studio.quickPortrait", "promptTemplatesCharacterStudio");
                         updateAiActivity(portraitActivityId, { title: "Generate AI Portrait", detail: "Prompt loaded · building image request", status: "working" });
                         const rawPrompt = livePortraitTpl?.user
-                          ? renderConfigTemplate(livePortraitTpl.user, { character: editingChar, characterName: editingChar.name || "the character", subjectDescription, lookAlikeLock, wardrobe, identitySeed: subjectDescription, wardrobeSeed: wardrobe })
+                          ? renderConfigTemplate(livePortraitTpl.user, { character: editingChar, characterName: editingChar.name || "the character", characterVisualDossier, characterDossier: characterVisualDossier, ...characterDossierVars, subjectDescription, lookAlikeLock, wardrobe, identitySeed: subjectDescription, wardrobeSeed: wardrobe })
                           : fallbackPortraitPrompt;
                         const prompt = String(rawPrompt || fallbackPortraitPrompt);
-                        const imageUrl = await _genSingleImageRef.current(prompt, "3:4", null, { id: portraitActivityId, title: "Generate AI Portrait", detail: `Portrait for ${editingChar.name || "character"}`, promptKind: "character", promptId: "character.studio.quickPortrait", characterName: editingChar.name, subjectDescription, identitySeed: subjectDescription, wardrobe, clothingDesign: wardrobe, cameraAngle: "3:4 portrait" });
+                        const imageUrl = await _genSingleImageRef.current(prompt, "3:4", null, { id: portraitActivityId, title: "Generate AI Portrait", detail: `Portrait for ${editingChar.name || "character"}`, promptKind: "character", promptId: "character.studio.quickPortrait", characterName: editingChar.name, characterVisualDossier, subjectDescription, identitySeed: subjectDescription, wardrobe, clothingDesign: wardrobe, cameraAngle: "3:4 portrait" });
                         if (imageUrl) {
                           updateCharById(editingCharId, "image", imageUrl);
                           const qa = _lastImageQaRef.current;
