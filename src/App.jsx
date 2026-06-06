@@ -1,6 +1,6 @@
 // APP_UPDATE_TIMESTAMP: 20260606_223000_Jakarta
-// FILE_NAME: App_mod_all_image_prompt_saves_v10_20260606.jsx
-// FIX_MARKER: all-image-prompt-editor-save-stability-v10
+// FILE_NAME: App_mod_live_sheet_autosave_verified_v11_20260606.jsx
+// FIX_MARKER: live-sheet-prompt-autosave-verified-v11
 import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, useReducer, memo, createContext, useContext, Fragment } from "react";
 import { createPortal } from "react-dom";
 
@@ -5369,7 +5369,7 @@ const CONFIG_PROMPT_EDITOR_TABLES = [
 ];
 const CONFIG_TEXT_PROMPT_TABLE_KEYS = new Set(PROMPT_TEMPLATE_TABLE_KEYS);
 const CONFIG_SCHEMA_VERSION = "4";
-const PROMPT_STRUCTURE_RELEASE = "all-image-prompt-editor-save-stability-v10-2026-06-06";
+const PROMPT_STRUCTURE_RELEASE = "live-sheet-prompt-autosave-verified-v11-2026-06-06";
 const USER_EDITED_PROMPT_NOTE = "USER_EDITED_IN_APP_DO_NOT_AUTOREPAIR";
 const isUserEditedPromptRow = (row = {}) => String(row?.notes || "").includes(USER_EDITED_PROMPT_NOTE);
 const markPromptRowUserEdited = (row = {}) => ({
@@ -7415,6 +7415,35 @@ const ConfigSheets = {
       body: JSON.stringify({ values: [rowValues] }),
     });
     return { appended: false, range, tab };
+  },
+
+
+  async readConfigRow(tableKey, rowId, idColumn = "id") {
+    const id = this.getSpreadsheetId();
+    if (!id) throw new Error("No config spreadsheet connected");
+    const meta = CONFIG_TABLES[tableKey];
+    if (!meta) throw new Error(`Unknown config table: ${tableKey}`);
+    await this.ensureTabs();
+    const tab = meta.tab;
+    const data = await this.request(`spreadsheets/${id}/values/${encodeURIComponent(`${tab}!A:Z`)}`);
+    const values = data.values || [];
+    const headers = values[0]?.length ? values[0].map(h => String(h || "").trim()) : (meta.headers || []);
+    const idIdx = headers.findIndex(h => h === idColumn);
+    if (idIdx < 0) throw new Error(`${tab} is missing ${idColumn} column`);
+    const row = values.find((r, idx) => idx > 0 && String(r[idIdx] || "").trim() === String(rowId || "").trim());
+    if (!row) return null;
+    return Object.fromEntries(headers.map((h, i) => [h, row[i] ?? ""]));
+  },
+
+  async verifyConfigRowWrite(tableKey, rowId, expectedRow = {}, fields = [], idColumn = "id") {
+    const readBack = await this.readConfigRow(tableKey, rowId, idColumn);
+    if (!readBack) throw new Error(`Google Sheets write verification failed: row ${rowId} was not found after saving`);
+    const checkFields = (fields && fields.length ? fields : Object.keys(expectedRow || {}).filter(k => k !== idColumn));
+    const mismatches = checkFields.filter(f => String(readBack?.[f] ?? "") !== String(expectedRow?.[f] ?? ""));
+    if (mismatches.length) {
+      throw new Error(`Google Sheets write verification failed for ${rowId}: ${mismatches.slice(0, 4).join(", ")} did not match after saving`);
+    }
+    return readBack;
   },
 
   async upsertConfigFieldCell(tableKey, rowId, fieldName, value, fallbackRow = {}, idColumn = "id") {
@@ -16143,6 +16172,9 @@ export default function NovelForge() {
   const [configPromptKind, setConfigPromptKind] = useState("promptTemplatesWrite");
   const [configPromptId, setConfigPromptId] = useState("");
   const [configDirty, setConfigDirty] = useState(false);
+  const configPromptAutosaveTimersRef = useRef({});
+  const portfolioPromptAutosaveTimerRef = useRef(null);
+  const [promptAutosaveStatus, setPromptAutosaveStatus] = useState("");
 
   // ─── GOOGLE DRIVE STATE ───
   const [gdriveClientId, setGdriveClientId] = useState("");
@@ -18757,10 +18789,12 @@ Rules:
     });
   }, [openPromptTemplateEditor, showToast, modelPortfolioPackages]);
 
-  const savePromptTemplateEditor = useCallback(async () => {
-    const ed = portfolioPromptEditor;
-    if (!ed?.promptId) return;
-    const draft = String(ed.draft || "");
+  const savePromptTemplateEditor = useCallback(async (opts = {}) => {
+    const ed = opts.editor || portfolioPromptEditor;
+    if (!ed?.promptId) return null;
+    const closeAfter = opts.close !== false;
+    const quiet = !!opts.quiet;
+    const draft = String(opts.draftOverride ?? ed.draft ?? "");
     const defaultRow = findPromptTemplate(buildDefaultAppConfig(), ed.promptId, ed.tableKey) || findPromptTemplate(buildDefaultAppConfig(), ed.promptId) || {};
     const localRow = findPromptTemplate(appConfig, ed.promptId, ed.tableKey) || findPromptTemplate(appConfig, ed.promptId) || {};
     const fieldName = ed.fieldName || "user";
@@ -18768,8 +18802,8 @@ Rules:
     if (!draft.trim() && previousValue.trim()) {
       const msg = "Refusing to save a blank prompt because the editor still has a previous non-empty prompt. Close/reopen the editor if you really meant to clear it.";
       setPortfolioPromptEditor(prev => prev ? { ...prev, draft: previousValue, error: msg } : prev);
-      showToast(msg, "error");
-      return;
+      if (!quiet) showToast(msg, "error");
+      return null;
     }
     let fallbackRow = markPromptRowUserEdited(enrichPromptTemplateRow({
       ...defaultRow,
@@ -18786,10 +18820,12 @@ Rules:
 
     try {
       setPortfolioPromptSaving(true);
+      setPromptAutosaveStatus(quiet ? "Auto-saving prompt to Google Sheets…" : "Saving prompt to Google Sheets…");
       setConfigError("");
       const access = await prepareConfigSheetAccess(`prompt:${ed.promptId}`);
       if (!access.ok) throw new Error(access.message || "No config spreadsheet connected");
       const result = await ConfigSheets.upsertConfigRow(tableKey, ed.promptId, fallbackRow);
+      await ConfigSheets.verifyConfigRowWrite(tableKey, ed.promptId, fallbackRow, [fieldName, "notes", "active"]);
 
       const nextRows = (() => {
         const rows = appConfig?.[tableKey] || [];
@@ -18798,17 +18834,45 @@ Rules:
       })();
       const nextCfg = commitLiveAppConfig({ ...appConfig, [tableKey]: nextRows });
       cacheAppConfig(nextCfg);
-      showToast(`Prompt saved to ${result.range}`, "success");
-      setPortfolioPromptEditor(null);
+      setPromptAutosaveStatus(`Saved to ${result.range}`);
+      if (!quiet) showToast(`Prompt saved to ${result.range}`, "success");
+      if (closeAfter) setPortfolioPromptEditor(null);
+      else setPortfolioPromptEditor(prev => prev ? { ...prev, draft, error: "", savedAt: new Date().toISOString() } : prev);
+      return result;
     } catch (e) {
       const msg = e?.message || String(e);
       setConfigError(msg);
-      showToast(`Prompt save failed: ${msg}`, "error");
+      setPromptAutosaveStatus(`Prompt save failed: ${msg}`);
+      if (!quiet) showToast(`Prompt save failed: ${msg}`, "error");
+      else console.warn("[NovelForge] Prompt autosave failed:", msg);
       setPortfolioPromptEditor(prev => prev ? { ...prev, error: msg } : prev);
+      return null;
     } finally {
       setPortfolioPromptSaving(false);
     }
   }, [portfolioPromptEditor, appConfig, prepareConfigSheetAccess, commitLiveAppConfig, showToast]);
+
+
+  const schedulePortfolioPromptAutosave = useCallback((draftOverride, delay = 900) => {
+    if (!portfolioPromptEditor?.promptId) return;
+    if (portfolioPromptAutosaveTimerRef.current) clearTimeout(portfolioPromptAutosaveTimerRef.current);
+    setPromptAutosaveStatus("Prompt edit queued for Google Sheets…");
+    const editorSnapshot = { ...portfolioPromptEditor, draft: draftOverride };
+    portfolioPromptAutosaveTimerRef.current = setTimeout(() => {
+      portfolioPromptAutosaveTimerRef.current = null;
+      savePromptTemplateEditor({ editor: editorSnapshot, draftOverride, close: false, quiet: true });
+    }, delay);
+  }, [portfolioPromptEditor, savePromptTemplateEditor]);
+
+  const flushPortfolioPromptAutosave = useCallback((draftOverride = null) => {
+    if (portfolioPromptAutosaveTimerRef.current) {
+      clearTimeout(portfolioPromptAutosaveTimerRef.current);
+      portfolioPromptAutosaveTimerRef.current = null;
+    }
+    if (!portfolioPromptEditor?.promptId) return null;
+    const draft = draftOverride != null ? draftOverride : portfolioPromptEditor.draft;
+    return savePromptTemplateEditor({ editor: { ...portfolioPromptEditor, draft }, draftOverride: draft, close: false, quiet: true });
+  }, [portfolioPromptEditor, savePromptTemplateEditor]);
 
   // ─── MODEL PORTFOLIO GENERATOR ───
   // Produces an agency-style set from text only, or a single selected shot when `shotKey` is set.
@@ -20635,10 +20699,12 @@ If no relationship changes, respond "No relationship updates needed."` },
     }
     try {
       if (!opts.quiet) setConfigSyncing(true);
+      setPromptAutosaveStatus(opts.quiet ? "Auto-saving prompt to Google Sheets…" : "Saving prompt row to Google Sheets…");
       setConfigError("");
       const access = await prepareConfigSheetAccess(`prompt:${row.id}`);
       if (!access.ok) throw new Error(access.message || "No config spreadsheet connected");
       const result = await ConfigSheets.upsertConfigRow(kind, row.id, row);
+      await ConfigSheets.verifyConfigRowWrite(kind, row.id, row, [fieldName, "notes", "active"]);
       const rows = appConfig?.[kind] || [];
       const nextRows = [...rows.filter(r => String(r.id || "") !== String(rowId || "") && String(r.id || "") !== String(row.id || "")), row]
         .sort((a, b) => Number(a.sort || 0) - Number(b.sort || 0));
@@ -20646,11 +20712,13 @@ If no relationship changes, respond "No relationship updates needed."` },
       cacheAppConfig(nextCfg);
       setConfigDirty(false);
       if (row.id !== rowId) setConfigPromptId(row.id);
+      setPromptAutosaveStatus(`Saved to ${result.range}`);
       if (!opts.quiet) showToast(`Prompt row saved to ${result.range}`, "success");
       return result;
     } catch (e) {
       const msg = e?.message || String(e);
       setConfigError(msg);
+      setPromptAutosaveStatus(`Prompt row save failed: ${msg}`);
       if (!opts.quiet) showToast(`Prompt row save failed: ${msg}`, "error");
       else console.warn("[NovelForge] Prompt row auto-save failed:", msg);
       return null;
@@ -20667,6 +20735,35 @@ If no relationship changes, respond "No relationship updates needed."` },
       return isPromptConfigTableKey(kind) ? markPromptRowUserEdited(nextRow) : nextRow;
     })
   }), ""), [updateAppConfigLocal, isPromptConfigTableKey]);
+
+
+  const scheduleConfigPromptRowAutosave = useCallback((kind, rowId, patch = {}, delay = 900) => {
+    if (!isPromptConfigTableKey(kind) || !rowId) return;
+    const key = `${kind}:${rowId}`;
+    if (configPromptAutosaveTimersRef.current[key]) clearTimeout(configPromptAutosaveTimersRef.current[key]);
+    setPromptAutosaveStatus("Prompt edit queued for Google Sheets…");
+    configPromptAutosaveTimersRef.current[key] = setTimeout(() => {
+      delete configPromptAutosaveTimersRef.current[key];
+      saveConfigPromptRowToSheet(kind, rowId, patch, { quiet: true }).then(result => {
+        if (result?.range) setPromptAutosaveStatus(`Saved to ${result.range}`);
+      });
+    }, delay);
+  }, [isPromptConfigTableKey, saveConfigPromptRowToSheet]);
+
+  const flushConfigPromptRowAutosave = useCallback((kind, rowId, patch = {}) => {
+    if (!isPromptConfigTableKey(kind) || !rowId) return saveConfigPromptRowToSheet(kind, rowId, patch, { quiet: true });
+    const key = `${kind}:${rowId}`;
+    if (configPromptAutosaveTimersRef.current[key]) {
+      clearTimeout(configPromptAutosaveTimersRef.current[key]);
+      delete configPromptAutosaveTimersRef.current[key];
+    }
+    return saveConfigPromptRowToSheet(kind, rowId, patch, { quiet: true });
+  }, [isPromptConfigTableKey, saveConfigPromptRowToSheet]);
+
+  useEffect(() => () => {
+    Object.values(configPromptAutosaveTimersRef.current || {}).forEach(t => clearTimeout(t));
+    if (portfolioPromptAutosaveTimerRef.current) clearTimeout(portfolioPromptAutosaveTimerRef.current);
+  }, []);
 
   const handleGenerateChapterWorldView = useCallback(async () => {
     if (!settings.apiKey) { showToast("Set API key first", "error"); return; }
@@ -31520,7 +31617,8 @@ Speech pattern: ${char.speechPattern || ""}` },
                     <button onClick={() => addConfigPromptRow(kind)} className="nf-btn nf-btn-primary">+ Add prompt</button>
                     <span style={{ fontSize: 11, color: "var(--nf-text-muted)", padding: "5px 8px", border: "1px solid var(--nf-border)", borderRadius: 999 }}>Sheet: {CONFIG_TABLES[kind]?.tab || kind} · {(rows || []).length} rows</span>
                     {selected && <button onClick={() => updateConfigPromptRow(kind, selected.id, { active: cfgBool(selected.active, true) ? "FALSE" : "TRUE" })} className="nf-btn nf-btn-ghost">{cfgBool(selected.active, true) ? "Active" : "Hidden"}</button>}
-                    {selected && <button onClick={() => saveConfigPromptRowToSheet(kind, selected.id, {}, { quiet: false })} disabled={configSyncing || !configSheetId.trim()} className="nf-btn nf-btn-primary" title="Save this exact prompt row to Google Sheets now">Save row</button>}
+                    {selected && <button onClick={() => saveConfigPromptRowToSheet(kind, selected.id, {}, { quiet: false })} disabled={configSyncing} className="nf-btn nf-btn-primary" title="Save this exact prompt row to Google Sheets now">Save row</button>}
+                    {promptAutosaveStatus && <span style={{ fontSize: 11, color: promptAutosaveStatus.includes("failed") ? "var(--nf-accent)" : "var(--nf-text-muted)", padding: "5px 8px", border: "1px solid var(--nf-border)", borderRadius: 999 }}>{promptAutosaveStatus}</span>}
                   </div>
                   {selected ? (
                     <div style={{ display: "grid", gap: 8, padding: 10, border: "1px solid var(--nf-border)", borderRadius: 10, background: "var(--nf-bg-surface)" }}>
@@ -31529,16 +31627,16 @@ Speech pattern: ${char.speechPattern || ""}` },
                         <input value={selected.name || selected.label || ""} onChange={e => updateConfigPromptRow(kind, selected.id, kind === "imagePromptTemplates" ? { label: e.target.value } : { name: e.target.value })} onBlur={e => saveConfigPromptRowToSheet(kind, selected.id, kind === "imagePromptTemplates" ? { label: e.target.value } : { name: e.target.value }, { quiet: true })} className="nf-input" style={{ fontSize: 11 }} placeholder="Name / label" />
                       </div>
                       {isTextPromptTable ? <>
-                        <PromptVariableEditor value={selected.system || ""} onChange={e => updateConfigPromptRow(kind, selected.id, { system: e.target.value })} onBlur={e => saveConfigPromptRowToSheet(kind, selected.id, { system: e.target.value }, { quiet: true })} rows={4} placeholder="System prompt" promptId={selected.id} />
-                        <PromptVariableEditor value={selected.user || ""} onChange={e => updateConfigPromptRow(kind, selected.id, { user: e.target.value })} onBlur={e => saveConfigPromptRowToSheet(kind, selected.id, { user: e.target.value }, { quiet: true })} rows={6} placeholder="User prompt template. Use {{context}}, {{character}}, {{story}}, etc." promptId={selected.id} />
+                        <PromptVariableEditor value={selected.system || ""} onChange={e => { const patch = { system: e.target.value }; updateConfigPromptRow(kind, selected.id, patch); scheduleConfigPromptRowAutosave(kind, selected.id, patch); }} onBlur={e => flushConfigPromptRowAutosave(kind, selected.id, { system: e.target.value })} rows={4} placeholder="System prompt" promptId={selected.id} />
+                        <PromptVariableEditor value={selected.user || ""} onChange={e => { const patch = { user: e.target.value }; updateConfigPromptRow(kind, selected.id, patch); scheduleConfigPromptRowAutosave(kind, selected.id, patch); }} onBlur={e => flushConfigPromptRowAutosave(kind, selected.id, { user: e.target.value })} rows={6} placeholder="User prompt template. Use {{context}}, {{character}}, {{story}}, etc." promptId={selected.id} />
                       </> : <>
-                        <PromptVariableEditor value={selected.promptTemplate || ""} onChange={e => updateConfigPromptRow(kind, selected.id, { promptTemplate: e.target.value })} onBlur={e => saveConfigPromptRowToSheet(kind, selected.id, { promptTemplate: e.target.value }, { quiet: true })} rows={7} placeholder="Image prompt template" promptId={selected.id} />
+                        <PromptVariableEditor value={selected.promptTemplate || ""} onChange={e => { const patch = { promptTemplate: e.target.value }; updateConfigPromptRow(kind, selected.id, patch); scheduleConfigPromptRowAutosave(kind, selected.id, patch); }} onBlur={e => flushConfigPromptRowAutosave(kind, selected.id, { promptTemplate: e.target.value })} rows={7} placeholder="Image prompt template" promptId={selected.id} />
                         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
                           <input value={selected.variant || ""} onChange={e => updateConfigPromptRow(kind, selected.id, { variant: e.target.value })} onBlur={e => saveConfigPromptRowToSheet(kind, selected.id, { variant: e.target.value }, { quiet: true })} className="nf-input" style={{ fontSize: 11 }} placeholder="Variant" />
                           <input value={selected.ratio || ""} onChange={e => updateConfigPromptRow(kind, selected.id, { ratio: e.target.value })} onBlur={e => saveConfigPromptRowToSheet(kind, selected.id, { ratio: e.target.value }, { quiet: true })} className="nf-input" style={{ fontSize: 11 }} placeholder="Ratio" />
                         </div>
                       </>}
-                      <div style={{ fontSize: 11, color: "var(--nf-text-muted)" }}>Tip: prompt rows auto-save on blur. Use Save row for a manual full-row write. Hide rows instead of deleting them; hidden rows stay in the sheet but disappear from the app.</div>
+                      <div style={{ fontSize: 11, color: "var(--nf-text-muted)" }}>Tip: prompt rows auto-save to Google Sheets while you edit, then verify the saved row by reading it back. Use Save row for an immediate full-row write. Hide rows instead of deleting them; hidden rows stay in the sheet but disappear from the app.</div>
                     </div>
                   ) : <div style={{ fontSize: 12, color: "var(--nf-text-muted)" }}>No prompts yet.</div>}
                 </div>
@@ -33903,11 +34001,12 @@ Speech pattern: ${char.speechPattern || ""}` },
                 {portfolioPromptEditor.loading ? (
                   <div style={{ fontSize: 12, color: "var(--nf-text-muted)", display: "flex", alignItems: "center", gap: 8 }}><Spinner /> Loading prompt…</div>
                 ) : (
-                  <PromptVariableEditor value={portfolioPromptEditor.draft || ""} onChange={e => setPortfolioPromptEditor(prev => prev ? { ...prev, draft: e.target.value } : prev)} rows={18} style={{ fontSize: 12, lineHeight: 1.5 }} placeholder="Prompt template" autoFocus promptId={portfolioPromptEditor.promptId} />
+                  <PromptVariableEditor value={portfolioPromptEditor.draft || ""} onChange={e => { const nextDraft = e.target.value; setPortfolioPromptEditor(prev => prev ? { ...prev, draft: nextDraft } : prev); schedulePortfolioPromptAutosave(nextDraft); }} onBlur={e => flushPortfolioPromptAutosave(e.target.value)} rows={18} style={{ fontSize: 12, lineHeight: 1.5 }} placeholder="Prompt template" autoFocus promptId={portfolioPromptEditor.promptId} />
                 )}
                 <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", alignItems: "center" }}>
+                  {promptAutosaveStatus && <span style={{ marginRight: "auto", fontSize: 11, color: promptAutosaveStatus.includes("failed") ? "var(--nf-accent)" : "var(--nf-text-muted)" }}>{promptAutosaveStatus}</span>}
                   <button onClick={() => setPortfolioPromptEditor(null)} disabled={portfolioPromptSaving} className="nf-btn nf-btn-ghost" style={{ fontSize: 12 }}>Cancel</button>
-                  <button onClick={savePromptTemplateEditor} disabled={portfolioPromptSaving || portfolioPromptEditor.loading} className="nf-btn nf-btn-primary" style={{ fontSize: 12 }}>
+                  <button onClick={() => savePromptTemplateEditor({ close: true, quiet: false })} disabled={portfolioPromptSaving || portfolioPromptEditor.loading} className="nf-btn nf-btn-primary" style={{ fontSize: 12 }}>
                     {portfolioPromptSaving ? <><Spinner /> Saving to Sheet…</> : "Save to Google Sheets"}
                   </button>
                 </div>
