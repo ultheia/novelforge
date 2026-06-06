@@ -1,6 +1,6 @@
-// APP_UPDATE_TIMESTAMP: 20260606_120000_Jakarta
-// FILE_NAME: App_mod_universal_image_prompt_structure_v2_20260606.jsx
-// FIX_MARKER: universal-image-prompt-structure-verbatim-v2
+// APP_UPDATE_TIMESTAMP: 20260606_173000_Jakarta
+// FILE_NAME: App_mod_dropdown_option_system_v5_20260606.jsx
+// FIX_MARKER: dropdown-option-system-portfolio-v5
 import { useState, useEffect, useRef, useCallback, useMemo, useReducer, memo, createContext, useContext, Fragment } from "react";
 import { createPortal } from "react-dom";
 
@@ -855,40 +855,78 @@ const escapePromptHtml = (text = "") => String(text || "")
   .replace(/&/g, "&amp;")
   .replace(/</g, "&lt;")
   .replace(/>/g, "&gt;");
-const renderPromptVariablesHtml = (text = "") => escapePromptHtml(text).replace(/\{\{\s*([\w.]+)\s*\}\}/g, '<span class="nf-prompt-variable">{{$1}}</span>');
-const promptVariablesIn = (text = "") => [...new Set((String(text || "").match(/\{\{\s*[\w.]+\s*\}\}/g) || []).map(v => v.replace(/\s+/g, "")))];
 
-const PromptVariableEditor = memo(({ value = "", onChange, rows = 8, placeholder = "", className = "", style = null, autoFocus = false, readOnly = false, title = "" }) => {
-  const overlayRef = useRef(null);
-  const variables = useMemo(() => promptVariablesIn(value), [value]);
-  const html = useMemo(() => renderPromptVariablesHtml(value || ""), [value]);
-  const syncScroll = (e) => {
-    if (overlayRef.current) {
-      overlayRef.current.scrollTop = e.currentTarget.scrollTop;
-      overlayRef.current.scrollLeft = e.currentTarget.scrollLeft;
-    }
-  };
+const PROMPT_PLACEHOLDER_RE = /\{\{\s*([\w.]+)\s*\}\}/g;
+const IMAGE_PROMPT_RUNTIME_VARIABLES = new Set([
+  "characterName", "character", "characters", "charactersList", "identity", "identitySeed", "subjectDescription",
+  "wardrobe", "wardrobeSeed", "wardrobePhrase", "clothingDesign",
+  "sceneText", "context", "world", "worldView", "style", "sourcePrompt", "task", "variant",
+  "timeOfDay", "cameraAngle", "ratio", "defaultRatio", "aspectRatio",
+  "members", "memberDescs", "orgName", "name", "organizationDescription", "organizationPurpose",
+  "portfolioDirection", "portfolioPackageLabel", "portfolioShotLabel", "portfolioStyle", "portfolioShotDirection",
+  "editorialAuthority", "editorialStudioDirection",
+]);
+const IMAGE_PROMPT_APP_OWNED_VARIABLES = new Set([
+  "package", "package.label", "package.style", "packageKey", "packageStyle",
+  "shot", "shot.label", "shot.direction", "shotKey", "shotLabel", "shotDirection",
+  "samePersonLock", "realismContract", "lookAlikeLock", "authority", "studio", "studioDirection",
+  "world.description", "organization.description", "item.description", "item.orgPurpose",
+]);
+const isImagePromptIdForVariableAudit = (promptId = "") => {
+  const id = String(promptId || "");
+  return id.startsWith("image.") || id.startsWith("character.studio.") || id.startsWith("world.orgGroupPhoto") || id === "charArt.reference" || id === "scene.illustration" || id === "character_portrait" || id === "chapter_illustration";
+};
+const promptVariablesIn = (text = "") => [...new Set([...String(text || "").matchAll(PROMPT_PLACEHOLDER_RE)].map(m => m[1]))];
+const classifyPromptVariables = (text = "", promptId = "") => {
+  const vars = promptVariablesIn(text);
+  const imagePrompt = isImagePromptIdForVariableAudit(promptId);
+  const editable = [], appOwned = [], unknown = [];
+  vars.forEach(v => {
+    if (imagePrompt && IMAGE_PROMPT_APP_OWNED_VARIABLES.has(v)) appOwned.push(v);
+    else if (!imagePrompt || IMAGE_PROMPT_RUNTIME_VARIABLES.has(v) || /^[a-z]+\.[a-z0-9_]+$/i.test(v)) editable.push(v);
+    else unknown.push(v);
+  });
+  return { vars, editable, appOwned, unknown };
+};
+const renderPromptVariablesHtml = (text = "", promptId = "") => escapePromptHtml(text).replace(PROMPT_PLACEHOLDER_RE, (_, key) => {
+  const cls = isImagePromptIdForVariableAudit(promptId) && IMAGE_PROMPT_APP_OWNED_VARIABLES.has(key)
+    ? "nf-prompt-variable nf-prompt-variable-owned"
+    : isImagePromptIdForVariableAudit(promptId) && !IMAGE_PROMPT_RUNTIME_VARIABLES.has(key) && !/^[a-z]+\.[a-z0-9_]+$/i.test(key)
+      ? "nf-prompt-variable nf-prompt-variable-unknown"
+      : "nf-prompt-variable";
+  return `<span class="${cls}">{{${key}}}</span>`;
+});
+
+const PromptVariableEditor = memo(({ value = "", onChange, rows = 8, placeholder = "", className = "", style = null, autoFocus = false, readOnly = false, title = "", promptId = "" }) => {
+  const variableInfo = useMemo(() => classifyPromptVariables(value, promptId), [value, promptId]);
+  const previewHtml = useMemo(() => renderPromptVariablesHtml(value || "", promptId), [value, promptId]);
+  const variables = variableInfo.vars;
   return (
-    <div className="nf-prompt-editor-shell">
-      <div className="nf-prompt-editor-stack" style={style || undefined} title={title}>
-        <pre ref={overlayRef} aria-hidden="true" className="nf-prompt-highlight-layer" dangerouslySetInnerHTML={{ __html: html + "\n" }} />
-        <textarea
-          value={value}
-          onChange={onChange}
-          onScroll={syncScroll}
-          rows={rows}
-          placeholder={placeholder}
-          readOnly={readOnly}
-          autoFocus={autoFocus}
-          spellCheck={false}
-          className={`nf-textarea nf-prompt-highlight-input ${className || ""}`}
-        />
-      </div>
+    <div className="nf-prompt-editor-shell" title={title}>
+      <textarea
+        value={value}
+        onChange={onChange}
+        rows={rows}
+        placeholder={placeholder}
+        readOnly={readOnly}
+        autoFocus={autoFocus}
+        spellCheck={false}
+        className={`nf-textarea nf-prompt-plain-input ${className || ""}`}
+        style={style || undefined}
+      />
       <div className="nf-prompt-variable-legend">
-        <span className="nf-prompt-variable-chip">{"{{variable}}"}</span>
-        <span>Colored chips are live placeholders. Keep them unless you intentionally remove that data source.</span>
-        {variables.length > 0 && <span className="nf-prompt-variable-list">Found: {variables.slice(0, 12).join(", ")}{variables.length > 12 ? ` +${variables.length - 12} more` : ""}</span>}
+        <span className="nf-prompt-variable-chip">{"{{runtimeVariable}}"}</span>
+        <span>Plain editable text. Keep runtime variable chips unless you intentionally want to remove that injected data.</span>
+        {variableInfo.editable.length > 0 && <span className="nf-prompt-variable-list">Runtime: {variableInfo.editable.slice(0, 12).map(v => `{{${v}}}`).join(", ")}{variableInfo.editable.length > 12 ? ` +${variableInfo.editable.length - 12} more` : ""}</span>}
+        {variableInfo.appOwned.length > 0 && <span className="nf-prompt-variable-list nf-prompt-variable-owned-text">App-owned legacy tokens found: {variableInfo.appOwned.map(v => `{{${v}}}`).join(", ")}. These should be baked by repair, not edited by hand.</span>}
+        {variableInfo.unknown.length > 0 && <span className="nf-prompt-variable-list nf-prompt-variable-unknown-text">Unknown image tokens: {variableInfo.unknown.map(v => `{{${v}}}`).join(", ")}</span>}
       </div>
+      {variables.length > 0 && (
+        <details className="nf-prompt-variable-preview">
+          <summary>Preview with variables highlighted</summary>
+          <pre dangerouslySetInnerHTML={{ __html: previewHtml + "\n" }} />
+        </details>
+      )}
     </div>
   );
 });
@@ -5193,7 +5231,7 @@ const CONFIG_PROMPT_EDITOR_TABLES = [
 ];
 const CONFIG_TEXT_PROMPT_TABLE_KEYS = new Set(PROMPT_TEMPLATE_TABLE_KEYS);
 const CONFIG_SCHEMA_VERSION = "4";
-const PROMPT_STRUCTURE_RELEASE = "universal-image-structure-verbatim-v1-2026-06-06";
+const PROMPT_STRUCTURE_RELEASE = "dropdown-option-system-portfolio-v5-2026-06-06";
 const cfgBool = (value, fallback = true) => {
   if (value == null || value === "") return fallback;
   if (typeof value === "boolean") return value;
@@ -5249,10 +5287,10 @@ const buildUniversalImagePromptTemplate = (vars = {}) => {
   const characterDescriptions = imagePromptValue(vars.characterDescriptions || vars.characters || vars.character || vars.identitySeed || vars.identity || vars.subjectDescription, "{{characterDescriptions}}");
   const clothingNames = imagePromptValue(vars.clothingNames || vars.characterNames || vars.charactersList || vars.characterName, charactersList || "{{charactersList}}");
   const clothingDesign = imagePromptValue(vars.clothingDesign || vars.wardrobeSeed || vars.wardrobe || vars.wardrobePhrase, "{{clothingDesign}}");
-  const activity = imagePromptValue(vars.activity || vars.sceneText || vars.task || vars.shotDirection || vars.studioDirection || vars.sourcePrompt, "{{activity}}");
-  const backdrop = imagePromptValue(vars.backdrop || vars.location || vars.world || vars.context || vars.style || vars.authority, "{{backdrop}}");
+  const activity = imagePromptValue(vars.activity || vars.sceneText || vars.task || vars.portfolioDirection || vars.editorialStudioDirection || vars.sourcePrompt, "{{activity}}");
+  const backdrop = imagePromptValue(vars.backdrop || vars.location || vars.world || vars.context || vars.style || vars.portfolioStyle || vars.editorialAuthority, "{{backdrop}}");
   const timeOfDay = imagePromptValue(vars.timeOfDay || vars.time || vars.timeContext, "{{timeOfDay}}");
-  const cameraAngle = imagePromptValue(vars.cameraAngle || vars.angle || vars.framing || vars.ratio || vars.shot || vars.shotLabel, "{{cameraAngle}}");
+  const cameraAngle = imagePromptValue(vars.cameraAngle || vars.angle || vars.framing || vars.ratio || vars.aspectRatio || vars.portfolioShotLabel, "{{cameraAngle}}");
   return `Scene: 1 
 
 
@@ -5343,45 +5381,104 @@ asked, if wrong, fix the creation. Then, triple check now, point (4) and (7) --
 
 restate in your back end, if the draft is wrong, fix the creation.`;
 };
+const extractPromptSingleLine = (text = "", label = "") => {
+  const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const re = new RegExp(`(?:^|\\n)${escaped}\\s*:\\s*([^\\n]+)`, "i");
+  return String(text || "").match(re)?.[1]?.trim() || "";
+};
+const extractPromptBlock = (text = "", label = "") => {
+  const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const re = new RegExp(`(?:^|\\n)${escaped}\\s*:\\s*\\n?([\\s\\S]*?)(?=\\n\\n[A-Z][A-Z /()\\-]+:\\s*(?:\\n|$)|$)`, "i");
+  return String(text || "").match(re)?.[1]?.trim() || "";
+};
+const portfolioSamePersonLockText = "Keep the exact same written identity across this portfolio set using the text above only: face structure, hair, skin tone, body, wardrobe, and distinguishing details must remain consistent; only angle, framing, pose, and expression change.";
+const portfolioRealismContractText = "Render as a real human being, photographed, not illustrated: lifelike skin with visible pores, fine texture, subtle imperfections, natural subsurface tones, realistic individual hair strands, true-to-life fabric. Shot on a full-frame camera, 85mm lens. Visuals only; nothing a camera could not capture. No illustration, no painting, no CGI look. Always sweaty with glossy baby oil allover";
+const portfolioHardcodedVarsForPromptRow = (row = {}) => {
+  const user = String(row?.user || "");
+  const packageLabel = extractPromptSingleLine(user, "PACKAGE") || "Selected model portfolio package";
+  const packageStyle = extractPromptBlock(user, "STYLE") || "Model portfolio styling selected inside the app.";
+  const shotLabel = extractPromptSingleLine(user, "SHOT") || "Selected portfolio shot";
+  const shotDirection = extractPromptBlock(user, "DIRECTION") || "Portfolio shot direction selected inside the app.";
+  return {
+    charactersList: "{{characterName}}",
+    characterDescriptions: "{{identity}}",
+    clothingNames: "{{characterName}}",
+    clothingDesign: "{{wardrobe}}",
+    activity: `${packageLabel}. ${packageStyle}\n\n${shotLabel}. ${shotDirection}`,
+    backdrop: packageStyle,
+    timeOfDay: "studio session time; use the package lighting direction",
+    cameraAngle: `${shotLabel}. ${shotDirection}\n\nSAME-PERSON LOCK: ${portfolioSamePersonLockText}\n\nREALISM CONTRACT: ${portfolioRealismContractText}`,
+  };
+};
 const universalImageTemplateVarsForPromptRow = (row = {}) => {
   const id = String(row?.id || "");
   if (id === "scene.imagePrompt" || id === "image.scenePromptDirector") {
-    return { charactersList: "{{charactersList}}", characterDescriptions: "{{characters}}", clothingDesign: "{{wardrobeSeed}}", activity: "{{sceneText}}", backdrop: "{{context}}{{world}}{{worldView}}", timeOfDay: "{{timeOfDay}}", cameraAngle: "{{cameraAngle}}" };
+    return { charactersList: "{{charactersList}}", characterDescriptions: "{{characters}}", clothingDesign: "{{wardrobeSeed}}", activity: "{{sceneText}}", backdrop: "{{context}}\n{{world}}\n{{worldView}}", timeOfDay: "{{timeOfDay}}", cameraAngle: "{{cameraAngle}}" };
   }
-  if (id === "image.characterReference" || id === "character.studio.quickPortrait" || id === "character.studio.artVariant") {
-    return { charactersList: "{{characterName}}", characterDescriptions: "{{identitySeed}}{{subjectDescription}}{{character}}", clothingNames: "{{characterName}}", clothingDesign: "{{wardrobeSeed}}", activity: "{{task}}{{variant}}", backdrop: "{{context}}", timeOfDay: "{{timeOfDay}}", cameraAngle: "{{cameraAngle}}{{ratio}}" };
+  if (id === "character.studio.quickPortrait") {
+    return { charactersList: "{{characterName}}", characterDescriptions: "{{subjectDescription}}", clothingNames: "{{characterName}}", clothingDesign: "{{wardrobe}}", activity: "strict upper-body model catalogue portrait for {{characterName}}", backdrop: "pure solid white (#FFFFFF) catalogue background, no objects", timeOfDay: "studio session with flat even catalogue lighting", cameraAngle: "3:4 portrait, eye-level, centered, shoulders and upper chest visible, crop at mid-torso" };
   }
-  if (id === "character.studio.portfolioShot" || id.startsWith("character.studio.portfolio.")) {
-    return { charactersList: "{{characterName}}", characterDescriptions: "{{identity}}", clothingNames: "{{characterName}}", clothingDesign: "{{wardrobe}}{{wardrobePhrase}}", activity: "{{packageStyle}} {{shotDirection}}", backdrop: "{{package.label}} {{package.style}}", timeOfDay: "{{timeOfDay}}", cameraAngle: "{{shot.label}} {{shotDirection}} {{samePersonLock}} {{realismContract}}" };
+  if (id === "image.characterReference" || id === "character.studio.artVariant") {
+    return { charactersList: "{{characterName}}", characterDescriptions: "{{identitySeed}}", clothingNames: "{{characterName}}", clothingDesign: "{{wardrobeSeed}}", activity: "{{task}}\n{{variant}}", backdrop: "{{context}}", timeOfDay: "{{timeOfDay}}", cameraAngle: "{{cameraAngle}}\n{{ratio}}" };
+  }
+  if (id.startsWith("character.studio.portfolio.")) {
+    return portfolioHardcodedVarsForPromptRow(row);
+  }
+  if (id === "character.studio.portfolioShot") {
+    return { charactersList: "{{characterName}}", characterDescriptions: "{{identity}}", clothingNames: "{{characterName}}", clothingDesign: "{{wardrobe}}", activity: "{{portfolioDirection}}", backdrop: "{{portfolioStyle}}", timeOfDay: "studio session time; use the selected package lighting direction", cameraAngle: "{{portfolioShotLabel}}\n{{portfolioShotDirection}}\n\nSAME-PERSON LOCK: " + portfolioSamePersonLockText + "\n\nREALISM CONTRACT: " + portfolioRealismContractText };
   }
   if (id === "character.studio.editorial") {
-    return { charactersList: "{{characterName}}", characterDescriptions: "{{identity}}", clothingNames: "{{characterName}}", clothingDesign: "{{studioDirection}}", activity: "{{studioDirection}}", backdrop: "{{authority}}", timeOfDay: "{{timeOfDay}}", cameraAngle: "{{cameraAngle}}" };
+    return { charactersList: "{{characterName}}", characterDescriptions: "{{identity}}", clothingNames: "{{characterName}}", clothingDesign: "{{editorialStudioDirection}}", activity: "{{editorialStudioDirection}}", backdrop: "{{editorialAuthority}}", timeOfDay: "{{timeOfDay}}", cameraAngle: "{{cameraAngle}}" };
   }
   if (id === "world.orgGroupPhotoPrompt") {
-    return { charactersList: "{{memberDescs}}", characterDescriptions: "{{members}}", clothingNames: "{{memberDescs}}", clothingDesign: "formal group portrait wardrobe appropriate to each role; do not add unrelated clothing", activity: "formal group portrait for {{orgName}}{{name}}; higher ranks center/front", backdrop: "{{world.description}}{{organization.description}}{{item.description}}", timeOfDay: "{{timeOfDay}}", cameraAngle: "formal group portrait, 4:3, all visible members framed clearly" };
+    return { charactersList: "{{memberDescs}}", characterDescriptions: "{{members}}", clothingNames: "{{memberDescs}}", clothingDesign: "formal group portrait wardrobe appropriate to each role; do not add unrelated clothing", activity: "formal group portrait for {{orgName}}; higher ranks center/front", backdrop: "{{organizationDescription}}\n{{organizationPurpose}}", timeOfDay: "{{timeOfDay}}", cameraAngle: "formal group portrait, 4:3, all visible members framed clearly" };
   }
-  return { sourcePrompt: row?.user || row?.promptTemplate || "{{sourcePrompt}}" };
+  return { sourcePrompt: row?.user || row?.promptTemplate || "Use the source prompt exactly." };
 };
 const universalImageTemplateVarsForImageTemplateRow = (row = {}) => {
   const id = String(row?.id || "");
-  if (id === "charArt.reference" || id === "character_portrait") return { charactersList: "{{characterName}}", characterDescriptions: "{{identitySeed}}", clothingNames: "{{characterName}}", clothingDesign: "{{wardrobeSeed}}", activity: "portrait/reference image for {{characterName}}", backdrop: "{{context}}", timeOfDay: "{{timeOfDay}}", cameraAngle: "{{cameraAngle}}{{defaultRatio}}{{ratio}}" };
-  if (id === "scene.illustration" || id === "chapter_illustration") return { charactersList: "{{charactersList}}", characterDescriptions: "{{characters}}", clothingDesign: "{{wardrobeSeed}}", activity: "{{sceneText}}", backdrop: "{{context}}{{world}}", timeOfDay: "{{timeOfDay}}", cameraAngle: "{{cameraAngle}}{{defaultRatio}}{{ratio}}" };
-  return { sourcePrompt: row?.promptTemplate || "{{sourcePrompt}}" };
+  if (id === "charArt.reference" || id === "character_portrait") return { charactersList: "{{characterName}}", characterDescriptions: "{{identitySeed}}", clothingNames: "{{characterName}}", clothingDesign: "{{wardrobeSeed}}", activity: "portrait/reference image for {{characterName}}", backdrop: "{{context}}", timeOfDay: "{{timeOfDay}}", cameraAngle: "{{cameraAngle}}\n{{defaultRatio}}\n{{ratio}}" };
+  if (id === "scene.illustration" || id === "chapter_illustration") return { charactersList: "{{charactersList}}", characterDescriptions: "{{characters}}", clothingDesign: "{{wardrobeSeed}}", activity: "{{sceneText}}", backdrop: "{{context}}\n{{world}}", timeOfDay: "{{timeOfDay}}", cameraAngle: "{{cameraAngle}}\n{{defaultRatio}}\n{{ratio}}" };
+  return { sourcePrompt: row?.promptTemplate || "Use the source prompt exactly." };
+};
+const inlineAppOwnedImagePromptConstants = (text = "") => String(text || "")
+  .replace(/\{\{\s*samePersonLock\s*\}\}/g, portfolioSamePersonLockText)
+  .replace(/\{\{\s*realismContract\s*\}\}/g, portfolioRealismContractText)
+  .replace(/\{\{\s*lookAlikeLock\s*\}\}/g, "Use the look-alike lock already embedded in the identity / subject description.")
+  .replace(/\{\{\s*package\.label\s*\}\}/g, "the selected portfolio package")
+  .replace(/\{\{\s*package\.style\s*\}\}/g, "the selected portfolio package style")
+  .replace(/\{\{\s*packageStyle\s*\}\}/g, "{{portfolioStyle}}")
+  .replace(/\{\{\s*shot\.label\s*\}\}/g, "{{portfolioShotLabel}}")
+  .replace(/\{\{\s*shot\.direction\s*\}\}/g, "{{portfolioShotDirection}}")
+  .replace(/\{\{\s*shotLabel\s*\}\}/g, "{{portfolioShotLabel}}")
+  .replace(/\{\{\s*shotDirection\s*\}\}/g, "{{portfolioShotDirection}}")
+  .replace(/\{\{\s*authority\s*\}\}/g, "{{editorialAuthority}}")
+  .replace(/\{\{\s*studioDirection\s*\}\}/g, "{{editorialStudioDirection}}")
+  .replace(/\{\{\s*world\.description\s*\}\}/g, "{{organizationDescription}}")
+  .replace(/\{\{\s*organization\.description\s*\}\}/g, "{{organizationDescription}}")
+  .replace(/\{\{\s*item\.description\s*\}\}/g, "{{organizationDescription}}")
+  .replace(/\{\{\s*item\.orgPurpose\s*\}\}/g, "{{organizationPurpose}}");
+const imagePromptNeedsRebuild = (text = "") => {
+  const t = String(text || "");
+  return /\{\{\s*(package(?:\.[\w]+)?|packageKey|packageStyle|shot(?:\.[\w]+)?|shotKey|shotLabel|shotDirection|samePersonLock|realismContract|lookAlikeLock|authority|studioDirection|world\.description|organization\.description|item\.description|item\.orgPurpose)\s*\}\}/.test(t);
 };
 const structurePromptTemplateRowForImageCreation = (row = {}) => {
   if (!isUniversalImageStructurePromptId(row?.id)) return row;
-  const nextUser = hasUniversalImagePromptStructure(row.user) ? row.user : buildUniversalImagePromptTemplate(universalImageTemplateVarsForPromptRow(row));
-  return { ...row, user: nextUser, version: Math.max(Number(row.version || 1), 10), notes: `${row.notes || ""}${String(row.notes || "").includes("Universal 1-7 image structure") ? "" : " Universal 1-7 image structure applied."}`.trim() };
+  const mustRebuild = !hasUniversalImagePromptStructure(row.user) || imagePromptNeedsRebuild(row.user);
+  const nextUser = mustRebuild ? buildUniversalImagePromptTemplate(universalImageTemplateVarsForPromptRow(row)) : inlineAppOwnedImagePromptConstants(row.user);
+  return { ...row, user: nextUser, version: Math.max(Number(row.version || 1), 11), notes: `${row.notes || ""}${String(row.notes || "").includes("Universal 1-7 image structure") ? "" : " Universal 1-7 image structure applied."}${String(row.notes || "").includes("Image variable taxonomy v4") ? "" : " Image variable taxonomy v4."}`.trim() };
 };
 const structureImagePromptTemplateRowForImageCreation = (row = {}) => {
   if (!UNIVERSAL_IMAGE_STRUCTURE_IMAGE_TEMPLATE_IDS.has(String(row?.id || ""))) return row;
-  const nextPromptTemplate = hasUniversalImagePromptStructure(row.promptTemplate) ? row.promptTemplate : buildUniversalImagePromptTemplate(universalImageTemplateVarsForImageTemplateRow(row));
-  return { ...row, promptTemplate: nextPromptTemplate, notes: `${row.notes || ""}${String(row.notes || "").includes("Universal 1-7 image structure") ? "" : " Universal 1-7 image structure applied."}`.trim() };
+  const mustRebuild = !hasUniversalImagePromptStructure(row.promptTemplate) || imagePromptNeedsRebuild(row.promptTemplate);
+  const nextPromptTemplate = mustRebuild ? buildUniversalImagePromptTemplate(universalImageTemplateVarsForImageTemplateRow(row)) : inlineAppOwnedImagePromptConstants(row.promptTemplate);
+  return { ...row, promptTemplate: nextPromptTemplate, notes: `${row.notes || ""}${String(row.notes || "").includes("Universal 1-7 image structure") ? "" : " Universal 1-7 image structure applied."}${String(row.notes || "").includes("Image variable taxonomy v4") ? "" : " Image variable taxonomy v4."}`.trim() };
 };
 const structureImageTemplateRowForImageCreation = (row = {}) => {
   if (!UNIVERSAL_IMAGE_STRUCTURE_IMAGE_TEMPLATE_IDS.has(String(row?.id || ""))) return row;
-  const nextPromptTemplate = hasUniversalImagePromptStructure(row.promptTemplate) ? row.promptTemplate : buildUniversalImagePromptTemplate(universalImageTemplateVarsForImageTemplateRow(row));
-  return { ...row, promptTemplate: nextPromptTemplate, notes: `${row.notes || ""}${String(row.notes || "").includes("Universal 1-7 image structure") ? "" : " Universal 1-7 image structure applied."}`.trim() };
+  const mustRebuild = !hasUniversalImagePromptStructure(row.promptTemplate) || imagePromptNeedsRebuild(row.promptTemplate);
+  const nextPromptTemplate = mustRebuild ? buildUniversalImagePromptTemplate(universalImageTemplateVarsForImageTemplateRow(row)) : inlineAppOwnedImagePromptConstants(row.promptTemplate);
+  return { ...row, promptTemplate: nextPromptTemplate, notes: `${row.notes || ""}${String(row.notes || "").includes("Universal 1-7 image structure") ? "" : " Universal 1-7 image structure applied."}${String(row.notes || "").includes("Image variable taxonomy v4") ? "" : " Image variable taxonomy v4."}`.trim() };
 };
 const applyUniversalImageStructureToConfig = (config = {}) => {
   const out = { ...config };
@@ -5769,7 +5866,7 @@ const DETAILED_PROMPT_TEMPLATES = [
     "area": "Characters",
     "name": "Art Studio — quick portrait button",
     "system": "You create photorealistic character portraits from NovelForge character data. Output is sent directly to an image model, so write camera-visible image direction only.",
-    "user": "Create a realistic model catalogue portrait of {{characterName}}.\n\nFRAME: Strict upper-body model catalogue portrait. Camera is at eye level, centered on the subject. The subject's head occupies approximately 30% of image height from crown to chin. Shoulders visible below the chin, upper chest visible, crop at mid-torso. No full body. Subject faces directly forward and looks into the camera lens.\n\nEXPRESSION / BODY: Natural neutral catalogue expression, relaxed shoulders, simple upright posture, fully clothed unless the saved wardrobe says otherwise.\n\nBACKGROUND: Pure solid white (#FFFFFF). No gradients. No shadows on the background. No texture. No color tint. No bokeh. No objects. Flat, even, pure white from edge to edge.\n\nSUBJECT: {{subjectDescription}}\n{{lookAlikeLock}}\n\nPHOTOREAL CONTRACT: lifelike skin with visible pores and natural texture, realistic hair strands. No illustration, no painting, no CGI look.",
+    "user": "Create a realistic model catalogue portrait of {{characterName}}.\n\nFRAME: Strict upper-body model catalogue portrait. Camera is at eye level, centered on the subject. The subject's head occupies approximately 30% of image height from crown to chin. Shoulders visible below the chin, upper chest visible, crop at mid-torso. No full body. Subject faces directly forward and looks into the camera lens.\n\nEXPRESSION / BODY: Natural neutral catalogue expression, relaxed shoulders, simple upright posture, fully clothed unless the saved wardrobe says otherwise.\n\nBACKGROUND: Pure solid white (#FFFFFF). No gradients. No shadows on the background. No texture. No color tint. No bokeh. No objects. Flat, even, pure white from edge to edge.\n\nSUBJECT AND IDENTITY LOCK:\n{{subjectDescription}}\n\nPHOTOREAL CONTRACT: lifelike skin with visible pores and natural texture, realistic hair strands. No illustration, no painting, no CGI look.",
     "maxTokens": 12000,
     "temperature": 0.8,
     "json": "FALSE",
@@ -5795,7 +5892,7 @@ const DETAILED_PROMPT_TEMPLATES = [
     "area": "Characters",
     "name": "Art Studio — model portfolio shot",
     "system": "You create model-portfolio image prompts for a consistent character photo session. Output is sent directly to an image model, so write camera-visible image direction only.",
-    "user": "Photorealistic photograph of {{characterName}} — {{identity}}{{wardrobePhrase}}. {{packageStyle}} {{shotDirection}} {{samePersonLock}}{{realismContract}}",
+    "user": "Photorealistic photograph of {{characterName}}.\n\nIDENTITY LOCK:\n{{identity}}\n\nWARDROBE LOCK:\n{{wardrobe}}\n\nPORTFOLIO PACKAGE AND SHOT DIRECTION:\n{{portfolioDirection}}\n\nSAME-PERSON LOCK:\nKeep the exact same written identity across this portfolio set using the text above only: face structure, hair, skin tone, body, wardrobe, and distinguishing details must remain consistent; only angle, framing, pose, and expression change.\n\nREALISM CONTRACT:\nRender as a real human being, photographed, not illustrated: lifelike skin with visible pores, fine texture, subtle imperfections, natural subsurface tones, realistic individual hair strands, true-to-life fabric. Shot on a full-frame camera, 85mm lens. Visuals only; nothing a camera could not capture. No illustration, no painting, no CGI look. Always sweaty with glossy baby oil allover",
     "maxTokens": 12000,
     "temperature": 0.8,
     "json": "FALSE",
@@ -5808,7 +5905,7 @@ const DETAILED_PROMPT_TEMPLATES = [
     "area": "Characters",
     "name": "Editorial Studio — final image prompt",
     "system": "You create final Editorial Studio image prompts from structured controls. Output is sent directly to an image model, so write camera-visible image direction only. Treat the studio direction as authoritative.",
-    "user": "Photorealistic sport magazine-inspired editorial photograph of {{characterName}} — {{identity}}. Render as a real human being, photographed, not illustrated: lifelike skin with visible pores, fine texture, subtle imperfections, natural subsurface tones, realistic hair with individual strands. Always sweaty with glossy baby oil allover. Skin realistic down to the pore. No illustration, no painting, no CGI look.\n\n{{authority}}\n\n=== EDITORIAL STUDIO DIRECTION (this is the authoritative styling — follow every item precisely; all visual, camera-capturable only) ===\n{{studioDirection}}",
+    "user": "Photorealistic sport magazine-inspired editorial photograph of {{characterName}} — {{identity}}. Render as a real human being, photographed, not illustrated: lifelike skin with visible pores, fine texture, subtle imperfections, natural subsurface tones, realistic hair with individual strands. Always sweaty with glossy baby oil allover. Skin realistic down to the pore. No illustration, no painting, no CGI look.\n\n{{editorialAuthority}}\n\n=== EDITORIAL STUDIO DIRECTION (this is the authoritative styling — follow every item precisely; all visual, camera-capturable only) ===\n{{editorialStudioDirection}}",
     "maxTokens": 12000,
     "temperature": 0.8,
     "json": "FALSE",
@@ -6171,24 +6268,24 @@ const DETAILED_PROMPT_TEMPLATES = [
   {"id": "postprocess.voiceDriftDetector", "area": "Agents", "tab": "Agents", "subtab": "Post-process", "feature": "Voice Drift Detector", "action": "post-generation audit", "name": "Post-process voice drift detector", "system": "You are the Voice Drift Detector. Compare dialogue in generated content against each character's speechPattern and voiceSamples. Return strict JSON with driftScores and issues.", "user": "Generated content:\n{{generatedContent}}\n\nCharacters:\n{{characters}}\n\nReturn JSON: { \"driftScores\": { \"charName\": 0-10 }, \"issues\": [{ \"char\": \"...\", \"line\": \"...\", \"issue\": \"...\" }] }", "maxTokens": 2400, "temperature": 0.2, "json": "TRUE", "active": "TRUE", "version": 2, "notes": "Runs after generation when enabled."},
   {"id": "postprocess.hookScorer", "area": "Agents", "tab": "Agents", "subtab": "Post-process", "feature": "Chapter-End Hook Scorer", "action": "post-generation audit", "name": "Post-process chapter-end hook scorer", "system": "You are the Chapter-End Hook Scorer. Rate the last 2-3 paragraphs for page-turner quality. Return strict JSON only.", "user": "Generated content:\n{{generatedContent}}\n\nReturn JSON: { \"score\": 0-10, \"technique\": \"question|urgency|reveal|shift|action\", \"notes\": \"brief suggestion\" }", "maxTokens": 1200, "temperature": 0.2, "json": "TRUE", "active": "TRUE", "version": 2, "notes": "Runs after generation when enabled."},
   {"id": "postprocess.motifAuditor", "area": "Agents", "tab": "Agents", "subtab": "Post-process", "feature": "Motif Weaving Auditor", "action": "post-generation audit", "name": "Post-process motif weaving auditor", "system": "You are the Motif Weaving Auditor. Check how well generated content integrates the project's motifs. Return strict JSON only.", "user": "Generated content:\n{{generatedContent}}\n\nProject motifs:\n{{motifs}}\n\nReturn JSON: { \"motifsUsed\": [], \"motifsNeglected\": [], \"suggestions\": \"brief advice\" }", "maxTokens": 1800, "temperature": 0.2, "json": "TRUE", "active": "TRUE", "version": 2, "notes": "Runs after generation when enabled."},
-  {"id": "character.studio.portfolio.digitals.beauty", "area": "Characters", "tab": "Characters", "subtab": "Studio", "feature": "Model Portfolio", "action": "Agency Digitals (clean polaroids) — Beauty headshot", "name": "Model Portfolio — Agency Digitals (clean polaroids) — Beauty headshot", "system": "You create one photorealistic model-portfolio image prompt from character identity data. Output goes directly to an image model, so write camera-visible direction only. Preserve identity, wardrobe, framing, and same-session consistency.", "user": "Photorealistic photograph of {{characterName}}.\n\nIDENTITY LOCK:\n{{identity}}\n\nWARDROBE LOCK:\n{{wardrobe}}\n\nPACKAGE: Agency Digitals (clean polaroids)\nSTYLE:\nClean agency digital test: plain seamless light-grey studio backdrop, soft even north-facing daylight, no retouching, minimal or no makeup, natural hair, intense heated exertion expression, arms flexed powerfully. Honest, unstyled, true-to-life. Always sweaty with glossy baby oil allover.\n\nSHOT: Beauty headshot\nDIRECTION:\nTight head-and-shoulders beauty shot, dead-on to camera, eyes locked to lens, intense heated exertion expression, neck extended in full overhead athletic reach, shoulders powerfully engaged, even frontal daylight.\n\nSAME-PERSON LOCK:\n{{samePersonLock}}\n\nREALISM CONTRACT:\n{{realismContract}}", "maxTokens": 12000, "temperature": 0.65, "json": "FALSE", "active": "TRUE", "version": 3, "sort": 4300, "notes": "Characters → Art Studio → Model Portfolio. This row controls the exact prompt for this package shot."},
-  {"id": "character.studio.portfolio.digitals.profile-l", "area": "Characters", "tab": "Characters", "subtab": "Studio", "feature": "Model Portfolio", "action": "Agency Digitals (clean polaroids) — Left profile", "name": "Model Portfolio — Agency Digitals (clean polaroids) — Left profile", "system": "You create one photorealistic model-portfolio image prompt from character identity data. Output goes directly to an image model, so write camera-visible direction only. Preserve identity, wardrobe, framing, and same-session consistency.", "user": "Photorealistic photograph of {{characterName}}.\n\nIDENTITY LOCK:\n{{identity}}\n\nWARDROBE LOCK:\n{{wardrobe}}\n\nPACKAGE: Agency Digitals (clean polaroids)\nSTYLE:\nClean agency digital test: plain seamless light-grey studio backdrop, soft even north-facing daylight, no retouching, minimal or no makeup, natural hair, intense heated exertion expression, arms flexed powerfully. Honest, unstyled, true-to-life. Always sweaty with glossy baby oil allover.\n\nSHOT: Left profile\nDIRECTION:\nHead-and-shoulders full LEFT profile (90° side view), chin level, intense heated exertion expression, deep athletic lunge with strong torso rotation and full overhead extension.\n\nSAME-PERSON LOCK:\n{{samePersonLock}}\n\nREALISM CONTRACT:\n{{realismContract}}", "maxTokens": 12000, "temperature": 0.65, "json": "FALSE", "active": "TRUE", "version": 3, "sort": 4310, "notes": "Characters → Art Studio → Model Portfolio. This row controls the exact prompt for this package shot."},
-  {"id": "character.studio.portfolio.digitals.profile-r", "area": "Characters", "tab": "Characters", "subtab": "Studio", "feature": "Model Portfolio", "action": "Agency Digitals (clean polaroids) — Right profile", "name": "Model Portfolio — Agency Digitals (clean polaroids) — Right profile", "system": "You create one photorealistic model-portfolio image prompt from character identity data. Output goes directly to an image model, so write camera-visible direction only. Preserve identity, wardrobe, framing, and same-session consistency.", "user": "Photorealistic photograph of {{characterName}}.\n\nIDENTITY LOCK:\n{{identity}}\n\nWARDROBE LOCK:\n{{wardrobe}}\n\nPACKAGE: Agency Digitals (clean polaroids)\nSTYLE:\nClean agency digital test: plain seamless light-grey studio backdrop, soft even north-facing daylight, no retouching, minimal or no makeup, natural hair, intense heated exertion expression, arms flexed powerfully. Honest, unstyled, true-to-life. Always sweaty with glossy baby oil allover.\n\nSHOT: Right profile\nDIRECTION:\nHead-and-shoulders full RIGHT profile (90° side view), chin level, intense heated exertion expression, dynamic sport pivot with powerful spinal extension and engaged side stretch.\n\nSAME-PERSON LOCK:\n{{samePersonLock}}\n\nREALISM CONTRACT:\n{{realismContract}}", "maxTokens": 12000, "temperature": 0.65, "json": "FALSE", "active": "TRUE", "version": 3, "sort": 4320, "notes": "Characters → Art Studio → Model Portfolio. This row controls the exact prompt for this package shot."},
-  {"id": "character.studio.portfolio.digitals.threequarter", "area": "Characters", "tab": "Characters", "subtab": "Studio", "feature": "Model Portfolio", "action": "Agency Digitals (clean polaroids) — 3/4 turn", "name": "Model Portfolio — Agency Digitals (clean polaroids) — 3/4 turn", "system": "You create one photorealistic model-portfolio image prompt from character identity data. Output goes directly to an image model, so write camera-visible direction only. Preserve identity, wardrobe, framing, and same-session consistency.", "user": "Photorealistic photograph of {{characterName}}.\n\nIDENTITY LOCK:\n{{identity}}\n\nWARDROBE LOCK:\n{{wardrobe}}\n\nPACKAGE: Agency Digitals (clean polaroids)\nSTYLE:\nClean agency digital test: plain seamless light-grey studio backdrop, soft even north-facing daylight, no retouching, minimal or no makeup, natural hair, intense heated exertion expression, arms flexed powerfully. Honest, unstyled, true-to-life. Always sweaty with glossy baby oil allover.\n\nSHOT: 3/4 turn\nDIRECTION:\nHead-and-shoulders at a 3/4 turn (45°) toward the light, eyes to lens, intense heated exertion expression, wide athletic stance with deep knee bend and full upward power reach.\n\nSAME-PERSON LOCK:\n{{samePersonLock}}\n\nREALISM CONTRACT:\n{{realismContract}}", "maxTokens": 12000, "temperature": 0.65, "json": "FALSE", "active": "TRUE", "version": 3, "sort": 4330, "notes": "Characters → Art Studio → Model Portfolio. This row controls the exact prompt for this package shot."},
-  {"id": "character.studio.portfolio.digitals.full-front", "area": "Characters", "tab": "Characters", "subtab": "Studio", "feature": "Model Portfolio", "action": "Agency Digitals (clean polaroids) — Full-length front", "name": "Model Portfolio — Agency Digitals (clean polaroids) — Full-length front", "system": "You create one photorealistic model-portfolio image prompt from character identity data. Output goes directly to an image model, so write camera-visible direction only. Preserve identity, wardrobe, framing, and same-session consistency.", "user": "Photorealistic photograph of {{characterName}}.\n\nIDENTITY LOCK:\n{{identity}}\n\nWARDROBE LOCK:\n{{wardrobe}}\n\nPACKAGE: Agency Digitals (clean polaroids)\nSTYLE:\nClean agency digital test: plain seamless light-grey studio backdrop, soft even north-facing daylight, no retouching, minimal or no makeup, natural hair, intense heated exertion expression, arms flexed powerfully. Honest, unstyled, true-to-life. Always sweaty with glossy baby oil allover.\n\nSHOT: Full-length front\nDIRECTION:\nFull-length standing facing camera, feet wide and grounded, arms raised in maximum overhead athletic stretch with full body tension, whole body in frame head to feet, strong upward power arch.\n\nSAME-PERSON LOCK:\n{{samePersonLock}}\n\nREALISM CONTRACT:\n{{realismContract}}", "maxTokens": 12000, "temperature": 0.65, "json": "FALSE", "active": "TRUE", "version": 3, "sort": 4340, "notes": "Characters → Art Studio → Model Portfolio. This row controls the exact prompt for this package shot."},
-  {"id": "character.studio.portfolio.digitals.full-back", "area": "Characters", "tab": "Characters", "subtab": "Studio", "feature": "Model Portfolio", "action": "Agency Digitals (clean polaroids) — Full-length back", "name": "Model Portfolio — Agency Digitals (clean polaroids) — Full-length back", "system": "You create one photorealistic model-portfolio image prompt from character identity data. Output goes directly to an image model, so write camera-visible direction only. Preserve identity, wardrobe, framing, and same-session consistency.", "user": "Photorealistic photograph of {{characterName}}.\n\nIDENTITY LOCK:\n{{identity}}\n\nWARDROBE LOCK:\n{{wardrobe}}\n\nPACKAGE: Agency Digitals (clean polaroids)\nSTYLE:\nClean agency digital test: plain seamless light-grey studio backdrop, soft even north-facing daylight, no retouching, minimal or no makeup, natural hair, intense heated exertion expression, arms flexed powerfully. Honest, unstyled, true-to-life. Always sweaty with glossy baby oil allover.\n\nSHOT: Full-length back\nDIRECTION:\nFull-length standing with BACK to camera, whole body head to feet, showing hair and posture from behind, deep athletic rear extension with arms raised overhead and powerful spinal curve.\n\nSAME-PERSON LOCK:\n{{samePersonLock}}\n\nREALISM CONTRACT:\n{{realismContract}}", "maxTokens": 12000, "temperature": 0.65, "json": "FALSE", "active": "TRUE", "version": 3, "sort": 4350, "notes": "Characters → Art Studio → Model Portfolio. This row controls the exact prompt for this package shot."},
-  {"id": "character.studio.portfolio.compcard.beauty", "area": "Characters", "tab": "Characters", "subtab": "Studio", "feature": "Model Portfolio", "action": "Comp Card (Z-card looks) — Cover beauty", "name": "Model Portfolio — Comp Card (Z-card looks) — Cover beauty", "system": "You create one photorealistic model-portfolio image prompt from character identity data. Output goes directly to an image model, so write camera-visible direction only. Preserve identity, wardrobe, framing, and same-session consistency.", "user": "Photorealistic photograph of {{characterName}}.\n\nIDENTITY LOCK:\n{{identity}}\n\nWARDROBE LOCK:\n{{wardrobe}}\n\nPACKAGE: Comp Card (Z-card looks)\nSTYLE:\nProfessional comp-card photography, studio quality, flattering directional softbox key light with subtle fill, polished but natural, sport magazine-catalog standard. Always sweaty with glossy baby oil allover.\n\nSHOT: Cover beauty\nDIRECTION:\nStriking head-and-shoulders cover shot, dead-on, captivating magnetic gaze to lens with heated expression, full overhead athletic extension, shoulders powerfully open, immaculate light.\n\nSAME-PERSON LOCK:\n{{samePersonLock}}\n\nREALISM CONTRACT:\n{{realismContract}}", "maxTokens": 12000, "temperature": 0.65, "json": "FALSE", "active": "TRUE", "version": 3, "sort": 4360, "notes": "Characters → Art Studio → Model Portfolio. This row controls the exact prompt for this package shot."},
-  {"id": "character.studio.portfolio.compcard.smile", "area": "Characters", "tab": "Characters", "subtab": "Studio", "feature": "Model Portfolio", "action": "Comp Card (Z-card looks) — Natural smile", "name": "Model Portfolio — Comp Card (Z-card looks) — Natural smile", "system": "You create one photorealistic model-portfolio image prompt from character identity data. Output goes directly to an image model, so write camera-visible direction only. Preserve identity, wardrobe, framing, and same-session consistency.", "user": "Photorealistic photograph of {{characterName}}.\n\nIDENTITY LOCK:\n{{identity}}\n\nWARDROBE LOCK:\n{{wardrobe}}\n\nPACKAGE: Comp Card (Z-card looks)\nSTYLE:\nProfessional comp-card photography, studio quality, flattering directional softbox key light with subtle fill, polished but natural, sport magazine-catalog standard. Always sweaty with glossy baby oil allover.\n\nSHOT: Natural smile\nDIRECTION:\nHead-and-shoulders, soft smile with eyes deeply engaged and heated intensity, slight 3/4 turn, dynamic sport power stance with upward reach and core engagement.\n\nSAME-PERSON LOCK:\n{{samePersonLock}}\n\nREALISM CONTRACT:\n{{realismContract}}", "maxTokens": 12000, "temperature": 0.65, "json": "FALSE", "active": "TRUE", "version": 3, "sort": 4370, "notes": "Characters → Art Studio → Model Portfolio. This row controls the exact prompt for this package shot."},
-  {"id": "character.studio.portfolio.compcard.profile", "area": "Characters", "tab": "Characters", "subtab": "Studio", "feature": "Model Portfolio", "action": "Comp Card (Z-card looks) — Editorial profile", "name": "Model Portfolio — Comp Card (Z-card looks) — Editorial profile", "system": "You create one photorealistic model-portfolio image prompt from character identity data. Output goes directly to an image model, so write camera-visible direction only. Preserve identity, wardrobe, framing, and same-session consistency.", "user": "Photorealistic photograph of {{characterName}}.\n\nIDENTITY LOCK:\n{{identity}}\n\nWARDROBE LOCK:\n{{wardrobe}}\n\nPACKAGE: Comp Card (Z-card looks)\nSTYLE:\nProfessional comp-card photography, studio quality, flattering directional softbox key light with subtle fill, polished but natural, sport magazine-catalog standard. Always sweaty with glossy baby oil allover.\n\nSHOT: Editorial profile\nDIRECTION:\nElegant side-profile portrait, chin slightly lifted, dramatic but soft side light, elongated athletic extension with full spinal curve and overhead arm reach.\n\nSAME-PERSON LOCK:\n{{samePersonLock}}\n\nREALISM CONTRACT:\n{{realismContract}}", "maxTokens": 12000, "temperature": 0.65, "json": "FALSE", "active": "TRUE", "version": 3, "sort": 4380, "notes": "Characters → Art Studio → Model Portfolio. This row controls the exact prompt for this package shot."},
-  {"id": "character.studio.portfolio.compcard.half", "area": "Characters", "tab": "Characters", "subtab": "Studio", "feature": "Model Portfolio", "action": "Comp Card (Z-card looks) — Half-body editorial", "name": "Model Portfolio — Comp Card (Z-card looks) — Half-body editorial", "system": "You create one photorealistic model-portfolio image prompt from character identity data. Output goes directly to an image model, so write camera-visible direction only. Preserve identity, wardrobe, framing, and same-session consistency.", "user": "Photorealistic photograph of {{characterName}}.\n\nIDENTITY LOCK:\n{{identity}}\n\nWARDROBE LOCK:\n{{wardrobe}}\n\nPACKAGE: Comp Card (Z-card looks)\nSTYLE:\nProfessional comp-card photography, studio quality, flattering directional softbox key light with subtle fill, polished but natural, sport magazine-catalog standard. Always sweaty with glossy baby oil allover.\n\nSHOT: Half-body editorial\nDIRECTION:\nHalf-body (waist up), powerfully confident posture with one arm raised in strong overhead stretch, intensely heated expression, athletic side power bend.\n\nSAME-PERSON LOCK:\n{{samePersonLock}}\n\nREALISM CONTRACT:\n{{realismContract}}", "maxTokens": 12000, "temperature": 0.65, "json": "FALSE", "active": "TRUE", "version": 3, "sort": 4390, "notes": "Characters → Art Studio → Model Portfolio. This row controls the exact prompt for this package shot."},
-  {"id": "character.studio.portfolio.compcard.full-fashion", "area": "Characters", "tab": "Characters", "subtab": "Studio", "feature": "Model Portfolio", "action": "Comp Card (Z-card looks) — Full-length fashion", "name": "Model Portfolio — Comp Card (Z-card looks) — Full-length fashion", "system": "You create one photorealistic model-portfolio image prompt from character identity data. Output goes directly to an image model, so write camera-visible direction only. Preserve identity, wardrobe, framing, and same-session consistency.", "user": "Photorealistic photograph of {{characterName}}.\n\nIDENTITY LOCK:\n{{identity}}\n\nWARDROBE LOCK:\n{{wardrobe}}\n\nPACKAGE: Comp Card (Z-card looks)\nSTYLE:\nProfessional comp-card photography, studio quality, flattering directional softbox key light with subtle fill, polished but natural, sport magazine-catalog standard. Always sweaty with glossy baby oil allover.\n\nSHOT: Full-length fashion\nDIRECTION:\nFull-length fashion stance, weight dramatically shifted with elongated lines, full body head to feet, dynamic overhead athletic reach with powerful body arch.\n\nSAME-PERSON LOCK:\n{{samePersonLock}}\n\nREALISM CONTRACT:\n{{realismContract}}", "maxTokens": 12000, "temperature": 0.65, "json": "FALSE", "active": "TRUE", "version": 3, "sort": 4400, "notes": "Characters → Art Studio → Model Portfolio. This row controls the exact prompt for this package shot."},
-  {"id": "character.studio.portfolio.compcard.movement", "area": "Characters", "tab": "Characters", "subtab": "Studio", "feature": "Model Portfolio", "action": "Comp Card (Z-card looks) — Movement", "name": "Model Portfolio — Comp Card (Z-card looks) — Movement", "system": "You create one photorealistic model-portfolio image prompt from character identity data. Output goes directly to an image model, so write camera-visible direction only. Preserve identity, wardrobe, framing, and same-session consistency.", "user": "Photorealistic photograph of {{characterName}}.\n\nIDENTITY LOCK:\n{{identity}}\n\nWARDROBE LOCK:\n{{wardrobe}}\n\nPACKAGE: Comp Card (Z-card looks)\nSTYLE:\nProfessional comp-card photography, studio quality, flattering directional softbox key light with subtle fill, polished but natural, sport magazine-catalog standard. Always sweaty with glossy baby oil allover.\n\nSHOT: Movement\nDIRECTION:\nFull-length candid stride or turn mid-motion, natural movement, captured in explosive athletic lunge combined with full upward power extension.\n\nSAME-PERSON LOCK:\n{{samePersonLock}}\n\nREALISM CONTRACT:\n{{realismContract}}", "maxTokens": 12000, "temperature": 0.65, "json": "FALSE", "active": "TRUE", "version": 3, "sort": 4410, "notes": "Characters → Art Studio → Model Portfolio. This row controls the exact prompt for this package shot."},
-  {"id": "character.studio.portfolio.portfolio.beauty", "area": "Characters", "tab": "Characters", "subtab": "Studio", "feature": "Model Portfolio", "action": "Portfolio (editorial range) — Signature beauty", "name": "Model Portfolio — Portfolio (editorial range) — Signature beauty", "system": "You create one photorealistic model-portfolio image prompt from character identity data. Output goes directly to an image model, so write camera-visible direction only. Preserve identity, wardrobe, framing, and same-session consistency.", "user": "Photorealistic photograph of {{characterName}}.\n\nIDENTITY LOCK:\n{{identity}}\n\nWARDROBE LOCK:\n{{wardrobe}}\n\nPACKAGE: Portfolio (editorial range)\nSTYLE:\nHigh-end editorial portfolio sports photography, magazine quality, expressive lighting, cinematic color grade, photoreal skin texture preserved. Always sweaty with glossy baby oil allover.\n\nSHOT: Signature beauty\nDIRECTION:\nSignature close beauty portrait, flawless soft light, captivating direct gaze with heated expression, neck extended in elegant athletic reach, shoulders powerfully engaged.\n\nSAME-PERSON LOCK:\n{{samePersonLock}}\n\nREALISM CONTRACT:\n{{realismContract}}", "maxTokens": 12000, "temperature": 0.65, "json": "FALSE", "active": "TRUE", "version": 3, "sort": 4420, "notes": "Characters → Art Studio → Model Portfolio. This row controls the exact prompt for this package shot."},
-  {"id": "character.studio.portfolio.portfolio.pensive", "area": "Characters", "tab": "Characters", "subtab": "Studio", "feature": "Model Portfolio", "action": "Portfolio (editorial range) — Pensive", "name": "Model Portfolio — Portfolio (editorial range) — Pensive", "system": "You create one photorealistic model-portfolio image prompt from character identity data. Output goes directly to an image model, so write camera-visible direction only. Preserve identity, wardrobe, framing, and same-session consistency.", "user": "Photorealistic photograph of {{characterName}}.\n\nIDENTITY LOCK:\n{{identity}}\n\nWARDROBE LOCK:\n{{wardrobe}}\n\nPACKAGE: Portfolio (editorial range)\nSTYLE:\nHigh-end editorial portfolio sports photography, magazine quality, expressive lighting, cinematic color grade, photoreal skin texture preserved. Always sweaty with glossy baby oil allover.\n\nSHOT: Pensive\nDIRECTION:\nHead-and-shoulders, downcast gaze with heated intensity, soft window light, deep sport recovery stretch with full overhead arm extension.\n\nSAME-PERSON LOCK:\n{{samePersonLock}}\n\nREALISM CONTRACT:\n{{realismContract}}", "maxTokens": 12000, "temperature": 0.65, "json": "FALSE", "active": "TRUE", "version": 3, "sort": 4430, "notes": "Characters → Art Studio → Model Portfolio. This row controls the exact prompt for this package shot."},
-  {"id": "character.studio.portfolio.portfolio.intense", "area": "Characters", "tab": "Characters", "subtab": "Studio", "feature": "Model Portfolio", "action": "Portfolio (editorial range) — Intense", "name": "Model Portfolio — Portfolio (editorial range) — Intense", "system": "You create one photorealistic model-portfolio image prompt from character identity data. Output goes directly to an image model, so write camera-visible direction only. Preserve identity, wardrobe, framing, and same-session consistency.", "user": "Photorealistic photograph of {{characterName}}.\n\nIDENTITY LOCK:\n{{identity}}\n\nWARDROBE LOCK:\n{{wardrobe}}\n\nPACKAGE: Portfolio (editorial range)\nSTYLE:\nHigh-end editorial portfolio sports photography, magazine quality, expressive lighting, cinematic color grade, photoreal skin texture preserved. Always sweaty with glossy baby oil allover.\n\nSHOT: Intense\nDIRECTION:\nTight portrait, powerfully magnetic direct stare with heated expression, harder dramatic key light, forward athletic tension with strong overhead reach.\n\nSAME-PERSON LOCK:\n{{samePersonLock}}\n\nREALISM CONTRACT:\n{{realismContract}}", "maxTokens": 12000, "temperature": 0.65, "json": "FALSE", "active": "TRUE", "version": 3, "sort": 4440, "notes": "Characters → Art Studio → Model Portfolio. This row controls the exact prompt for this package shot."},
-  {"id": "character.studio.portfolio.portfolio.joyful", "area": "Characters", "tab": "Characters", "subtab": "Studio", "feature": "Model Portfolio", "action": "Portfolio (editorial range) — Joyful", "name": "Model Portfolio — Portfolio (editorial range) — Joyful", "system": "You create one photorealistic model-portfolio image prompt from character identity data. Output goes directly to an image model, so write camera-visible direction only. Preserve identity, wardrobe, framing, and same-session consistency.", "user": "Photorealistic photograph of {{characterName}}.\n\nIDENTITY LOCK:\n{{identity}}\n\nWARDROBE LOCK:\n{{wardrobe}}\n\nPACKAGE: Portfolio (editorial range)\nSTYLE:\nHigh-end editorial portfolio sports photography, magazine quality, expressive lighting, cinematic color grade, photoreal skin texture preserved. Always sweaty with glossy baby oil allover.\n\nSHOT: Joyful\nDIRECTION:\nCandid laughing or joyful heated expression, bright airy light, dynamic sport celebration with full upward power stretch and open athletic lines.\n\nSAME-PERSON LOCK:\n{{samePersonLock}}\n\nREALISM CONTRACT:\n{{realismContract}}", "maxTokens": 12000, "temperature": 0.65, "json": "FALSE", "active": "TRUE", "version": 3, "sort": 4450, "notes": "Characters → Art Studio → Model Portfolio. This row controls the exact prompt for this package shot."},
-  {"id": "character.studio.portfolio.portfolio.lowkey", "area": "Characters", "tab": "Characters", "subtab": "Studio", "feature": "Model Portfolio", "action": "Portfolio (editorial range) — Low-key drama", "name": "Model Portfolio — Portfolio (editorial range) — Low-key drama", "system": "You create one photorealistic model-portfolio image prompt from character identity data. Output goes directly to an image model, so write camera-visible direction only. Preserve identity, wardrobe, framing, and same-session consistency.", "user": "Photorealistic photograph of {{characterName}}.\n\nIDENTITY LOCK:\n{{identity}}\n\nWARDROBE LOCK:\n{{wardrobe}}\n\nPACKAGE: Portfolio (editorial range)\nSTYLE:\nHigh-end editorial portfolio sports photography, magazine quality, expressive lighting, cinematic color grade, photoreal skin texture preserved. Always sweaty with glossy baby oil allover.\n\nSHOT: Low-key drama\nDIRECTION:\nHalf-body in low-key chiaroscuro lighting, single source, deep shadows, cinematic, dramatic athletic arch with powerful overhead extension.\n\nSAME-PERSON LOCK:\n{{samePersonLock}}\n\nREALISM CONTRACT:\n{{realismContract}}", "maxTokens": 12000, "temperature": 0.65, "json": "FALSE", "active": "TRUE", "version": 3, "sort": 4460, "notes": "Characters → Art Studio → Model Portfolio. This row controls the exact prompt for this package shot."},
-  {"id": "character.studio.portfolio.portfolio.environmental", "area": "Characters", "tab": "Characters", "subtab": "Studio", "feature": "Model Portfolio", "action": "Portfolio (editorial range) — Environmental", "name": "Model Portfolio — Portfolio (editorial range) — Environmental", "system": "You create one photorealistic model-portfolio image prompt from character identity data. Output goes directly to an image model, so write camera-visible direction only. Preserve identity, wardrobe, framing, and same-session consistency.", "user": "Photorealistic photograph of {{characterName}}.\n\nIDENTITY LOCK:\n{{identity}}\n\nWARDROBE LOCK:\n{{wardrobe}}\n\nPACKAGE: Portfolio (editorial range)\nSTYLE:\nHigh-end editorial portfolio sports photography, magazine quality, expressive lighting, cinematic color grade, photoreal skin texture preserved. Always sweaty with glossy baby oil allover.\n\nSHOT: Environmental\nDIRECTION:\nThree-quarter body environmental portrait, soft natural setting suggested behind with shallow depth of field, strong athletic lunge with elongated upward reach and full body tension.\n\nSAME-PERSON LOCK:\n{{samePersonLock}}\n\nREALISM CONTRACT:\n{{realismContract}}", "maxTokens": 12000, "temperature": 0.65, "json": "FALSE", "active": "TRUE", "version": 3, "sort": 4470, "notes": "Characters → Art Studio → Model Portfolio. This row controls the exact prompt for this package shot."},
+  {"id": "character.studio.portfolio.digitals.beauty", "area": "Characters", "tab": "Characters", "subtab": "Studio", "feature": "Model Portfolio", "action": "Agency Digitals (clean polaroids) — Beauty headshot", "name": "Model Portfolio — Agency Digitals (clean polaroids) — Beauty headshot", "system": "You create one photorealistic model-portfolio image prompt from character identity data. Output goes directly to an image model, so write camera-visible direction only. Preserve identity, wardrobe, framing, and same-session consistency.", "user": "Photorealistic photograph of {{characterName}}.\n\nIDENTITY LOCK:\n{{identity}}\n\nWARDROBE LOCK:\n{{wardrobe}}\n\nPACKAGE: Agency Digitals (clean polaroids)\nSTYLE:\nClean agency digital test: plain seamless light-grey studio backdrop, soft even north-facing daylight, no retouching, minimal or no makeup, natural hair, intense heated exertion expression, arms flexed powerfully. Honest, unstyled, true-to-life. Always sweaty with glossy baby oil allover.\n\nSHOT: Beauty headshot\nDIRECTION:\nTight head-and-shoulders beauty shot, dead-on to camera, eyes locked to lens, intense heated exertion expression, neck extended in full overhead athletic reach, shoulders powerfully engaged, even frontal daylight.\n\nSAME-PERSON LOCK:\nKeep the exact same written identity across this portfolio set using the text above only: face structure, hair, skin tone, body, wardrobe, and distinguishing details must remain consistent; only angle, framing, pose, and expression change.\n\nREALISM CONTRACT:\nRender as a real human being, photographed, not illustrated: lifelike skin with visible pores, fine texture, subtle imperfections, natural subsurface tones, realistic individual hair strands, true-to-life fabric. Shot on a full-frame camera, 85mm lens. Visuals only; nothing a camera could not capture. No illustration, no painting, no CGI look. Always sweaty with glossy baby oil allover", "maxTokens": 12000, "temperature": 0.65, "json": "FALSE", "active": "TRUE", "version": 3, "sort": 4300, "notes": "Characters → Art Studio → Model Portfolio. This row controls the exact prompt for this package shot."},
+  {"id": "character.studio.portfolio.digitals.profile-l", "area": "Characters", "tab": "Characters", "subtab": "Studio", "feature": "Model Portfolio", "action": "Agency Digitals (clean polaroids) — Left profile", "name": "Model Portfolio — Agency Digitals (clean polaroids) — Left profile", "system": "You create one photorealistic model-portfolio image prompt from character identity data. Output goes directly to an image model, so write camera-visible direction only. Preserve identity, wardrobe, framing, and same-session consistency.", "user": "Photorealistic photograph of {{characterName}}.\n\nIDENTITY LOCK:\n{{identity}}\n\nWARDROBE LOCK:\n{{wardrobe}}\n\nPACKAGE: Agency Digitals (clean polaroids)\nSTYLE:\nClean agency digital test: plain seamless light-grey studio backdrop, soft even north-facing daylight, no retouching, minimal or no makeup, natural hair, intense heated exertion expression, arms flexed powerfully. Honest, unstyled, true-to-life. Always sweaty with glossy baby oil allover.\n\nSHOT: Left profile\nDIRECTION:\nHead-and-shoulders full LEFT profile (90° side view), chin level, intense heated exertion expression, deep athletic lunge with strong torso rotation and full overhead extension.\n\nSAME-PERSON LOCK:\nKeep the exact same written identity across this portfolio set using the text above only: face structure, hair, skin tone, body, wardrobe, and distinguishing details must remain consistent; only angle, framing, pose, and expression change.\n\nREALISM CONTRACT:\nRender as a real human being, photographed, not illustrated: lifelike skin with visible pores, fine texture, subtle imperfections, natural subsurface tones, realistic individual hair strands, true-to-life fabric. Shot on a full-frame camera, 85mm lens. Visuals only; nothing a camera could not capture. No illustration, no painting, no CGI look. Always sweaty with glossy baby oil allover", "maxTokens": 12000, "temperature": 0.65, "json": "FALSE", "active": "TRUE", "version": 3, "sort": 4310, "notes": "Characters → Art Studio → Model Portfolio. This row controls the exact prompt for this package shot."},
+  {"id": "character.studio.portfolio.digitals.profile-r", "area": "Characters", "tab": "Characters", "subtab": "Studio", "feature": "Model Portfolio", "action": "Agency Digitals (clean polaroids) — Right profile", "name": "Model Portfolio — Agency Digitals (clean polaroids) — Right profile", "system": "You create one photorealistic model-portfolio image prompt from character identity data. Output goes directly to an image model, so write camera-visible direction only. Preserve identity, wardrobe, framing, and same-session consistency.", "user": "Photorealistic photograph of {{characterName}}.\n\nIDENTITY LOCK:\n{{identity}}\n\nWARDROBE LOCK:\n{{wardrobe}}\n\nPACKAGE: Agency Digitals (clean polaroids)\nSTYLE:\nClean agency digital test: plain seamless light-grey studio backdrop, soft even north-facing daylight, no retouching, minimal or no makeup, natural hair, intense heated exertion expression, arms flexed powerfully. Honest, unstyled, true-to-life. Always sweaty with glossy baby oil allover.\n\nSHOT: Right profile\nDIRECTION:\nHead-and-shoulders full RIGHT profile (90° side view), chin level, intense heated exertion expression, dynamic sport pivot with powerful spinal extension and engaged side stretch.\n\nSAME-PERSON LOCK:\nKeep the exact same written identity across this portfolio set using the text above only: face structure, hair, skin tone, body, wardrobe, and distinguishing details must remain consistent; only angle, framing, pose, and expression change.\n\nREALISM CONTRACT:\nRender as a real human being, photographed, not illustrated: lifelike skin with visible pores, fine texture, subtle imperfections, natural subsurface tones, realistic individual hair strands, true-to-life fabric. Shot on a full-frame camera, 85mm lens. Visuals only; nothing a camera could not capture. No illustration, no painting, no CGI look. Always sweaty with glossy baby oil allover", "maxTokens": 12000, "temperature": 0.65, "json": "FALSE", "active": "TRUE", "version": 3, "sort": 4320, "notes": "Characters → Art Studio → Model Portfolio. This row controls the exact prompt for this package shot."},
+  {"id": "character.studio.portfolio.digitals.threequarter", "area": "Characters", "tab": "Characters", "subtab": "Studio", "feature": "Model Portfolio", "action": "Agency Digitals (clean polaroids) — 3/4 turn", "name": "Model Portfolio — Agency Digitals (clean polaroids) — 3/4 turn", "system": "You create one photorealistic model-portfolio image prompt from character identity data. Output goes directly to an image model, so write camera-visible direction only. Preserve identity, wardrobe, framing, and same-session consistency.", "user": "Photorealistic photograph of {{characterName}}.\n\nIDENTITY LOCK:\n{{identity}}\n\nWARDROBE LOCK:\n{{wardrobe}}\n\nPACKAGE: Agency Digitals (clean polaroids)\nSTYLE:\nClean agency digital test: plain seamless light-grey studio backdrop, soft even north-facing daylight, no retouching, minimal or no makeup, natural hair, intense heated exertion expression, arms flexed powerfully. Honest, unstyled, true-to-life. Always sweaty with glossy baby oil allover.\n\nSHOT: 3/4 turn\nDIRECTION:\nHead-and-shoulders at a 3/4 turn (45°) toward the light, eyes to lens, intense heated exertion expression, wide athletic stance with deep knee bend and full upward power reach.\n\nSAME-PERSON LOCK:\nKeep the exact same written identity across this portfolio set using the text above only: face structure, hair, skin tone, body, wardrobe, and distinguishing details must remain consistent; only angle, framing, pose, and expression change.\n\nREALISM CONTRACT:\nRender as a real human being, photographed, not illustrated: lifelike skin with visible pores, fine texture, subtle imperfections, natural subsurface tones, realistic individual hair strands, true-to-life fabric. Shot on a full-frame camera, 85mm lens. Visuals only; nothing a camera could not capture. No illustration, no painting, no CGI look. Always sweaty with glossy baby oil allover", "maxTokens": 12000, "temperature": 0.65, "json": "FALSE", "active": "TRUE", "version": 3, "sort": 4330, "notes": "Characters → Art Studio → Model Portfolio. This row controls the exact prompt for this package shot."},
+  {"id": "character.studio.portfolio.digitals.full-front", "area": "Characters", "tab": "Characters", "subtab": "Studio", "feature": "Model Portfolio", "action": "Agency Digitals (clean polaroids) — Full-length front", "name": "Model Portfolio — Agency Digitals (clean polaroids) — Full-length front", "system": "You create one photorealistic model-portfolio image prompt from character identity data. Output goes directly to an image model, so write camera-visible direction only. Preserve identity, wardrobe, framing, and same-session consistency.", "user": "Photorealistic photograph of {{characterName}}.\n\nIDENTITY LOCK:\n{{identity}}\n\nWARDROBE LOCK:\n{{wardrobe}}\n\nPACKAGE: Agency Digitals (clean polaroids)\nSTYLE:\nClean agency digital test: plain seamless light-grey studio backdrop, soft even north-facing daylight, no retouching, minimal or no makeup, natural hair, intense heated exertion expression, arms flexed powerfully. Honest, unstyled, true-to-life. Always sweaty with glossy baby oil allover.\n\nSHOT: Full-length front\nDIRECTION:\nFull-length standing facing camera, feet wide and grounded, arms raised in maximum overhead athletic stretch with full body tension, whole body in frame head to feet, strong upward power arch.\n\nSAME-PERSON LOCK:\nKeep the exact same written identity across this portfolio set using the text above only: face structure, hair, skin tone, body, wardrobe, and distinguishing details must remain consistent; only angle, framing, pose, and expression change.\n\nREALISM CONTRACT:\nRender as a real human being, photographed, not illustrated: lifelike skin with visible pores, fine texture, subtle imperfections, natural subsurface tones, realistic individual hair strands, true-to-life fabric. Shot on a full-frame camera, 85mm lens. Visuals only; nothing a camera could not capture. No illustration, no painting, no CGI look. Always sweaty with glossy baby oil allover", "maxTokens": 12000, "temperature": 0.65, "json": "FALSE", "active": "TRUE", "version": 3, "sort": 4340, "notes": "Characters → Art Studio → Model Portfolio. This row controls the exact prompt for this package shot."},
+  {"id": "character.studio.portfolio.digitals.full-back", "area": "Characters", "tab": "Characters", "subtab": "Studio", "feature": "Model Portfolio", "action": "Agency Digitals (clean polaroids) — Full-length back", "name": "Model Portfolio — Agency Digitals (clean polaroids) — Full-length back", "system": "You create one photorealistic model-portfolio image prompt from character identity data. Output goes directly to an image model, so write camera-visible direction only. Preserve identity, wardrobe, framing, and same-session consistency.", "user": "Photorealistic photograph of {{characterName}}.\n\nIDENTITY LOCK:\n{{identity}}\n\nWARDROBE LOCK:\n{{wardrobe}}\n\nPACKAGE: Agency Digitals (clean polaroids)\nSTYLE:\nClean agency digital test: plain seamless light-grey studio backdrop, soft even north-facing daylight, no retouching, minimal or no makeup, natural hair, intense heated exertion expression, arms flexed powerfully. Honest, unstyled, true-to-life. Always sweaty with glossy baby oil allover.\n\nSHOT: Full-length back\nDIRECTION:\nFull-length standing with BACK to camera, whole body head to feet, showing hair and posture from behind, deep athletic rear extension with arms raised overhead and powerful spinal curve.\n\nSAME-PERSON LOCK:\nKeep the exact same written identity across this portfolio set using the text above only: face structure, hair, skin tone, body, wardrobe, and distinguishing details must remain consistent; only angle, framing, pose, and expression change.\n\nREALISM CONTRACT:\nRender as a real human being, photographed, not illustrated: lifelike skin with visible pores, fine texture, subtle imperfections, natural subsurface tones, realistic individual hair strands, true-to-life fabric. Shot on a full-frame camera, 85mm lens. Visuals only; nothing a camera could not capture. No illustration, no painting, no CGI look. Always sweaty with glossy baby oil allover", "maxTokens": 12000, "temperature": 0.65, "json": "FALSE", "active": "TRUE", "version": 3, "sort": 4350, "notes": "Characters → Art Studio → Model Portfolio. This row controls the exact prompt for this package shot."},
+  {"id": "character.studio.portfolio.compcard.beauty", "area": "Characters", "tab": "Characters", "subtab": "Studio", "feature": "Model Portfolio", "action": "Comp Card (Z-card looks) — Cover beauty", "name": "Model Portfolio — Comp Card (Z-card looks) — Cover beauty", "system": "You create one photorealistic model-portfolio image prompt from character identity data. Output goes directly to an image model, so write camera-visible direction only. Preserve identity, wardrobe, framing, and same-session consistency.", "user": "Photorealistic photograph of {{characterName}}.\n\nIDENTITY LOCK:\n{{identity}}\n\nWARDROBE LOCK:\n{{wardrobe}}\n\nPACKAGE: Comp Card (Z-card looks)\nSTYLE:\nProfessional comp-card photography, studio quality, flattering directional softbox key light with subtle fill, polished but natural, sport magazine-catalog standard. Always sweaty with glossy baby oil allover.\n\nSHOT: Cover beauty\nDIRECTION:\nStriking head-and-shoulders cover shot, dead-on, captivating magnetic gaze to lens with heated expression, full overhead athletic extension, shoulders powerfully open, immaculate light.\n\nSAME-PERSON LOCK:\nKeep the exact same written identity across this portfolio set using the text above only: face structure, hair, skin tone, body, wardrobe, and distinguishing details must remain consistent; only angle, framing, pose, and expression change.\n\nREALISM CONTRACT:\nRender as a real human being, photographed, not illustrated: lifelike skin with visible pores, fine texture, subtle imperfections, natural subsurface tones, realistic individual hair strands, true-to-life fabric. Shot on a full-frame camera, 85mm lens. Visuals only; nothing a camera could not capture. No illustration, no painting, no CGI look. Always sweaty with glossy baby oil allover", "maxTokens": 12000, "temperature": 0.65, "json": "FALSE", "active": "TRUE", "version": 3, "sort": 4360, "notes": "Characters → Art Studio → Model Portfolio. This row controls the exact prompt for this package shot."},
+  {"id": "character.studio.portfolio.compcard.smile", "area": "Characters", "tab": "Characters", "subtab": "Studio", "feature": "Model Portfolio", "action": "Comp Card (Z-card looks) — Natural smile", "name": "Model Portfolio — Comp Card (Z-card looks) — Natural smile", "system": "You create one photorealistic model-portfolio image prompt from character identity data. Output goes directly to an image model, so write camera-visible direction only. Preserve identity, wardrobe, framing, and same-session consistency.", "user": "Photorealistic photograph of {{characterName}}.\n\nIDENTITY LOCK:\n{{identity}}\n\nWARDROBE LOCK:\n{{wardrobe}}\n\nPACKAGE: Comp Card (Z-card looks)\nSTYLE:\nProfessional comp-card photography, studio quality, flattering directional softbox key light with subtle fill, polished but natural, sport magazine-catalog standard. Always sweaty with glossy baby oil allover.\n\nSHOT: Natural smile\nDIRECTION:\nHead-and-shoulders, soft smile with eyes deeply engaged and heated intensity, slight 3/4 turn, dynamic sport power stance with upward reach and core engagement.\n\nSAME-PERSON LOCK:\nKeep the exact same written identity across this portfolio set using the text above only: face structure, hair, skin tone, body, wardrobe, and distinguishing details must remain consistent; only angle, framing, pose, and expression change.\n\nREALISM CONTRACT:\nRender as a real human being, photographed, not illustrated: lifelike skin with visible pores, fine texture, subtle imperfections, natural subsurface tones, realistic individual hair strands, true-to-life fabric. Shot on a full-frame camera, 85mm lens. Visuals only; nothing a camera could not capture. No illustration, no painting, no CGI look. Always sweaty with glossy baby oil allover", "maxTokens": 12000, "temperature": 0.65, "json": "FALSE", "active": "TRUE", "version": 3, "sort": 4370, "notes": "Characters → Art Studio → Model Portfolio. This row controls the exact prompt for this package shot."},
+  {"id": "character.studio.portfolio.compcard.profile", "area": "Characters", "tab": "Characters", "subtab": "Studio", "feature": "Model Portfolio", "action": "Comp Card (Z-card looks) — Editorial profile", "name": "Model Portfolio — Comp Card (Z-card looks) — Editorial profile", "system": "You create one photorealistic model-portfolio image prompt from character identity data. Output goes directly to an image model, so write camera-visible direction only. Preserve identity, wardrobe, framing, and same-session consistency.", "user": "Photorealistic photograph of {{characterName}}.\n\nIDENTITY LOCK:\n{{identity}}\n\nWARDROBE LOCK:\n{{wardrobe}}\n\nPACKAGE: Comp Card (Z-card looks)\nSTYLE:\nProfessional comp-card photography, studio quality, flattering directional softbox key light with subtle fill, polished but natural, sport magazine-catalog standard. Always sweaty with glossy baby oil allover.\n\nSHOT: Editorial profile\nDIRECTION:\nElegant side-profile portrait, chin slightly lifted, dramatic but soft side light, elongated athletic extension with full spinal curve and overhead arm reach.\n\nSAME-PERSON LOCK:\nKeep the exact same written identity across this portfolio set using the text above only: face structure, hair, skin tone, body, wardrobe, and distinguishing details must remain consistent; only angle, framing, pose, and expression change.\n\nREALISM CONTRACT:\nRender as a real human being, photographed, not illustrated: lifelike skin with visible pores, fine texture, subtle imperfections, natural subsurface tones, realistic individual hair strands, true-to-life fabric. Shot on a full-frame camera, 85mm lens. Visuals only; nothing a camera could not capture. No illustration, no painting, no CGI look. Always sweaty with glossy baby oil allover", "maxTokens": 12000, "temperature": 0.65, "json": "FALSE", "active": "TRUE", "version": 3, "sort": 4380, "notes": "Characters → Art Studio → Model Portfolio. This row controls the exact prompt for this package shot."},
+  {"id": "character.studio.portfolio.compcard.half", "area": "Characters", "tab": "Characters", "subtab": "Studio", "feature": "Model Portfolio", "action": "Comp Card (Z-card looks) — Half-body editorial", "name": "Model Portfolio — Comp Card (Z-card looks) — Half-body editorial", "system": "You create one photorealistic model-portfolio image prompt from character identity data. Output goes directly to an image model, so write camera-visible direction only. Preserve identity, wardrobe, framing, and same-session consistency.", "user": "Photorealistic photograph of {{characterName}}.\n\nIDENTITY LOCK:\n{{identity}}\n\nWARDROBE LOCK:\n{{wardrobe}}\n\nPACKAGE: Comp Card (Z-card looks)\nSTYLE:\nProfessional comp-card photography, studio quality, flattering directional softbox key light with subtle fill, polished but natural, sport magazine-catalog standard. Always sweaty with glossy baby oil allover.\n\nSHOT: Half-body editorial\nDIRECTION:\nHalf-body (waist up), powerfully confident posture with one arm raised in strong overhead stretch, intensely heated expression, athletic side power bend.\n\nSAME-PERSON LOCK:\nKeep the exact same written identity across this portfolio set using the text above only: face structure, hair, skin tone, body, wardrobe, and distinguishing details must remain consistent; only angle, framing, pose, and expression change.\n\nREALISM CONTRACT:\nRender as a real human being, photographed, not illustrated: lifelike skin with visible pores, fine texture, subtle imperfections, natural subsurface tones, realistic individual hair strands, true-to-life fabric. Shot on a full-frame camera, 85mm lens. Visuals only; nothing a camera could not capture. No illustration, no painting, no CGI look. Always sweaty with glossy baby oil allover", "maxTokens": 12000, "temperature": 0.65, "json": "FALSE", "active": "TRUE", "version": 3, "sort": 4390, "notes": "Characters → Art Studio → Model Portfolio. This row controls the exact prompt for this package shot."},
+  {"id": "character.studio.portfolio.compcard.full-fashion", "area": "Characters", "tab": "Characters", "subtab": "Studio", "feature": "Model Portfolio", "action": "Comp Card (Z-card looks) — Full-length fashion", "name": "Model Portfolio — Comp Card (Z-card looks) — Full-length fashion", "system": "You create one photorealistic model-portfolio image prompt from character identity data. Output goes directly to an image model, so write camera-visible direction only. Preserve identity, wardrobe, framing, and same-session consistency.", "user": "Photorealistic photograph of {{characterName}}.\n\nIDENTITY LOCK:\n{{identity}}\n\nWARDROBE LOCK:\n{{wardrobe}}\n\nPACKAGE: Comp Card (Z-card looks)\nSTYLE:\nProfessional comp-card photography, studio quality, flattering directional softbox key light with subtle fill, polished but natural, sport magazine-catalog standard. Always sweaty with glossy baby oil allover.\n\nSHOT: Full-length fashion\nDIRECTION:\nFull-length fashion stance, weight dramatically shifted with elongated lines, full body head to feet, dynamic overhead athletic reach with powerful body arch.\n\nSAME-PERSON LOCK:\nKeep the exact same written identity across this portfolio set using the text above only: face structure, hair, skin tone, body, wardrobe, and distinguishing details must remain consistent; only angle, framing, pose, and expression change.\n\nREALISM CONTRACT:\nRender as a real human being, photographed, not illustrated: lifelike skin with visible pores, fine texture, subtle imperfections, natural subsurface tones, realistic individual hair strands, true-to-life fabric. Shot on a full-frame camera, 85mm lens. Visuals only; nothing a camera could not capture. No illustration, no painting, no CGI look. Always sweaty with glossy baby oil allover", "maxTokens": 12000, "temperature": 0.65, "json": "FALSE", "active": "TRUE", "version": 3, "sort": 4400, "notes": "Characters → Art Studio → Model Portfolio. This row controls the exact prompt for this package shot."},
+  {"id": "character.studio.portfolio.compcard.movement", "area": "Characters", "tab": "Characters", "subtab": "Studio", "feature": "Model Portfolio", "action": "Comp Card (Z-card looks) — Movement", "name": "Model Portfolio — Comp Card (Z-card looks) — Movement", "system": "You create one photorealistic model-portfolio image prompt from character identity data. Output goes directly to an image model, so write camera-visible direction only. Preserve identity, wardrobe, framing, and same-session consistency.", "user": "Photorealistic photograph of {{characterName}}.\n\nIDENTITY LOCK:\n{{identity}}\n\nWARDROBE LOCK:\n{{wardrobe}}\n\nPACKAGE: Comp Card (Z-card looks)\nSTYLE:\nProfessional comp-card photography, studio quality, flattering directional softbox key light with subtle fill, polished but natural, sport magazine-catalog standard. Always sweaty with glossy baby oil allover.\n\nSHOT: Movement\nDIRECTION:\nFull-length candid stride or turn mid-motion, natural movement, captured in explosive athletic lunge combined with full upward power extension.\n\nSAME-PERSON LOCK:\nKeep the exact same written identity across this portfolio set using the text above only: face structure, hair, skin tone, body, wardrobe, and distinguishing details must remain consistent; only angle, framing, pose, and expression change.\n\nREALISM CONTRACT:\nRender as a real human being, photographed, not illustrated: lifelike skin with visible pores, fine texture, subtle imperfections, natural subsurface tones, realistic individual hair strands, true-to-life fabric. Shot on a full-frame camera, 85mm lens. Visuals only; nothing a camera could not capture. No illustration, no painting, no CGI look. Always sweaty with glossy baby oil allover", "maxTokens": 12000, "temperature": 0.65, "json": "FALSE", "active": "TRUE", "version": 3, "sort": 4410, "notes": "Characters → Art Studio → Model Portfolio. This row controls the exact prompt for this package shot."},
+  {"id": "character.studio.portfolio.portfolio.beauty", "area": "Characters", "tab": "Characters", "subtab": "Studio", "feature": "Model Portfolio", "action": "Portfolio (editorial range) — Signature beauty", "name": "Model Portfolio — Portfolio (editorial range) — Signature beauty", "system": "You create one photorealistic model-portfolio image prompt from character identity data. Output goes directly to an image model, so write camera-visible direction only. Preserve identity, wardrobe, framing, and same-session consistency.", "user": "Photorealistic photograph of {{characterName}}.\n\nIDENTITY LOCK:\n{{identity}}\n\nWARDROBE LOCK:\n{{wardrobe}}\n\nPACKAGE: Portfolio (editorial range)\nSTYLE:\nHigh-end editorial portfolio sports photography, magazine quality, expressive lighting, cinematic color grade, photoreal skin texture preserved. Always sweaty with glossy baby oil allover.\n\nSHOT: Signature beauty\nDIRECTION:\nSignature close beauty portrait, flawless soft light, captivating direct gaze with heated expression, neck extended in elegant athletic reach, shoulders powerfully engaged.\n\nSAME-PERSON LOCK:\nKeep the exact same written identity across this portfolio set using the text above only: face structure, hair, skin tone, body, wardrobe, and distinguishing details must remain consistent; only angle, framing, pose, and expression change.\n\nREALISM CONTRACT:\nRender as a real human being, photographed, not illustrated: lifelike skin with visible pores, fine texture, subtle imperfections, natural subsurface tones, realistic individual hair strands, true-to-life fabric. Shot on a full-frame camera, 85mm lens. Visuals only; nothing a camera could not capture. No illustration, no painting, no CGI look. Always sweaty with glossy baby oil allover", "maxTokens": 12000, "temperature": 0.65, "json": "FALSE", "active": "TRUE", "version": 3, "sort": 4420, "notes": "Characters → Art Studio → Model Portfolio. This row controls the exact prompt for this package shot."},
+  {"id": "character.studio.portfolio.portfolio.pensive", "area": "Characters", "tab": "Characters", "subtab": "Studio", "feature": "Model Portfolio", "action": "Portfolio (editorial range) — Pensive", "name": "Model Portfolio — Portfolio (editorial range) — Pensive", "system": "You create one photorealistic model-portfolio image prompt from character identity data. Output goes directly to an image model, so write camera-visible direction only. Preserve identity, wardrobe, framing, and same-session consistency.", "user": "Photorealistic photograph of {{characterName}}.\n\nIDENTITY LOCK:\n{{identity}}\n\nWARDROBE LOCK:\n{{wardrobe}}\n\nPACKAGE: Portfolio (editorial range)\nSTYLE:\nHigh-end editorial portfolio sports photography, magazine quality, expressive lighting, cinematic color grade, photoreal skin texture preserved. Always sweaty with glossy baby oil allover.\n\nSHOT: Pensive\nDIRECTION:\nHead-and-shoulders, downcast gaze with heated intensity, soft window light, deep sport recovery stretch with full overhead arm extension.\n\nSAME-PERSON LOCK:\nKeep the exact same written identity across this portfolio set using the text above only: face structure, hair, skin tone, body, wardrobe, and distinguishing details must remain consistent; only angle, framing, pose, and expression change.\n\nREALISM CONTRACT:\nRender as a real human being, photographed, not illustrated: lifelike skin with visible pores, fine texture, subtle imperfections, natural subsurface tones, realistic individual hair strands, true-to-life fabric. Shot on a full-frame camera, 85mm lens. Visuals only; nothing a camera could not capture. No illustration, no painting, no CGI look. Always sweaty with glossy baby oil allover", "maxTokens": 12000, "temperature": 0.65, "json": "FALSE", "active": "TRUE", "version": 3, "sort": 4430, "notes": "Characters → Art Studio → Model Portfolio. This row controls the exact prompt for this package shot."},
+  {"id": "character.studio.portfolio.portfolio.intense", "area": "Characters", "tab": "Characters", "subtab": "Studio", "feature": "Model Portfolio", "action": "Portfolio (editorial range) — Intense", "name": "Model Portfolio — Portfolio (editorial range) — Intense", "system": "You create one photorealistic model-portfolio image prompt from character identity data. Output goes directly to an image model, so write camera-visible direction only. Preserve identity, wardrobe, framing, and same-session consistency.", "user": "Photorealistic photograph of {{characterName}}.\n\nIDENTITY LOCK:\n{{identity}}\n\nWARDROBE LOCK:\n{{wardrobe}}\n\nPACKAGE: Portfolio (editorial range)\nSTYLE:\nHigh-end editorial portfolio sports photography, magazine quality, expressive lighting, cinematic color grade, photoreal skin texture preserved. Always sweaty with glossy baby oil allover.\n\nSHOT: Intense\nDIRECTION:\nTight portrait, powerfully magnetic direct stare with heated expression, harder dramatic key light, forward athletic tension with strong overhead reach.\n\nSAME-PERSON LOCK:\nKeep the exact same written identity across this portfolio set using the text above only: face structure, hair, skin tone, body, wardrobe, and distinguishing details must remain consistent; only angle, framing, pose, and expression change.\n\nREALISM CONTRACT:\nRender as a real human being, photographed, not illustrated: lifelike skin with visible pores, fine texture, subtle imperfections, natural subsurface tones, realistic individual hair strands, true-to-life fabric. Shot on a full-frame camera, 85mm lens. Visuals only; nothing a camera could not capture. No illustration, no painting, no CGI look. Always sweaty with glossy baby oil allover", "maxTokens": 12000, "temperature": 0.65, "json": "FALSE", "active": "TRUE", "version": 3, "sort": 4440, "notes": "Characters → Art Studio → Model Portfolio. This row controls the exact prompt for this package shot."},
+  {"id": "character.studio.portfolio.portfolio.joyful", "area": "Characters", "tab": "Characters", "subtab": "Studio", "feature": "Model Portfolio", "action": "Portfolio (editorial range) — Joyful", "name": "Model Portfolio — Portfolio (editorial range) — Joyful", "system": "You create one photorealistic model-portfolio image prompt from character identity data. Output goes directly to an image model, so write camera-visible direction only. Preserve identity, wardrobe, framing, and same-session consistency.", "user": "Photorealistic photograph of {{characterName}}.\n\nIDENTITY LOCK:\n{{identity}}\n\nWARDROBE LOCK:\n{{wardrobe}}\n\nPACKAGE: Portfolio (editorial range)\nSTYLE:\nHigh-end editorial portfolio sports photography, magazine quality, expressive lighting, cinematic color grade, photoreal skin texture preserved. Always sweaty with glossy baby oil allover.\n\nSHOT: Joyful\nDIRECTION:\nCandid laughing or joyful heated expression, bright airy light, dynamic sport celebration with full upward power stretch and open athletic lines.\n\nSAME-PERSON LOCK:\nKeep the exact same written identity across this portfolio set using the text above only: face structure, hair, skin tone, body, wardrobe, and distinguishing details must remain consistent; only angle, framing, pose, and expression change.\n\nREALISM CONTRACT:\nRender as a real human being, photographed, not illustrated: lifelike skin with visible pores, fine texture, subtle imperfections, natural subsurface tones, realistic individual hair strands, true-to-life fabric. Shot on a full-frame camera, 85mm lens. Visuals only; nothing a camera could not capture. No illustration, no painting, no CGI look. Always sweaty with glossy baby oil allover", "maxTokens": 12000, "temperature": 0.65, "json": "FALSE", "active": "TRUE", "version": 3, "sort": 4450, "notes": "Characters → Art Studio → Model Portfolio. This row controls the exact prompt for this package shot."},
+  {"id": "character.studio.portfolio.portfolio.lowkey", "area": "Characters", "tab": "Characters", "subtab": "Studio", "feature": "Model Portfolio", "action": "Portfolio (editorial range) — Low-key drama", "name": "Model Portfolio — Portfolio (editorial range) — Low-key drama", "system": "You create one photorealistic model-portfolio image prompt from character identity data. Output goes directly to an image model, so write camera-visible direction only. Preserve identity, wardrobe, framing, and same-session consistency.", "user": "Photorealistic photograph of {{characterName}}.\n\nIDENTITY LOCK:\n{{identity}}\n\nWARDROBE LOCK:\n{{wardrobe}}\n\nPACKAGE: Portfolio (editorial range)\nSTYLE:\nHigh-end editorial portfolio sports photography, magazine quality, expressive lighting, cinematic color grade, photoreal skin texture preserved. Always sweaty with glossy baby oil allover.\n\nSHOT: Low-key drama\nDIRECTION:\nHalf-body in low-key chiaroscuro lighting, single source, deep shadows, cinematic, dramatic athletic arch with powerful overhead extension.\n\nSAME-PERSON LOCK:\nKeep the exact same written identity across this portfolio set using the text above only: face structure, hair, skin tone, body, wardrobe, and distinguishing details must remain consistent; only angle, framing, pose, and expression change.\n\nREALISM CONTRACT:\nRender as a real human being, photographed, not illustrated: lifelike skin with visible pores, fine texture, subtle imperfections, natural subsurface tones, realistic individual hair strands, true-to-life fabric. Shot on a full-frame camera, 85mm lens. Visuals only; nothing a camera could not capture. No illustration, no painting, no CGI look. Always sweaty with glossy baby oil allover", "maxTokens": 12000, "temperature": 0.65, "json": "FALSE", "active": "TRUE", "version": 3, "sort": 4460, "notes": "Characters → Art Studio → Model Portfolio. This row controls the exact prompt for this package shot."},
+  {"id": "character.studio.portfolio.portfolio.environmental", "area": "Characters", "tab": "Characters", "subtab": "Studio", "feature": "Model Portfolio", "action": "Portfolio (editorial range) — Environmental", "name": "Model Portfolio — Portfolio (editorial range) — Environmental", "system": "You create one photorealistic model-portfolio image prompt from character identity data. Output goes directly to an image model, so write camera-visible direction only. Preserve identity, wardrobe, framing, and same-session consistency.", "user": "Photorealistic photograph of {{characterName}}.\n\nIDENTITY LOCK:\n{{identity}}\n\nWARDROBE LOCK:\n{{wardrobe}}\n\nPACKAGE: Portfolio (editorial range)\nSTYLE:\nHigh-end editorial portfolio sports photography, magazine quality, expressive lighting, cinematic color grade, photoreal skin texture preserved. Always sweaty with glossy baby oil allover.\n\nSHOT: Environmental\nDIRECTION:\nThree-quarter body environmental portrait, soft natural setting suggested behind with shallow depth of field, strong athletic lunge with elongated upward reach and full body tension.\n\nSAME-PERSON LOCK:\nKeep the exact same written identity across this portfolio set using the text above only: face structure, hair, skin tone, body, wardrobe, and distinguishing details must remain consistent; only angle, framing, pose, and expression change.\n\nREALISM CONTRACT:\nRender as a real human being, photographed, not illustrated: lifelike skin with visible pores, fine texture, subtle imperfections, natural subsurface tones, realistic individual hair strands, true-to-life fabric. Shot on a full-frame camera, 85mm lens. Visuals only; nothing a camera could not capture. No illustration, no painting, no CGI look. Always sweaty with glossy baby oil allover", "maxTokens": 12000, "temperature": 0.65, "json": "FALSE", "active": "TRUE", "version": 3, "sort": 4470, "notes": "Characters → Art Studio → Model Portfolio. This row controls the exact prompt for this package shot."},
   {"id": "world.roomImagePrompts", "area": "World", "tab": "World", "subtab": "Images", "feature": "Location room image prompts", "action": "generate four walls", "name": "Architectural room prompt generator", "system": "You are an architectural visualization specialist. Given a literary description of a location, produce a MASTER establishing shot prompt plus 4 wall-view prompts that together cover every wall and surface of the room. All views depict one physically consistent room. Use exact dimensions in cm, materials, colors, lighting, furniture placement, and wall zones. No people and no text overlays.", "user": "LOCATION: {{name}}\nTYPE: {{category}}\n\nPROJECT CONTEXT:\n{{projectContext}}\n\nDESCRIPTION:\n{{description}}\n\nOutput exactly these sections:\n===SPEC_SHEET===\n===PROMPT_MASTER===\n===PROMPT_WALL_A===\n===PROMPT_WALL_B===\n===PROMPT_WALL_C===\n===PROMPT_WALL_D===", "maxTokens": 24000, "temperature": 0.4, "json": "FALSE", "active": "TRUE", "version": 2, "notes": "World tab → generated master/wall prompts for location reference images."},
 ];
 const buildDefaultAppConfig = () => ({
@@ -6232,6 +6329,7 @@ const buildDefaultAppConfig = () => ({
     ]),
     ...dropdownRowsFrom("characterArt.relight", ["harsh midday sun", "warm candlelight", "cool moonlight", "neon city glow", "soft overcast", "golden hour"]),
     ...dropdownRowsFrom("characterArt.expression", ["angry", "joyful", "grieving", "afraid", "determined", "surprised"]),
+    ...modelPortfolioDropdownRowsFromDefaults(),
     ...dropdownRowsFrom("image.sourceFilter", [
       { value: "all", label: "All" }, { value: "scene", label: "Scene" }, { value: "draft", label: "Inbox" }, { value: "character", label: "Characters" }, { value: "world", label: "World" },
     ]),
@@ -10798,6 +10896,96 @@ const MODEL_PORTFOLIO_PACKAGES = {
     ],
   },
 };
+
+const MODEL_PORTFOLIO_PACKAGE_GROUP = "characterStudio.portfolioPackage";
+const modelPortfolioShotGroup = (pkgKey = "") => `characterStudio.portfolioShot.${pkgKey}`;
+const dropdownValueSlug = (value = "option") => String(value || "option")
+  .trim()
+  .replace(/[^a-z0-9]+/gi, "_")
+  .replace(/^_|_$/g, "")
+  .toLowerCase() || "option";
+const dropdownRowIdFor = (group = "custom.group", value = "option") => `${group}.${dropdownValueSlug(value)}`;
+const dropdownRowsForGroup = (config = {}, group = "") => (config?.dropdowns || [])
+  .filter(r => String(r.group || "") === String(group || "") && cfgBool(r.active, true))
+  .sort((a, b) => Number(a.sort || 0) - Number(b.sort || 0));
+const modelPortfolioDropdownRowsFromDefaults = () => {
+  const rows = [];
+  Object.entries(MODEL_PORTFOLIO_PACKAGES || {}).forEach(([pkgKey, pkg], pkgIdx) => {
+    rows.push({
+      id: dropdownRowIdFor(MODEL_PORTFOLIO_PACKAGE_GROUP, pkgKey),
+      group: MODEL_PORTFOLIO_PACKAGE_GROUP,
+      value: pkgKey,
+      label: pkg.label,
+      sort: (pkgIdx + 1) * 100,
+      active: "TRUE",
+      customAllowed: "TRUE",
+      notes: "Characters → Art Studio → Model Portfolio package. Edit label/style/blurb here; shots live in characterStudio.portfolioShot.<packageKey>.",
+      metadataJSON: JSON.stringify({ blurb: pkg.blurb || "", style: pkg.style || "" }),
+    });
+    (pkg.shots || []).forEach((shot, shotIdx) => rows.push({
+      id: dropdownRowIdFor(modelPortfolioShotGroup(pkgKey), shot.key),
+      group: modelPortfolioShotGroup(pkgKey),
+      value: shot.key,
+      label: shot.label,
+      sort: (shotIdx + 1) * 10,
+      active: "TRUE",
+      customAllowed: "TRUE",
+      notes: "Characters → Art Studio → Model Portfolio shot. Edit label/framing/direction here. This controls the shot dropdown and the default image prompt variables.",
+      metadataJSON: JSON.stringify({ framing: shot.framing || "3:4", direction: shot.direction || "" }),
+    }));
+  });
+  return rows;
+};
+const modelPortfolioPackagesFromConfig = (config = {}) => {
+  const defaultRows = modelPortfolioDropdownRowsFromDefaults();
+  const dropdowns = Array.isArray(config?.dropdowns) ? config.dropdowns : [];
+  const packageRows = dropdownRowsForGroup(config, MODEL_PORTFOLIO_PACKAGE_GROUP);
+  const rowsForPackage = packageRows.length ? packageRows : defaultRows.filter(r => r.group === MODEL_PORTFOLIO_PACKAGE_GROUP);
+  const out = {};
+  rowsForPackage.forEach((row, pkgIdx) => {
+    const key = dropdownValueSlug(row.value || row.label || `package_${pkgIdx + 1}`);
+    const base = MODEL_PORTFOLIO_PACKAGES[key] || {};
+    const meta = parseJSONSafe(row.metadataJSON, {});
+    const shotGroup = modelPortfolioShotGroup(key);
+    const configShotRows = dropdownRowsForGroup(config, shotGroup);
+    const defaultShotRows = defaultRows.filter(r => r.group === shotGroup);
+    const shotRows = configShotRows.length ? configShotRows : defaultShotRows;
+    const shots = shotRows.map((shotRow, shotIdx) => {
+      const shotMeta = parseJSONSafe(shotRow.metadataJSON, {});
+      const baseShot = (base.shots || []).find(s => s.key === shotRow.value) || {};
+      const shotKey = dropdownValueSlug(shotRow.value || shotRow.label || `shot_${shotIdx + 1}`);
+      return {
+        key: shotKey,
+        label: shotRow.label || baseShot.label || shotRow.value || shotKey,
+        framing: shotMeta.framing || baseShot.framing || "3:4",
+        direction: shotMeta.direction || baseShot.direction || "Describe the model-portfolio shot clearly.",
+        sort: Number(shotRow.sort || ((shotIdx + 1) * 10)),
+        _rowId: shotRow.id || dropdownRowIdFor(shotGroup, shotKey),
+        _group: shotGroup,
+      };
+    }).filter(s => s.key && s.label);
+    out[key] = {
+      label: row.label || base.label || row.value || key,
+      blurb: meta.blurb || base.blurb || "Custom model portfolio package.",
+      style: meta.style || base.style || "Photoreal model-portfolio studio session, consistent lighting and styling.",
+      shots,
+      sort: Number(row.sort || ((pkgIdx + 1) * 100)),
+      _rowId: row.id || dropdownRowIdFor(MODEL_PORTFOLIO_PACKAGE_GROUP, key),
+      _group: MODEL_PORTFOLIO_PACKAGE_GROUP,
+    };
+  });
+  return out;
+};
+const buildPortfolioShotPromptUser = (pkg = {}, shot = {}, pkgKey = "portfolio") => buildUniversalImagePromptTemplate({
+  charactersList: "{{characterName}}",
+  characterDescriptions: "{{identity}}",
+  clothingNames: "{{characterName}}",
+  clothingDesign: "{{wardrobe}}",
+  activity: `${pkg.label || "Model portfolio"}. ${pkg.style || ""}\n\n${shot.label || "Portfolio shot"}. ${shot.direction || ""}`,
+  backdrop: pkg.style || "Selected model portfolio studio style.",
+  timeOfDay: "studio session time; use the selected package lighting direction",
+  cameraAngle: `${shot.label || "Portfolio shot"}. ${shot.direction || ""}\n\nSAME-PERSON LOCK: ${portfolioSamePersonLockText}\n\nREALISM CONTRACT: ${portfolioRealismContractText}`,
+});
 
 const EDITORIAL_STUDIO_DEFAULTS = {
   enabled: false,
@@ -15849,8 +16037,10 @@ export default function NovelForge() {
       .filter(r => r.group === group && cfgBool(r.active, true))
       .sort((a, b) => Number(a.sort || 0) - Number(b.sort || 0));
     if (!rows.length) return normalizeSelectOptions(fallback);
-    return rows.map(r => ({ value: r.value || r.label, label: r.label || r.value, ...parseJSONSafe(r.metadataJSON, {}) }));
+    return rows.map(r => ({ ...parseJSONSafe(r.metadataJSON, {}), value: r.value || r.label, label: r.label || r.value }));
   }, [appConfig?.dropdowns]);
+
+  const modelPortfolioPackages = useMemo(() => modelPortfolioPackagesFromConfig(appConfig), [appConfig?.dropdowns]);
 
   const prepareConfigSheetAccess = useCallback(async (reason = "action") => {
     const sheetId = ConfigSheets.getSpreadsheetId() || configSheetId || "";
@@ -15930,6 +16120,8 @@ export default function NovelForge() {
   const [openPortfolioShotMenu, setOpenPortfolioShotMenu] = useState(null); // "charId:pkgKey" while a shot picker is open
   const [portfolioPromptEditor, setPortfolioPromptEditor] = useState(null); // generic prompt editor: { tableKey, promptId, fieldName, label, draft, loading, error, fallbackPatch }
   const [portfolioPromptSaving, setPortfolioPromptSaving] = useState(false);
+  const [dropdownOptionEditor, setDropdownOptionEditor] = useState(null); // { mode, group, rowId, draft, title, error }
+  const [dropdownOptionSaving, setDropdownOptionSaving] = useState(false);
   const [aiActivityFeed, setAiActivityFeed] = useState([]); // visible AI job log: [{id,title,detail,status,createdAt,updatedAt,done,total}]
   const [aiActivityOpen, setAiActivityOpen] = useState(true);
   const [imageRedoBusy, setImageRedoBusy] = useState(null); // image id while a generated character image is being rerolled from text only
@@ -18299,7 +18491,7 @@ Rules:
   }, [getLivePromptTemplate, showToast]);
 
   const openPortfolioPromptEditor = useCallback(async (pkgKey, shotKey) => {
-    const pkg = MODEL_PORTFOLIO_PACKAGES[pkgKey];
+    const pkg = modelPortfolioPackages[pkgKey];
     const shot = pkg?.shots?.find(s => s.key === shotKey);
     if (!pkg || !shot) { showToast("Pick a valid portfolio shot", "error"); return; }
     const promptId = `character.studio.portfolio.${pkgKey}.${shot.key}`;
@@ -18318,8 +18510,9 @@ Rules:
       version: 3,
       sort: 9999,
       notes: "Characters → Art Studio → Model Portfolio. This row controls the exact prompt for this package shot.",
+      user: buildPortfolioShotPromptUser(pkg, shot, pkgKey),
     });
-  }, [openPromptTemplateEditor, showToast]);
+  }, [openPromptTemplateEditor, showToast, modelPortfolioPackages]);
 
   const savePromptTemplateEditor = useCallback(async () => {
     const ed = portfolioPromptEditor;
@@ -18374,7 +18567,7 @@ Rules:
   // artifacts or drift away from the written character bible.
   const generateModelPortfolio = useCallback(async (char, pkgKey, wardrobeOverride, shotKey = "all") => {
     if (!settings.apiKey) { showToast("Add an API key in Settings first", "error"); return; }
-    const pkg = MODEL_PORTFOLIO_PACKAGES[pkgKey];
+    const pkg = modelPortfolioPackages[pkgKey];
     if (!pkg) return;
     const selectedShots = shotKey && shotKey !== "all" ? pkg.shots.filter(s => s.key === shotKey) : pkg.shots;
     if (!selectedShots.length) { showToast("Pick a valid portfolio shot", "error"); return; }
@@ -18385,7 +18578,19 @@ Rules:
     const livePortfolioTpl = await getLivePromptTemplate("character.studio.portfolioShot");
     const getPortfolioShotTemplate = async (shot) => {
       const exactId = `character.studio.portfolio.${pkgKey}.${shot.key}`;
-      return await getLivePromptTemplate(exactId) || livePortfolioTpl;
+      const exact = await getLivePromptTemplate(exactId);
+      if (exact?.user) {
+        const u = String(exact.user || "");
+        const usesCleanPortfolioSlots = /\{\{\s*portfolio(ShotLabel|ShotDirection|Direction|Style|PackageLabel)\s*\}\}/.test(u);
+        const managedPortfolioPrompt = u.includes("SAME-PERSON LOCK") || u.includes("REALISM CONTRACT") || hasUniversalImagePromptStructure(u);
+        const currentLabelPresent = !shot.label || u.includes(shot.label);
+        const currentDirectionPresent = !shot.direction || u.includes(String(shot.direction).slice(0, Math.min(60, String(shot.direction).length)));
+        // Old auto-generated exact rows hardcoded labels like "Natural smile". If the dropdown option
+        // has since been renamed to "Sad Shot" or its direction changed, rebuild from the dropdown
+        // option metadata so the setting is the source of truth. Non-managed custom rows still win.
+        if (!managedPortfolioPrompt || usesCleanPortfolioSlots || (currentLabelPresent && currentDirectionPresent)) return exact;
+      }
+      return { ...(exact || livePortfolioTpl || {}), user: buildPortfolioShotPromptUser(pkg, shot, pkgKey) };
     };
     const portfolioId = uid();
     const total = selectedShots.length;
@@ -18434,8 +18639,18 @@ Rules:
         const prompt = shotTpl?.user
           ? renderConfigTemplate(shotTpl.user, {
               character: char, characterName: char.name || "a person", identity, wardrobe,
-              wardrobePhrase: wardrobe ? `, wearing ${wardrobe}` : "", package: pkg, packageKey: pkgKey, packageStyle: pkg.style,
-              shot, shotKey: shot.key, shotLabel: shot.label, shotDirection: shot.direction, samePersonLock: "Keep the exact same written identity across this portfolio set using the text above only: face structure, hair, skin tone, body, wardrobe, and distinguishing details must remain consistent; only angle, framing, pose, and expression change.", realismContract: realism
+              wardrobePhrase: wardrobe ? `, wearing ${wardrobe}` : "",
+              portfolioPackageLabel: pkg.label,
+              portfolioShotLabel: shot.label,
+              portfolioStyle: pkg.style,
+              portfolioShotDirection: shot.direction,
+              portfolioDirection: `${pkg.label}. ${pkg.style}
+
+${shot.label}. ${shot.direction}`,
+              // Backward compatibility for old customized rows. New defaults do not expose these.
+              package: pkg, packageKey: pkgKey, packageStyle: pkg.style,
+              shot, shotKey: shot.key, shotLabel: shot.label, shotDirection: shot.direction,
+              samePersonLock: portfolioSamePersonLockText, realismContract: realism
             })
           : fallbackPrompt;
         // Text-only identity lock: never pass previous portfolio shots or style images as references.
@@ -18459,7 +18674,7 @@ Rules:
     } finally {
       setPortfolioBusy(null);
     }
-  }, [settings.apiKey, getLivePromptTemplate, showToast, activeProjectId, setProjects, charWardrobe]);
+  }, [settings.apiKey, getLivePromptTemplate, showToast, activeProjectId, setProjects, charWardrobe, modelPortfolioPackages]);
 
   // Redo a generated character image in-place from its saved text prompt only.
   // Works for normal Character Art mood-board images and Model Portfolio shots. Portfolio shots are
@@ -18539,7 +18754,7 @@ ${authority}
 === EDITORIAL STUDIO DIRECTION (this is the authoritative styling — follow every item precisely; all visual, camera-capturable only) ===
 ${studioDirection}`;
     let prompt = liveEditorialTpl?.user
-      ? renderConfigTemplate(liveEditorialTpl.user, { character: char, characterName: char.name || "a person", identity, authority, studio, studioDirection })
+      ? renderConfigTemplate(liveEditorialTpl.user, { character: char, characterName: char.name || "a person", identity, authority, studio, studioDirection, editorialAuthority: authority, editorialStudioDirection: studioDirection })
       : fallbackPrompt;
     setEditorialBusy(true);
     showToast("Generating in studio…", "info");
@@ -20065,6 +20280,55 @@ If no relationship changes, respond "No relationship updates needed."` },
     ...prev,
     dropdowns: (prev.dropdowns || []).map(r => r.id === rowId ? { ...r, ...patch, id: patch.group || patch.value ? `${patch.group || r.group}.${String(patch.value || r.value || r.id).replace(/[^a-z0-9]+/gi, "_").replace(/^_|_$/g, "").toLowerCase()}` : r.id } : r)
   }), ""), [updateAppConfigLocal]);
+
+  const openDropdownOptionEditor = useCallback(({ group, value = "", title = "Dropdown option", metadataDefaults = {}, label = "", notes = "", mode = "edit" }) => {
+    const rows = appConfig?.dropdowns || [];
+    const existing = rows.find(r => r.group === group && String(r.value || "") === String(value || "")) || rows.find(r => r.id === value);
+    const baseValue = existing?.value || value || `new_option_${Date.now().toString(36).slice(-4)}`;
+    const baseLabel = existing?.label || label || "New Option";
+    const meta = { ...metadataDefaults, ...parseJSONSafe(existing?.metadataJSON, {}) };
+    const row = existing || {
+      id: dropdownRowIdFor(group, baseValue), group, value: baseValue, label: baseLabel,
+      sort: (rows.filter(r => r.group === group).length + 1) * 10,
+      active: "TRUE", customAllowed: "TRUE", notes, metadataJSON: JSON.stringify(meta, null, 2),
+    };
+    setDropdownOptionEditor({ mode: existing ? "edit" : mode, group, rowId: row.id, title, originalValue: existing?.value || "", draft: { ...row, metadataJSON: row.metadataJSON || JSON.stringify(meta, null, 2) }, error: "" });
+  }, [appConfig?.dropdowns]);
+
+  const saveDropdownOptionEditor = useCallback(async () => {
+    const ed = dropdownOptionEditor;
+    if (!ed?.draft?.group) return;
+    const draft = { ...ed.draft };
+    const safeValue = dropdownValueSlug(draft.value || draft.label || "option");
+    const row = { ...draft, value: safeValue, id: dropdownRowIdFor(draft.group, safeValue), active: draft.active || "TRUE", customAllowed: draft.customAllowed || "TRUE", metadataJSON: draft.metadataJSON || "{}" };
+    try { JSON.parse(row.metadataJSON || "{}"); } catch { setDropdownOptionEditor(prev => prev ? { ...prev, error: "metadataJSON must be valid JSON" } : prev); return; }
+    const nextCfg = normalizeAppConfig({
+      ...appConfig,
+      dropdowns: (() => {
+        const rows = appConfig?.dropdowns || [];
+        const without = rows.filter(r => r.id !== ed.rowId && !(r.group === ed.group && r.value === ed.originalValue));
+        return [...without, row];
+      })(),
+    });
+    commitLiveAppConfig(nextCfg);
+    setConfigDirty(true);
+    setConfigDropdownGroup(row.group);
+    try {
+      setDropdownOptionSaving(true);
+      const access = await prepareConfigSheetAccess(`dropdown:${row.group}`);
+      if (!access.ok) throw new Error(access.message || "No config spreadsheet connected");
+      const saved = await ConfigSheets.save(nextCfg);
+      commitLiveAppConfig(saved);
+      setConfigDirty(false);
+      showToast("Dropdown option saved to Google Sheets", "success");
+      setDropdownOptionEditor(null);
+    } catch (e) {
+      const msg = e?.message || String(e);
+      setConfigError(msg);
+      setDropdownOptionEditor(prev => prev ? { ...prev, error: msg } : prev);
+      showToast(`Dropdown save failed: ${msg}`, "error");
+    } finally { setDropdownOptionSaving(false); }
+  }, [dropdownOptionEditor, appConfig, commitLiveAppConfig, prepareConfigSheetAccess, showToast]);
 
   const addConfigPromptRow = useCallback((kind = configPromptKind) => {
     const isImagePrompt = kind === "imagePromptTemplates";
@@ -25506,8 +25770,9 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                       showToast("Generating portrait...", "info");
                       try {
                         const wardrobe = charWardrobe(editingChar);
-                        const subjectDescription = `${_stripFacialClauses(editingChar.appearance) || ""}${editingChar.build ? `, build: ${editingChar.build}` : ""}${wardrobe ? `, wearing ${wardrobe}` : ""}`;
                         const lookAlikeLock = editingChar.lookAlike ? `The face is exactly ${editingChar.lookAlike}'s — unmistakably ${editingChar.lookAlike}'s face. Do not alter or describe individual facial features.` : "";
+                        const subjectDescription = `${_stripFacialClauses(editingChar.appearance) || ""}${editingChar.build ? `, build: ${editingChar.build}` : ""}${wardrobe ? `, wearing ${wardrobe}` : ""}${lookAlikeLock ? `
+${lookAlikeLock}` : ""}`;
                         const fallbackPortraitPrompt = `Create a realistic model catalogue portrait (Frame: Strict upper body model catalogue portrait. Camera is at eye level, centered on the subject. Subject's head occupies approximately 30% of the image height from crown to chin. Shoulders visible below the chin, upper chest visible, crop at mid-torso. No full body, only waist-up. Subject faces directly forward, looking into the camera lens. Natural neutral catalogue expression, relaxed shoulders, simple upright posture, fully clothed unless the saved wardrobe says otherwise.` +
                           `Pure solid white (#FFFFFF). No gradients. No shadows on the background. No texture. No color tint. No bokeh. No objects. Just flat, even, pure white from edge to edge. ` +
                           `Subject: ${subjectDescription}.` +
@@ -25516,10 +25781,10 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                         const livePortraitTpl = await getLivePromptTemplate("character.studio.quickPortrait", "promptTemplatesCharacterStudio");
                         updateAiActivity(portraitActivityId, { title: "Generate AI Portrait", detail: "Prompt loaded · building image request", status: "working" });
                         const rawPrompt = livePortraitTpl?.user
-                          ? renderConfigTemplate(livePortraitTpl.user, { character: editingChar, characterName: editingChar.name || "the character", subjectDescription, lookAlikeLock, wardrobe })
+                          ? renderConfigTemplate(livePortraitTpl.user, { character: editingChar, characterName: editingChar.name || "the character", subjectDescription, lookAlikeLock, wardrobe, identitySeed: subjectDescription, wardrobeSeed: wardrobe })
                           : fallbackPortraitPrompt;
                         const prompt = String(rawPrompt || fallbackPortraitPrompt);
-                        const imageUrl = await _genSingleImageRef.current(prompt, "3:4", null, { id: portraitActivityId, title: "Generate AI Portrait", detail: `Portrait for ${editingChar.name || "character"}`, promptKind: "character", promptId: "character.studio.quickPortrait", characterName: editingChar.name, subjectDescription, cameraAngle: "3:4 portrait" });
+                        const imageUrl = await _genSingleImageRef.current(prompt, "3:4", null, { id: portraitActivityId, title: "Generate AI Portrait", detail: `Portrait for ${editingChar.name || "character"}`, promptKind: "character", promptId: "character.studio.quickPortrait", characterName: editingChar.name, subjectDescription, identitySeed: subjectDescription, wardrobe, clothingDesign: wardrobe, cameraAngle: "3:4 portrait" });
                         if (imageUrl) {
                           updateCharById(editingCharId, "image", imageUrl);
                           const qa = _lastImageQaRef.current;
@@ -26063,7 +26328,7 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                   </div>
                   {portfolioBusy && portfolioBusy.charId === editingCharId ? (
                     <div style={{ padding: "10px 12px", background: "var(--nf-bg-deep)", border: "1px solid var(--nf-accent)", borderRadius: 2 }}>
-                      <div style={{ fontSize: 11, color: "var(--nf-accent)", marginBottom: 6 }}>Generating {MODEL_PORTFOLIO_PACKAGES[portfolioBusy.pkg]?.label} — shot {portfolioBusy.done + 1} of {portfolioBusy.total}: {portfolioBusy.label}…</div>
+                      <div style={{ fontSize: 11, color: "var(--nf-accent)", marginBottom: 6 }}>Generating {modelPortfolioPackages[portfolioBusy.pkg]?.label} — shot {portfolioBusy.done + 1} of {portfolioBusy.total}: {portfolioBusy.label}…</div>
                       <div style={{ height: 4, background: "var(--nf-border)", borderRadius: 2, overflow: "hidden" }}>
                         <div style={{ width: `${Math.round((portfolioBusy.done / portfolioBusy.total) * 100)}%`, height: "100%", background: "var(--nf-accent)", transition: "width 0.3s" }} />
                       </div>
@@ -26073,7 +26338,7 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                     <>
                     <input id={`pfwardrobe-${editingCharId}`} placeholder="Optional outfit for this set (else uses saved wardrobe)" className="nf-input" style={{ width: "100%", fontSize: 11, padding: "3px 8px", marginBottom: 6 }} />
                     <div style={{ display: "grid", gap: 8 }}>
-                      {Object.entries(MODEL_PORTFOLIO_PACKAGES).map(([key, pkg]) => {
+                      {Object.entries(modelPortfolioPackages).map(([key, pkg]) => {
                         const selKey = `${editingCharId}:${key}`;
                         const selectedShot = portfolioShotSelections[selKey] || "all";
                         const selectedShotDef = pkg.shots.find(s => s.key === selectedShot);
@@ -26081,12 +26346,15 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                         return (
                           <div key={key} className="nf-portfolio-package-card">
                             <div className="nf-portfolio-package-main">
-                              <button type="button" onClick={() => { const w = document.getElementById(`pfwardrobe-${editingCharId}`)?.value.trim(); setOpenPortfolioShotMenu(null); generateModelPortfolio(editingChar, key, w, selectedShot); }} disabled={!!portfolioBusy}
-                                className="nf-btn-micro nf-portfolio-generate-btn" title={pkg.blurb}>
-                                <Icons.Sparkle />
-                                <span>{pkg.label}</span>
-                                <span className="nf-portfolio-generate-meta">{selectedLabel}</span>
-                              </button>
+                              <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 26px", gap: 5, alignItems: "center" }}>
+                                <button type="button" onClick={() => { const w = document.getElementById(`pfwardrobe-${editingCharId}`)?.value.trim(); setOpenPortfolioShotMenu(null); generateModelPortfolio(editingChar, key, w, selectedShot); }} disabled={!!portfolioBusy}
+                                  className="nf-btn-micro nf-portfolio-generate-btn" title={pkg.blurb}>
+                                  <Icons.Sparkle />
+                                  <span>{pkg.label}</span>
+                                  <span className="nf-portfolio-generate-meta">{selectedLabel}</span>
+                                </button>
+                                <button type="button" className="nf-portfolio-shot-menu-edit" onClick={() => openDropdownOptionEditor({ group: MODEL_PORTFOLIO_PACKAGE_GROUP, value: key, title: `Edit package: ${pkg.label}`, metadataDefaults: { blurb: pkg.blurb || "", style: pkg.style || "" }, label: pkg.label, notes: "Model portfolio package. Label changes the package dropdown; style feeds every shot in this package." })} title={`Edit package option: ${pkg.label}`} aria-label={`Edit package option: ${pkg.label}`}><Icons.Settings /></button>
+                              </div>
                               <div className="nf-portfolio-shot-picker">
                                 <button type="button" onClick={() => setOpenPortfolioShotMenu(prev => prev === selKey ? null : selKey)} className="nf-portfolio-shot-trigger" title="Render all shots or one specific shot" aria-haspopup="menu" aria-expanded={openPortfolioShotMenu === selKey}>
                                   <span>{selectedLabel}</span>
@@ -26103,11 +26371,18 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                                         <button type="button" className="nf-portfolio-shot-menu-label" onClick={() => { setPortfolioShotSelections(prev => ({ ...prev, [selKey]: shot.key })); setOpenPortfolioShotMenu(null); }} title={`Render only ${shot.label}`}>
                                           <span>{shot.label}</span>
                                         </button>
-                                        <button type="button" className="nf-portfolio-shot-menu-edit" onClick={(e) => { e.stopPropagation(); openPortfolioPromptEditor(key, shot.key); }} title={`Edit prompt: ${shot.label}`} aria-label={`Edit prompt for ${shot.label}`}>
+                                        <button type="button" className="nf-portfolio-shot-menu-edit" onClick={(e) => { e.stopPropagation(); openDropdownOptionEditor({ group: modelPortfolioShotGroup(key), value: shot.key, title: `Edit shot option: ${shot.label}`, metadataDefaults: { framing: shot.framing || "3:4", direction: shot.direction || "" }, label: shot.label, notes: "Model portfolio shot. Label changes the dropdown; direction/framing feed the default image prompt." }); }} title={`Edit dropdown option: ${shot.label}`} aria-label={`Edit dropdown option for ${shot.label}`}>
+                                          <Icons.Settings />
+                                        </button>
+                                        <button type="button" className="nf-portfolio-shot-menu-edit" onClick={(e) => { e.stopPropagation(); openPortfolioPromptEditor(key, shot.key); }} title={`Edit prompt template: ${shot.label}`} aria-label={`Edit prompt template for ${shot.label}`}>
                                           <Icons.Pen />
                                         </button>
                                       </div>
                                     ))}
+                                    <button type="button" className="nf-portfolio-shot-menu-row" onClick={() => openDropdownOptionEditor({ group: modelPortfolioShotGroup(key), value: `new_shot_${Date.now().toString(36).slice(-4)}`, title: `Add shot to ${pkg.label}`, metadataDefaults: { framing: "3:4", direction: "Describe the new shot direction here." }, label: "New Shot", notes: "Custom model portfolio shot." })} role="menuitem" title={`Add a new shot to ${pkg.label}`}>
+                                      <span>+ Add shot</span>
+                                      <span className="nf-portfolio-shot-count">new</span>
+                                    </button>
                                   </div>
                                 )}
                               </div>
@@ -26115,6 +26390,9 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                           </div>
                         );
                       })}
+                      <button type="button" className="nf-btn nf-btn-ghost" style={{ fontSize: 11, justifyContent: "center" }} onClick={() => openDropdownOptionEditor({ group: MODEL_PORTFOLIO_PACKAGE_GROUP, value: `new_package_${Date.now().toString(36).slice(-4)}`, title: "Add model portfolio package", metadataDefaults: { blurb: "Custom model portfolio package.", style: "Photoreal model-portfolio studio session, consistent lighting and styling." }, label: "New Package", notes: "Custom model portfolio package." })}>
+                        <Icons.Plus /> Add portfolio package
+                      </button>
                     </div>
                     </>
                   )}
@@ -27298,7 +27576,7 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                                             if (!members.length) { showToast("No non-bulk members", "error"); return; }
                                             const memberDescs = members.map(m => `- ${m.name} (${m.role}): face is exactly ${m.lookAlike || "unspecified"}'s face (do not describe facial features)${m.build ? `, ${m.build} build` : ""}${_stripFacialClauses(m.appearance) ? `, ${_stripFacialClauses(m.appearance)}` : ""}`).join("\n");
                                             const liveTpl = await getLivePromptTemplate("world.orgGroupPhotoPrompt", "promptTemplatesWorld");
-                                            const vars = { project, world: item, organization: item, item, members, memberDescs, orgName: item?.name || "unnamed" };
+                                            const vars = { project, world: item, organization: item, item, members, memberDescs, orgName: item?.name || "unnamed", name: item?.name || "unnamed", organizationDescription: item?.description || "", organizationPurpose: item?.orgPurpose || "" };
                                             const systemContent = liveTpl?.system ? renderConfigTemplate(liveTpl.system, vars) : "Create a COMPLETE image generation prompt for a formal group portrait. Every person fully described. Output ONLY the prompt.";
                                             const userContent = liveTpl?.user ? renderConfigTemplate(liveTpl.user, vars) : `Group photo for "${item?.name || "unnamed"}".
 Members:
@@ -30874,13 +31152,15 @@ Speech pattern: ${char.speechPattern || ""}` },
                 </div>
                 <div style={{ display: "grid", gap: 6 }}>
                   {(appConfig?.dropdowns || []).filter(r => r.group === configDropdownGroup).sort((a,b)=>Number(a.sort||0)-Number(b.sort||0)).map(row => (
-                    <div key={row.id} style={{ display: "grid", gridTemplateColumns: "minmax(120px, 1fr) minmax(120px, 1fr) 70px 90px", gap: 6, alignItems: "center", padding: 8, border: "1px solid var(--nf-border)", borderRadius: 10, background: "var(--nf-bg-surface)" }}>
+                    <div key={row.id} style={{ display: "grid", gridTemplateColumns: "minmax(120px, 1fr) minmax(120px, 1fr) 70px minmax(160px, 1.4fr) 90px 34px", gap: 6, alignItems: "center", padding: 8, border: "1px solid var(--nf-border)", borderRadius: 10, background: "var(--nf-bg-surface)" }}>
                       <input value={row.label || ""} onChange={e => updateConfigDropdownRow(row.id, { label: e.target.value })} className="nf-input" style={{ fontSize: 11 }} placeholder="Label" />
                       <input value={row.value || ""} onChange={e => updateConfigDropdownRow(row.id, { value: e.target.value })} className="nf-input" style={{ fontSize: 11 }} placeholder="Value" />
                       <input value={row.sort || ""} onChange={e => updateConfigDropdownRow(row.id, { sort: e.target.value })} className="nf-input" style={{ fontSize: 11 }} placeholder="Sort" />
+                      <input value={row.metadataJSON || "{}"} onChange={e => updateConfigDropdownRow(row.id, { metadataJSON: e.target.value })} className="nf-input" style={{ fontSize: 11, fontFamily: "var(--nf-font-mono)" }} placeholder='metadataJSON, e.g. {"direction":"..."}' />
                       <button onClick={() => updateConfigDropdownRow(row.id, { active: cfgBool(row.active, true) ? "FALSE" : "TRUE" })} className="nf-btn nf-btn-ghost" style={{ fontSize: 10, opacity: cfgBool(row.active, true) ? 1 : 0.55 }}>
                         {cfgBool(row.active, true) ? "Active" : "Hidden"}
                       </button>
+                      <button onClick={() => openDropdownOptionEditor({ group: row.group, value: row.value, title: `Edit ${row.label || row.value}` })} className="nf-btn-icon" title="Open full dropdown option editor" aria-label="Open dropdown option editor"><Icons.Settings /></button>
                     </div>
                   ))}
                   {!(appConfig?.dropdowns || []).some(r => r.group === configDropdownGroup) && <div style={{ fontSize: 12, color: "var(--nf-text-muted)" }}>No rows in this group yet.</div>}
@@ -30926,10 +31206,10 @@ Speech pattern: ${char.speechPattern || ""}` },
                         <input value={selected.name || selected.label || ""} onChange={e => updateConfigPromptRow(kind, selected.id, kind === "imagePromptTemplates" ? { label: e.target.value } : { name: e.target.value })} className="nf-input" style={{ fontSize: 11 }} placeholder="Name / label" />
                       </div>
                       {isTextPromptTable ? <>
-                        <PromptVariableEditor value={selected.system || ""} onChange={e => updateConfigPromptRow(kind, selected.id, { system: e.target.value })} rows={4} placeholder="System prompt" />
-                        <PromptVariableEditor value={selected.user || ""} onChange={e => updateConfigPromptRow(kind, selected.id, { user: e.target.value })} rows={6} placeholder="User prompt template. Use {{context}}, {{character}}, {{story}}, etc." />
+                        <PromptVariableEditor value={selected.system || ""} onChange={e => updateConfigPromptRow(kind, selected.id, { system: e.target.value })} rows={4} placeholder="System prompt" promptId={selected.id} />
+                        <PromptVariableEditor value={selected.user || ""} onChange={e => updateConfigPromptRow(kind, selected.id, { user: e.target.value })} rows={6} placeholder="User prompt template. Use {{context}}, {{character}}, {{story}}, etc." promptId={selected.id} />
                       </> : <>
-                        <PromptVariableEditor value={selected.promptTemplate || ""} onChange={e => updateConfigPromptRow(kind, selected.id, { promptTemplate: e.target.value })} rows={7} placeholder="Image prompt template" />
+                        <PromptVariableEditor value={selected.promptTemplate || ""} onChange={e => updateConfigPromptRow(kind, selected.id, { promptTemplate: e.target.value })} rows={7} placeholder="Image prompt template" promptId={selected.id} />
                         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
                           <input value={selected.variant || ""} onChange={e => updateConfigPromptRow(kind, selected.id, { variant: e.target.value })} className="nf-input" style={{ fontSize: 11 }} placeholder="Variant" />
                           <input value={selected.ratio || ""} onChange={e => updateConfigPromptRow(kind, selected.id, { ratio: e.target.value })} className="nf-input" style={{ fontSize: 11 }} placeholder="Ratio" />
@@ -31369,16 +31649,18 @@ Speech pattern: ${char.speechPattern || ""}` },
           /* Mobile hover-lock prevention */
 
           .nf-prompt-editor-shell { width: 100%; }
-          .nf-prompt-editor-stack { position: relative; width: 100%; min-height: 120px; background: var(--nf-bg-deep); border: 1px solid var(--nf-border); border-radius: 4px; overflow: hidden; }
-          .nf-prompt-highlight-layer, .nf-prompt-highlight-input { margin: 0; padding: 10px 12px; width: 100%; min-height: 100%; box-sizing: border-box; font-family: var(--nf-font-mono); font-size: 11px; line-height: 1.45; white-space: pre-wrap; overflow: auto; tab-size: 2; }
-          .nf-prompt-highlight-layer { position: absolute; inset: 0; color: var(--nf-text-dim); pointer-events: none; background: transparent; border: 0; }
-          .nf-prompt-highlight-input { position: relative; z-index: 1; color: transparent !important; caret-color: var(--nf-accent); background: transparent !important; border: 0 !important; resize: vertical; outline: none; }
-          .nf-prompt-highlight-input::selection { background: var(--nf-selection-bg); }
-          .nf-prompt-highlight-input::placeholder { color: var(--nf-text-muted); -webkit-text-fill-color: var(--nf-text-muted); }
+          .nf-prompt-plain-input { width: 100%; box-sizing: border-box; color: var(--nf-text) !important; background: var(--nf-bg-deep) !important; -webkit-text-fill-color: var(--nf-text) !important; resize: vertical; }
           .nf-prompt-variable { color: #6ee7b7; background: rgba(110,231,183,0.12); border: 1px solid rgba(110,231,183,0.28); border-radius: 3px; padding: 0 2px; font-weight: 700; }
+          .nf-prompt-variable-owned { color: #f59e0b; background: rgba(245,158,11,0.13); border-color: rgba(245,158,11,0.32); }
+          .nf-prompt-variable-unknown { color: #fb7185; background: rgba(251,113,133,0.12); border-color: rgba(251,113,133,0.32); }
           .nf-prompt-variable-legend { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-top: 6px; color: var(--nf-text-muted); font-size: 10.5px; line-height: 1.4; }
           .nf-prompt-variable-chip { color: #6ee7b7; background: rgba(110,231,183,0.12); border: 1px solid rgba(110,231,183,0.28); border-radius: 3px; padding: 1px 4px; font-family: var(--nf-font-mono); font-weight: 700; }
           .nf-prompt-variable-list { color: var(--nf-text-dim); }
+          .nf-prompt-variable-owned-text { color: #f59e0b; }
+          .nf-prompt-variable-unknown-text { color: #fb7185; }
+          .nf-prompt-variable-preview { margin-top: 6px; border: 1px solid var(--nf-border); border-radius: 4px; background: var(--nf-bg); color: var(--nf-text-dim); }
+          .nf-prompt-variable-preview summary { cursor: pointer; padding: 6px 8px; font-size: 10.5px; color: var(--nf-text-muted); user-select: none; }
+          .nf-prompt-variable-preview pre { margin: 0; padding: 8px; max-height: 180px; overflow: auto; white-space: pre-wrap; font-family: var(--nf-font-mono); font-size: 10.5px; line-height: 1.45; border-top: 1px solid var(--nf-border); }
 
           .nf-root { width: 100vw; height: 100vh; height: 100dvh; display: flex; font-family: var(--nf-font-body); background: var(--nf-bg-deep); color: var(--nf-text); overflow: hidden; font-size: 13px; transition: background 0.3s ease, color 0.3s ease; overscroll-behavior: none; -webkit-tap-highlight-color: transparent; padding: env(safe-area-inset-top, 0) env(safe-area-inset-right, 0) env(safe-area-inset-bottom, 0) env(safe-area-inset-left, 0); box-sizing: border-box; }
           .nf-btn, .nf-btn-icon, .nf-btn-icon-sm, .nf-btn-micro, button, [role="button"] { touch-action: manipulation; }
@@ -31471,7 +31753,7 @@ Speech pattern: ${char.speechPattern || ""}` },
           .nf-portfolio-shot-trigger span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
           .nf-portfolio-shot-trigger svg { flex-shrink: 0; width: 13px; height: 13px; }
           .nf-portfolio-shot-menu { position: absolute; z-index: 80; top: calc(100% + 4px); right: 0; width: min(290px, 80vw); max-height: 280px; overflow: auto; padding: 5px; border: 1px solid var(--nf-border); border-radius: 6px; background: var(--nf-dialog-bg); box-shadow: var(--nf-shadow-lg); display: grid; gap: 3px; }
-          .nf-portfolio-shot-menu-row { min-height: 28px; border: 1px solid transparent; border-radius: 4px; background: transparent; color: var(--nf-text-dim); display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; align-items: center; padding: 0 4px 0 8px; font-size: 11px; font-family: var(--nf-font-body); }
+          .nf-portfolio-shot-menu-row { min-height: 28px; border: 1px solid transparent; border-radius: 4px; background: transparent; color: var(--nf-text-dim); display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 6px; align-items: center; padding: 0 4px 0 8px; font-size: 11px; font-family: var(--nf-font-body); }
           button.nf-portfolio-shot-menu-row { cursor: pointer; text-align: left; width: 100%; }
           .nf-portfolio-shot-menu-row:hover, .nf-portfolio-shot-menu-row.active { background: var(--nf-bg-hover); border-color: var(--nf-border); color: var(--nf-text); }
           .nf-portfolio-shot-menu-row.active { border-color: var(--nf-border-focus); color: var(--nf-accent); }
@@ -33243,6 +33525,44 @@ Speech pattern: ${char.speechPattern || ""}` },
             finally { setLineageRegenBusy(null); }
           }} />}
         {editorialChar && <EditorialStudioModal char={editorialChar} isGenerating={editorialBusy} onGenerate={handleEditorialGenerate} onClose={() => setEditorialChar(null)} />}
+        {dropdownOptionEditor && (
+          <div onClick={() => !dropdownOptionSaving && setDropdownOptionEditor(null)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", zIndex: 9320, display: "flex", alignItems: "flex-start", justifyContent: "center", paddingTop: "8vh" }}>
+            <div onClick={e => e.stopPropagation()} style={{ width: "min(720px, 94vw)", maxHeight: "84vh", overflow: "auto", background: "var(--nf-bg-raised)", border: "1px solid var(--nf-border)", borderRadius: 8, boxShadow: "0 18px 60px rgba(0,0,0,0.45)" }}>
+              <div style={{ padding: "12px 16px", borderBottom: "1px solid var(--nf-border)", display: "flex", gap: 10, alignItems: "center" }}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: "var(--nf-text)" }}>{dropdownOptionEditor.title || "Edit dropdown option"}</div>
+                  <div style={{ fontSize: 10, color: "var(--nf-text-muted)", marginTop: 2 }}>{dropdownOptionEditor.draft?.group} · {dropdownOptionEditor.draft?.id}</div>
+                </div>
+                <button onClick={() => setDropdownOptionEditor(null)} disabled={dropdownOptionSaving} className="nf-btn-icon" aria-label="Close"><Icons.X /></button>
+              </div>
+              <div style={{ padding: 16, display: "grid", gap: 10 }}>
+                <div style={{ fontSize: 11, color: "var(--nf-text-muted)", lineHeight: 1.5 }}>
+                  Label is what the dropdown shows. Value is the stable key used by saved projects and prompt rows. For portfolio shots, <code>metadataJSON.direction</code> controls the default shot instruction and <code>metadataJSON.framing</code> controls aspect ratio.
+                </div>
+                {dropdownOptionEditor.error && <div style={{ fontSize: 11, color: "var(--nf-accent)", padding: "6px 8px", border: "1px solid var(--nf-accent)", background: "var(--nf-accent-glow)", borderRadius: 2 }}>{dropdownOptionEditor.error}</div>}
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                  <input value={dropdownOptionEditor.draft?.label || ""} onChange={e => setDropdownOptionEditor(prev => prev ? { ...prev, draft: { ...prev.draft, label: e.target.value } } : prev)} className="nf-input" style={{ fontSize: 12 }} placeholder="Dropdown label, e.g. Sad Shot" />
+                  <input value={dropdownOptionEditor.draft?.value || ""} onChange={e => setDropdownOptionEditor(prev => prev ? { ...prev, draft: { ...prev.draft, value: e.target.value } } : prev)} className="nf-input" style={{ fontSize: 12 }} placeholder="Stable value, e.g. sad" />
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 120px", gap: 8 }}>
+                  <input value={dropdownOptionEditor.draft?.group || ""} onChange={e => setDropdownOptionEditor(prev => prev ? { ...prev, draft: { ...prev.draft, group: e.target.value } } : prev)} className="nf-input" style={{ fontSize: 12 }} placeholder="Group" />
+                  <input value={dropdownOptionEditor.draft?.sort || ""} onChange={e => setDropdownOptionEditor(prev => prev ? { ...prev, draft: { ...prev.draft, sort: e.target.value } } : prev)} className="nf-input" style={{ fontSize: 12 }} placeholder="Sort" />
+                </div>
+                <textarea value={dropdownOptionEditor.draft?.metadataJSON || "{}"} onChange={e => setDropdownOptionEditor(prev => prev ? { ...prev, draft: { ...prev.draft, metadataJSON: e.target.value } } : prev)} rows={8} className="nf-input" style={{ fontSize: 12, fontFamily: "var(--nf-font-mono)", lineHeight: 1.45, resize: "vertical" }} placeholder='{"framing":"3:4","direction":"Shot direction..."}' />
+                <textarea value={dropdownOptionEditor.draft?.notes || ""} onChange={e => setDropdownOptionEditor(prev => prev ? { ...prev, draft: { ...prev.draft, notes: e.target.value } } : prev)} rows={2} className="nf-input" style={{ fontSize: 12, resize: "vertical" }} placeholder="Notes" />
+                <label style={{ fontSize: 12, color: "var(--nf-text-dim)", display: "flex", alignItems: "center", gap: 6 }}>
+                  <input type="checkbox" checked={cfgBool(dropdownOptionEditor.draft?.active, true)} onChange={e => setDropdownOptionEditor(prev => prev ? { ...prev, draft: { ...prev.draft, active: e.target.checked ? "TRUE" : "FALSE" } } : prev)} style={{ accentColor: "var(--nf-accent)" }} /> Active
+                </label>
+                <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", alignItems: "center" }}>
+                  <button onClick={() => setDropdownOptionEditor(null)} disabled={dropdownOptionSaving} className="nf-btn nf-btn-ghost" style={{ fontSize: 12 }}>Cancel</button>
+                  <button onClick={saveDropdownOptionEditor} disabled={dropdownOptionSaving} className="nf-btn nf-btn-primary" style={{ fontSize: 12 }}>
+                    {dropdownOptionSaving ? <><Spinner /> Saving…</> : "Save dropdown option"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
         {portfolioPromptEditor && (
           <div onClick={() => !portfolioPromptSaving && setPortfolioPromptEditor(null)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", zIndex: 9300, display: "flex", alignItems: "flex-start", justifyContent: "center", paddingTop: "8vh" }}>
             <div onClick={e => e.stopPropagation()} style={{ width: "min(760px, 94vw)", maxHeight: "84vh", overflow: "auto", background: "var(--nf-bg-raised)", border: "1px solid var(--nf-border)", borderRadius: 8, boxShadow: "0 18px 60px rgba(0,0,0,0.45)" }}>
@@ -33261,7 +33581,7 @@ Speech pattern: ${char.speechPattern || ""}` },
                 {portfolioPromptEditor.loading ? (
                   <div style={{ fontSize: 12, color: "var(--nf-text-muted)", display: "flex", alignItems: "center", gap: 8 }}><Spinner /> Loading prompt…</div>
                 ) : (
-                  <PromptVariableEditor value={portfolioPromptEditor.draft || ""} onChange={e => setPortfolioPromptEditor(prev => prev ? { ...prev, draft: e.target.value } : prev)} rows={18} style={{ fontSize: 11, fontFamily: "var(--nf-font-mono)", lineHeight: 1.45 }} placeholder="Prompt template" autoFocus />
+                  <PromptVariableEditor value={portfolioPromptEditor.draft || ""} onChange={e => setPortfolioPromptEditor(prev => prev ? { ...prev, draft: e.target.value } : prev)} rows={18} style={{ fontSize: 12, lineHeight: 1.5 }} placeholder="Prompt template" autoFocus promptId={portfolioPromptEditor.promptId} />
                 )}
                 <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", alignItems: "center" }}>
                   <button onClick={() => setPortfolioPromptEditor(null)} disabled={portfolioPromptSaving} className="nf-btn nf-btn-ghost" style={{ fontSize: 12 }}>Cancel</button>
