@@ -1,7 +1,7 @@
-// APP_UPDATE_TIMESTAMP: 20260606_193000_Jakarta
-// FILE_NAME: App_mod_character_dossier_image_prompts_v6_20260606.jsx
-// FIX_MARKER: character-dossier-image-prompt-variables-v6
-import { useState, useEffect, useRef, useCallback, useMemo, useReducer, memo, createContext, useContext, Fragment } from "react";
+// APP_UPDATE_TIMESTAMP: 20260606_223000_Jakarta
+// FILE_NAME: App_mod_real_character_fields_image_prompts_v8_20260606.jsx
+// FIX_MARKER: real-character-fields-image-prompts-v8
+import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, useReducer, memo, createContext, useContext, Fragment } from "react";
 import { createPortal } from "react-dom";
 
 // ─── CONSTANTS ───
@@ -858,9 +858,10 @@ const escapePromptHtml = (text = "") => String(text || "")
 
 const PROMPT_PLACEHOLDER_RE = /\{\{\s*([\w.]+)\s*\}\}/g;
 const IMAGE_PROMPT_RUNTIME_VARIABLES = new Set([
+  // Real character fields / values derived from real character fields only.
   "characterName", "character", "characters", "charactersList", "characterVisualDossier", "characterDossier", "identity", "identitySeed", "subjectDescription",
   "characterAge", "characterGender", "characterGenderNoun", "characterPronouns", "characterPronounSubject", "characterPronounObject", "characterPronounPossessive",
-  "characterEthnicity", "characterEthnicityPhrase", "characterPresence", "characterHeight", "characterWeight", "characterBuild", "characterPhysique", "characterAppearance", "characterSkinTone", "characterSkinTonePhrase", "characterBodyHair", "characterBodyHairPhrase", "characterVLines", "characterVLinesPhrase", "characterLookAlike", "characterFaceLine", "characterPermanentMarks",
+  "characterHeight", "characterBuild", "characterAppearance", "characterLookAlike", "characterFaceLine",
   "wardrobe", "wardrobeSeed", "wardrobePhrase", "clothingDesign",
   "sceneText", "context", "world", "worldView", "style", "sourcePrompt", "task", "variant",
   "timeOfDay", "cameraAngle", "ratio", "defaultRatio", "aspectRatio",
@@ -899,36 +900,144 @@ const renderPromptVariablesHtml = (text = "", promptId = "") => escapePromptHtml
   return `<span class="${cls}">{{${key}}}</span>`;
 });
 
+const getEditableText = (el) => {
+  if (!el) return "";
+  // textContent preserves the placeholder text inside highlighted spans and avoids HTML leakage.
+  return (el.textContent || "").replace(/\u00a0/g, " ");
+};
+
+const getSelectionTextOffset = (root) => {
+  try {
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return null;
+    const range = sel.getRangeAt(0);
+    if (!root.contains(range.startContainer)) return null;
+    const pre = range.cloneRange();
+    pre.selectNodeContents(root);
+    pre.setEnd(range.startContainer, range.startOffset);
+    return pre.toString().length;
+  } catch { return null; }
+};
+
+const setSelectionTextOffset = (root, offset) => {
+  if (!root || offset == null) return;
+  try {
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    let remaining = Math.max(0, offset);
+    let node = walker.nextNode();
+    while (node) {
+      const len = node.nodeValue?.length || 0;
+      if (remaining <= len) {
+        const range = document.createRange();
+        range.setStart(node, remaining);
+        range.collapse(true);
+        const sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(range);
+        return;
+      }
+      remaining -= len;
+      node = walker.nextNode();
+    }
+    const range = document.createRange();
+    range.selectNodeContents(root);
+    range.collapse(false);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+  } catch {}
+};
+
 const PromptVariableEditor = memo(({ value = "", onChange, rows = 8, placeholder = "", className = "", style = null, autoFocus = false, readOnly = false, title = "", promptId = "" }) => {
+  const editorRef = useRef(null);
+  const focusedRef = useRef(false);
+  const pendingCaretRef = useRef(null);
+  const lastValueRef = useRef(String(value || ""));
   const variableInfo = useMemo(() => classifyPromptVariables(value, promptId), [value, promptId]);
-  const previewHtml = useMemo(() => renderPromptVariablesHtml(value || "", promptId), [value, promptId]);
+  const editorHtml = useMemo(() => renderPromptVariablesHtml(value || "", promptId), [value, promptId]);
   const variables = variableInfo.vars;
+
+  const emitPlainText = useCallback((text) => {
+    lastValueRef.current = text;
+    if (onChange) onChange({ target: { value: text }, currentTarget: { value: text } });
+  }, [onChange]);
+
+  const syncHtml = useCallback((preserveCaret = false) => {
+    const el = editorRef.current;
+    if (!el) return;
+    const caret = preserveCaret ? (pendingCaretRef.current ?? getSelectionTextOffset(el)) : null;
+    if (el.innerHTML !== editorHtml) el.innerHTML = editorHtml;
+    if (preserveCaret && focusedRef.current) requestAnimationFrame(() => setSelectionTextOffset(el, caret));
+  }, [editorHtml]);
+
+  useLayoutEffect(() => {
+    const el = editorRef.current;
+    if (!el) return;
+    const incoming = String(value || "");
+    const current = getEditableText(el);
+    const preserve = focusedRef.current && (incoming === lastValueRef.current || incoming === current);
+    syncHtml(preserve);
+    lastValueRef.current = incoming;
+  }, [value, syncHtml]);
+
+  useEffect(() => {
+    if (autoFocus && editorRef.current) editorRef.current.focus();
+  }, [autoFocus]);
+
+  const handleInput = useCallback(() => {
+    const el = editorRef.current;
+    if (!el || readOnly) return;
+    pendingCaretRef.current = getSelectionTextOffset(el);
+    emitPlainText(getEditableText(el));
+  }, [emitPlainText, readOnly]);
+
+  const handlePaste = useCallback((e) => {
+    if (readOnly) return;
+    e.preventDefault();
+    const plain = e.clipboardData?.getData("text/plain") || "";
+    document.execCommand("insertText", false, plain);
+    requestAnimationFrame(handleInput);
+  }, [handleInput, readOnly]);
+
+  const handleFocus = useCallback(() => { focusedRef.current = true; }, []);
+  const handleBlur = useCallback(() => {
+    focusedRef.current = false;
+    pendingCaretRef.current = null;
+    // Re-highlight after edits so any newly typed {{variable}} becomes color-coded immediately after leaving the field.
+    syncHtml(false);
+  }, [syncHtml]);
+
+  const editorStyle = {
+    minHeight: `calc(${Math.max(2, Number(rows) || 8)} * 1.45em + 18px)`,
+    ...(style || {}),
+  };
+
   return (
     <div className="nf-prompt-editor-shell" title={title}>
-      <textarea
-        value={value}
-        onChange={onChange}
-        rows={rows}
-        placeholder={placeholder}
-        readOnly={readOnly}
-        autoFocus={autoFocus}
+      <div
+        ref={editorRef}
+        role="textbox"
+        aria-multiline="true"
+        aria-readonly={readOnly ? "true" : "false"}
+        aria-label={placeholder || title || "Prompt editor"}
+        contentEditable={!readOnly}
+        suppressContentEditableWarning
         spellCheck={false}
-        className={`nf-textarea nf-prompt-plain-input ${className || ""}`}
-        style={style || undefined}
+        data-placeholder={placeholder}
+        className={`nf-textarea nf-prompt-rich-editor ${className || ""}`}
+        style={editorStyle}
+        onInput={handleInput}
+        onPaste={handlePaste}
+        onFocus={handleFocus}
+        onBlur={handleBlur}
       />
       <div className="nf-prompt-variable-legend">
         <span className="nf-prompt-variable-chip">{"{{runtimeVariable}}"}</span>
-        <span>Plain editable text. Keep runtime variable chips unless you intentionally want to remove that injected data.</span>
+        <span>Color-coded inside the editable prompt. Keep runtime variables unless you intentionally want to remove that injected data.</span>
         {variableInfo.editable.length > 0 && <span className="nf-prompt-variable-list">Runtime: {variableInfo.editable.slice(0, 12).map(v => `{{${v}}}`).join(", ")}{variableInfo.editable.length > 12 ? ` +${variableInfo.editable.length - 12} more` : ""}</span>}
         {variableInfo.appOwned.length > 0 && <span className="nf-prompt-variable-list nf-prompt-variable-owned-text">App-owned legacy tokens found: {variableInfo.appOwned.map(v => `{{${v}}}`).join(", ")}. These should be baked by repair, not edited by hand.</span>}
         {variableInfo.unknown.length > 0 && <span className="nf-prompt-variable-list nf-prompt-variable-unknown-text">Unknown image tokens: {variableInfo.unknown.map(v => `{{${v}}}`).join(", ")}</span>}
       </div>
-      {variables.length > 0 && (
-        <details className="nf-prompt-variable-preview">
-          <summary>Preview with variables highlighted</summary>
-          <pre dangerouslySetInnerHTML={{ __html: previewHtml + "\n" }} />
-        </details>
-      )}
     </div>
   );
 });
@@ -1818,8 +1927,8 @@ const _stripPovPrefix = (povString) => (povString || "").replace(POV_PREFIX_RE, 
 // detection) must reference these so the lists can never drift apart. Drift was causing the
 // AI to never be asked for — or to silently drop — fields that the editor actually renders.
 const CHARACTER_TEXT_FIELDS = [
-  "gender","age","pronouns","orientation","aliases","occupation","height","weight","build","ethnicity","skinTone","bodyHair","vLines","tags",
-  "appearance","lookAlike","permanentMarks","personality","backstory","desires","shortTermGoals","longTermGoals",
+  "gender","age","pronouns","orientation","aliases","occupation","height","build","tags",
+  "appearance","personality","backstory","desires","shortTermGoals","longTermGoals",
   "speechPattern","voiceSamples","habits","fears","flaws","strengths","skills",
   "internalConflict","externalConflict","signatureItems","secrets","hiddenSecrets",
   "allegiances","arc","canonNotes",
@@ -4950,12 +5059,7 @@ const createDefaultCharacter = () => ({
   voiceSamples: "",
   allegiances: "",
   height: "",
-  weight: "",
   build: "",
-  ethnicity: "",
-  skinTone: "",
-  bodyHair: "",
-  vLines: "",
   permanentMarks: "", // tattoos, scars, birthmarks — permanent body features fed to Editorial Studio (NOT daily clothing)
   orientation: "",
   isBulk: false,
@@ -5020,12 +5124,12 @@ const DEFAULT_CHARACTER_TEMPLATES_UX = [
   { id: "main_romantic_lead", label: "Main Romantic Lead", role: "love interest", mode: "write", visibleFieldsJSON: '["name","role","appearance","personality","desires","speechPattern","arc"]', pinnedFieldsJSON: '["appearance","personality","speechPattern","desires","arc"]', defaultValuesJSON: '{"status":"alive"}', active: "TRUE", notes: "" },
   { id: "minor_character", label: "Minor Character", role: "minor", mode: "write", visibleFieldsJSON: '["name","role","appearance","personality"]', pinnedFieldsJSON: '["appearance","personality"]', defaultValuesJSON: '{"status":"alive"}', active: "TRUE", notes: "" },
   { id: "villain_antagonist", label: "Villain / Antagonist", role: "antagonist", mode: "continuity", visibleFieldsJSON: '["name","role","desires","fears","secrets","arc"]', pinnedFieldsJSON: '["desires","secrets","arc"]', defaultValuesJSON: '{"status":"alive"}', active: "TRUE", notes: "" },
-  { id: "visual_character", label: "Visual Character", role: "supporting", mode: "art", visibleFieldsJSON: '["name","role","lookAlike","age","pronouns","ethnicity","height","weight","build","skinTone","bodyHair","vLines","appearance","permanentMarks","artWardrobe"]', pinnedFieldsJSON: '["lookAlike","age","height","weight","appearance","skinTone","artWardrobe"]', defaultValuesJSON: '{"status":"alive"}', active: "TRUE", notes: "" },
+  { id: "visual_character", label: "Visual Character", role: "supporting", mode: "art", visibleFieldsJSON: '["name","role","lookAlike","appearance","height","build","artWardrobe"]', pinnedFieldsJSON: '["lookAlike","appearance","artWardrobe"]', defaultValuesJSON: '{"status":"alive"}', active: "TRUE", notes: "" },
   { id: "mystery_suspect", label: "Mystery Suspect", role: "supporting", mode: "continuity", visibleFieldsJSON: '["name","role","secrets","hiddenSecrets","canonNotes","arc"]', pinnedFieldsJSON: '["secrets","hiddenSecrets","canonNotes"]', defaultValuesJSON: '{"status":"alive"}', active: "TRUE", notes: "" },
 ];
 const CHAR_FIELD_LABELS_UX = {
   name: "Name", role: "Role", status: "Status", gender: "Gender", pronouns: "Pronouns", age: "Age", orientation: "Orientation",
-  lookAlike: "Look-alike", image: "Portrait", appearance: "Appearance", height: "Height", weight: "Weight", build: "Build", ethnicity: "Ethnicity / descent", skinTone: "Skin tone", bodyHair: "Body hair", vLines: "V-lines", permanentMarks: "Permanent marks",
+  lookAlike: "Look-alike", image: "Portrait", appearance: "Appearance", height: "Height", build: "Build", permanentMarks: "Permanent marks",
   artWardrobe: "Wardrobe", artAccessories: "Accessories", personality: "Personality", speechPattern: "Speech pattern", voiceSamples: "Voice samples",
   desires: "Desires", shortTermGoals: "Short-term goals", longTermGoals: "Long-term goals", fears: "Fears", flaws: "Flaws", strengths: "Strengths",
   skills: "Skills", habits: "Habits", backstory: "Backstory", arc: "Arc", signatureItems: "Signature items", secrets: "Open secrets",
@@ -5033,7 +5137,7 @@ const CHAR_FIELD_LABELS_UX = {
   canonNotes: "Canon notes", notes: "Author notes",
 };
 const CHAR_USED_BY_TAGS = {
-  appearance: ["Writing", "Art"], lookAlike: ["Art"], height: ["Art"], weight: ["Art"], build: ["Art"], ethnicity: ["Art"], skinTone: ["Art"], bodyHair: ["Art"], vLines: ["Art"], permanentMarks: ["Art", "Continuity"], artWardrobe: ["Art"], artAccessories: ["Art"], image: ["UI"],
+  appearance: ["Writing", "Art"], lookAlike: ["Art"], height: ["Art"], build: ["Art"], permanentMarks: ["Art", "Continuity"], artWardrobe: ["Art"], artAccessories: ["Art"], image: ["UI"],
   personality: ["Writing"], speechPattern: ["Writing"], voiceSamples: ["Writing"], desires: ["Writing"], arc: ["Writing", "Continuity"],
   backstory: ["Writing after reveal"], secrets: ["Writing"], hiddenSecrets: ["Writing after reveal"], currentEmotionalState: ["Writing", "Continuity"],
   obligationsOwed: ["Continuity"], knowledgeState: ["Continuity"], canonNotes: ["Writing"], notes: ["Private"],
@@ -5238,7 +5342,7 @@ const CONFIG_PROMPT_EDITOR_TABLES = [
 ];
 const CONFIG_TEXT_PROMPT_TABLE_KEYS = new Set(PROMPT_TEMPLATE_TABLE_KEYS);
 const CONFIG_SCHEMA_VERSION = "4";
-const PROMPT_STRUCTURE_RELEASE = "character-dossier-image-prompt-variables-v6-2026-06-06";
+const PROMPT_STRUCTURE_RELEASE = "real-character-fields-image-prompts-v8-2026-06-06";
 const cfgBool = (value, fallback = true) => {
   if (value == null || value === "") return fallback;
   if (typeof value === "boolean") return value;
@@ -5290,15 +5394,13 @@ const imagePromptValue = (v, fallback = "") => {
   return String(v);
 };
 
-const DEFAULT_IMAGE_CHARACTER_DOSSIER_TEMPLATE = `{{characterName}} is a Pokemon that mimic a {{characterAge}} {{characterGenderNoun}} {{characterEthnicityPhrase}} with a
+const DEFAULT_IMAGE_CHARACTER_DOSSIER_TEMPLATE = `{{characterName}} is a Pokemon that mimic a {{characterAge}} {{characterGenderNoun}}.
 
-{{characterPresence}}. {{characterPronounSubject}} stands at {{characterHeight}} and weighs around {{characterWeight}}. {{characterPronounPossessive}}
+{{characterAppearance}}
 
-physique is {{characterPhysique}}. {{characterAppearance}}
+{{characterPronounSubject}} stands at {{characterHeight}}. {{characterPronounPossessive}} build is {{characterBuild}}.
 
-{{characterSkinTonePhrase}} {{characterBodyHairPhrase}} {{characterVLinesPhrase}}
-
-{{characterFaceLine}}`;
+{{characterPronounPossessive}} face is... let's say most people will mistake {{characterPronounObject}} with {{characterLookAlike}}. Hahaha.`;
 const DEFAULT_IMAGE_CHARACTER_DOSSIER_BLOCK = "{{characterVisualDossier}}";
 const buildUniversalImagePromptTemplate = (vars = {}) => {
   const charactersList = imagePromptValue(vars.charactersList || vars.characterNames || vars.characterName, "{{charactersList}}");
@@ -5478,7 +5580,7 @@ const inlineAppOwnedImagePromptConstants = (text = "") => String(text || "")
   .replace(/\{\{\s*item\.orgPurpose\s*\}\}/g, "{{organizationPurpose}}");
 const imagePromptNeedsRebuild = (text = "") => {
   const t = String(text || "");
-  return /\{\{\s*(package(?:\.[\w]+)?|packageKey|packageStyle|shot(?:\.[\w]+)?|shotKey|shotLabel|shotDirection|samePersonLock|realismContract|lookAlikeLock|authority|studioDirection|world\.description|organization\.description|item\.description|item\.orgPurpose)\s*\}\}/.test(t);
+  return /\{\{\s*(package(?:\.[\w]+)?|packageKey|packageStyle|shot(?:\.[\w]+)?|shotKey|shotLabel|shotDirection|samePersonLock|realismContract|lookAlikeLock|authority|studioDirection|world\.description|organization\.description|item\.description|item\.orgPurpose|characterEthnicity(?:Phrase)?|characterPresence|characterWeight|characterPhysique|characterSkinTone(?:Phrase)?|characterBodyHair(?:Phrase)?|characterVLines(?:Phrase)?)\s*\}\}/.test(t);
 };
 const imagePromptNeedsDossierUpgrade = (row = {}) => {
   const id = String(row?.id || "");
@@ -5487,7 +5589,7 @@ const imagePromptNeedsDossierUpgrade = (row = {}) => {
   if (id === "world.orgGroupPhotoPrompt") return false;
   if (id === "scene.imagePrompt" || id === "image.scenePromptDirector" || id === "scene.illustration" || id === "chapter_illustration") return !text.includes("{{characterVisualDossier}}");
   if (isUniversalImageStructurePromptId(id) || UNIVERSAL_IMAGE_STRUCTURE_IMAGE_TEMPLATE_IDS.has(id)) {
-    return !(text.includes("{{characterAge}}") && text.includes("{{characterPronounSubject}}") && text.includes("{{characterHeight}}") && text.includes("{{characterFaceLine}}"));
+    return !(text.includes("{{characterAge}}") && text.includes("{{characterPronounSubject}}") && text.includes("{{characterHeight}}") && text.includes("{{characterLookAlike}}")) || imagePromptNeedsRebuild(text);
   }
   return false;
 };
@@ -5495,19 +5597,19 @@ const structurePromptTemplateRowForImageCreation = (row = {}) => {
   if (!isUniversalImageStructurePromptId(row?.id)) return row;
   const mustRebuild = !hasUniversalImagePromptStructure(row.user) || imagePromptNeedsRebuild(row.user) || imagePromptNeedsDossierUpgrade(row);
   const nextUser = mustRebuild ? buildUniversalImagePromptTemplate(universalImageTemplateVarsForPromptRow(row)) : inlineAppOwnedImagePromptConstants(row.user);
-  return { ...row, user: nextUser, version: Math.max(Number(row.version || 1), 11), notes: `${row.notes || ""}${String(row.notes || "").includes("Universal 1-7 image structure") ? "" : " Universal 1-7 image structure applied."}${String(row.notes || "").includes("Image variable taxonomy v4") ? "" : " Image variable taxonomy v4."}`.trim() };
+  return { ...row, user: nextUser, version: Math.max(Number(row.version || 1), 11), notes: `${row.notes || ""}${String(row.notes || "").includes("Universal 1-7 image structure") ? "" : " Universal 1-7 image structure applied."}${String(row.notes || "").includes("Real character-field dossier v8") ? "" : " Real character-field dossier v8."}`.trim() };
 };
 const structureImagePromptTemplateRowForImageCreation = (row = {}) => {
   if (!UNIVERSAL_IMAGE_STRUCTURE_IMAGE_TEMPLATE_IDS.has(String(row?.id || ""))) return row;
   const mustRebuild = !hasUniversalImagePromptStructure(row.promptTemplate) || imagePromptNeedsRebuild(row.promptTemplate) || imagePromptNeedsDossierUpgrade(row);
   const nextPromptTemplate = mustRebuild ? buildUniversalImagePromptTemplate(universalImageTemplateVarsForImageTemplateRow(row)) : inlineAppOwnedImagePromptConstants(row.promptTemplate);
-  return { ...row, promptTemplate: nextPromptTemplate, notes: `${row.notes || ""}${String(row.notes || "").includes("Universal 1-7 image structure") ? "" : " Universal 1-7 image structure applied."}${String(row.notes || "").includes("Image variable taxonomy v4") ? "" : " Image variable taxonomy v4."}`.trim() };
+  return { ...row, promptTemplate: nextPromptTemplate, notes: `${row.notes || ""}${String(row.notes || "").includes("Universal 1-7 image structure") ? "" : " Universal 1-7 image structure applied."}${String(row.notes || "").includes("Real character-field dossier v8") ? "" : " Real character-field dossier v8."}`.trim() };
 };
 const structureImageTemplateRowForImageCreation = (row = {}) => {
   if (!UNIVERSAL_IMAGE_STRUCTURE_IMAGE_TEMPLATE_IDS.has(String(row?.id || ""))) return row;
   const mustRebuild = !hasUniversalImagePromptStructure(row.promptTemplate) || imagePromptNeedsRebuild(row.promptTemplate) || imagePromptNeedsDossierUpgrade(row);
   const nextPromptTemplate = mustRebuild ? buildUniversalImagePromptTemplate(universalImageTemplateVarsForImageTemplateRow(row)) : inlineAppOwnedImagePromptConstants(row.promptTemplate);
-  return { ...row, promptTemplate: nextPromptTemplate, notes: `${row.notes || ""}${String(row.notes || "").includes("Universal 1-7 image structure") ? "" : " Universal 1-7 image structure applied."}${String(row.notes || "").includes("Image variable taxonomy v4") ? "" : " Image variable taxonomy v4."}`.trim() };
+  return { ...row, promptTemplate: nextPromptTemplate, notes: `${row.notes || ""}${String(row.notes || "").includes("Universal 1-7 image structure") ? "" : " Universal 1-7 image structure applied."}${String(row.notes || "").includes("Real character-field dossier v8") ? "" : " Real character-field dossier v8."}`.trim() };
 };
 const applyUniversalImageStructureToConfig = (config = {}) => {
   const out = { ...config };
@@ -6480,14 +6582,8 @@ const imagePromptPronounParts = (char = {}) => {
 const imagePromptCharacterDossierVars = (char = {}) => {
   const p = imagePromptPronounParts(char);
   const name = String(char?.name || "this character").trim() || "this character";
-  const ethnicityRaw = String(char?.ethnicity || char?.ancestry || char?.heritage || "European descent").trim();
-  const ethnicityPhrase = /^of\b/i.test(ethnicityRaw) ? ethnicityRaw : `of ${ethnicityRaw}`;
-  const appearance = String(char?.appearance || char?.bodyDescription || char?.visualDescription || char?.build || "body and appearance details from the character profile").trim();
-  const build = String(char?.physique || char?.bodyType || char?.build || appearance || "body and appearance details from the character profile").trim();
-  const skin = String(char?.skinTone || char?.skin || "").trim();
-  const bodyHair = String(char?.bodyHair || "").trim();
-  const vLines = String(char?.vLines || char?.vLine || "").trim();
-  const lookAlike = String(char?.lookAlike || char?.faceClaim || "").trim();
+  const appearance = String(char?.appearance || "Use the Appearance field for the complete body/physique/skin/hair/other visual description.").trim();
+  const lookAlike = String(char?.lookAlike || "").trim();
   return {
     characterName: name,
     characterAge: char?.age ? String(char.age).trim() + (String(char.age).match(/year/i) ? "" : "-year-old") : "adult",
@@ -6497,23 +6593,11 @@ const imagePromptCharacterDossierVars = (char = {}) => {
     characterPronounSubject: p.subject,
     characterPronounObject: p.object,
     characterPronounPossessive: p.possessive,
-    characterEthnicity: ethnicityRaw,
-    characterEthnicityPhrase: ethnicityPhrase,
-    characterPresence: char?.presence || char?.visualPresence || "commanding, composed presence",
     characterHeight: char?.height || "unspecified height",
-    characterWeight: char?.weight || "unspecified weight",
     characterBuild: char?.build || "unspecified build",
-    characterPhysique: build,
     characterAppearance: appearance,
-    characterSkinTone: skin,
-    characterSkinTonePhrase: skin ? `${p.possessive} skin is ${skin}.` : "",
-    characterBodyHair: bodyHair,
-    characterBodyHairPhrase: bodyHair ? `Body hair is ${bodyHair}.` : "",
-    characterVLines: vLines,
-    characterVLinesPhrase: vLines ? `${p.possessive} v-lines are ${vLines}.` : "",
-    characterLookAlike: lookAlike,
-    characterFaceLine: lookAlike ? `${p.possessive} face is... let's say most people will mistake ${p.object} with ${lookAlike}. Hahaha.` : `${p.possessive} face follows the character profile exactly; no separate look-alike is set.`,
-    characterPermanentMarks: char?.permanentMarks || "",
+    characterLookAlike: lookAlike || "the configured Look-Alike field",
+    characterFaceLine: lookAlike ? `${p.possessive} face is... let's say most people will mistake ${p.object} with ${lookAlike}. Hahaha.` : `${p.possessive} face follows the Look-Alike field exactly; no Look-Alike is set yet.`,
   };
 };
 const buildCharacterImageDossier = (char = {}, template = DEFAULT_IMAGE_CHARACTER_DOSSIER_TEMPLATE) => renderConfigTemplate(template, imagePromptCharacterDossierVars(char)).replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
@@ -18447,10 +18531,8 @@ Then 2-3 sentences describing the specific scene idea, character actions, and em
       char.lookAlike && `Face/look-alike reference: resembles ${char.lookAlike}`,
       char.age && `Age: ${char.age}`,
       char.gender && `Gender presentation: ${char.gender}`,
-      char.ethnicity && `Ethnicity/ancestry: ${char.ethnicity}`,
       char.height && `Height: ${char.height}`,
       char.build && `Build/body type: ${char.build}`,
-      char.skinTone && `Skin tone: ${char.skinTone}`,
       char.hair && `Hair: ${char.hair}`,
       char.eyes && `Eyes: ${char.eyes}`,
       char.face && `Face: ${char.face}`,
@@ -31735,18 +31817,17 @@ Speech pattern: ${char.speechPattern || ""}` },
           /* Mobile hover-lock prevention */
 
           .nf-prompt-editor-shell { width: 100%; }
-          .nf-prompt-plain-input { width: 100%; box-sizing: border-box; color: var(--nf-text) !important; background: var(--nf-bg-deep) !important; -webkit-text-fill-color: var(--nf-text) !important; resize: vertical; }
-          .nf-prompt-variable { color: #6ee7b7; background: rgba(110,231,183,0.12); border: 1px solid rgba(110,231,183,0.28); border-radius: 3px; padding: 0 2px; font-weight: 700; }
-          .nf-prompt-variable-owned { color: #f59e0b; background: rgba(245,158,11,0.13); border-color: rgba(245,158,11,0.32); }
-          .nf-prompt-variable-unknown { color: #fb7185; background: rgba(251,113,133,0.12); border-color: rgba(251,113,133,0.32); }
+          .nf-prompt-rich-editor { width: 100%; box-sizing: border-box; color: var(--nf-text) !important; background: var(--nf-bg-deep) !important; -webkit-text-fill-color: initial !important; resize: vertical; overflow: auto; white-space: pre-wrap; word-break: break-word; outline: none; user-select: text; cursor: text; font-family: var(--nf-font-mono); font-size: 12px; line-height: 1.5; }
+          .nf-prompt-rich-editor:focus { border-color: var(--nf-border-focus); box-shadow: 0 0 0 2px var(--nf-accent-glow); }
+          .nf-prompt-rich-editor:empty::before { content: attr(data-placeholder); color: var(--nf-editor-placeholder); pointer-events: none; }
+          .nf-prompt-variable { color: #6ee7b7; background: rgba(110,231,183,0.12); border: 1px solid rgba(110,231,183,0.28); border-radius: 3px; padding: 0 2px; font-weight: 700; -webkit-text-fill-color: #6ee7b7; }
+          .nf-prompt-variable-owned { color: #f59e0b; background: rgba(245,158,11,0.13); border-color: rgba(245,158,11,0.32); -webkit-text-fill-color: #f59e0b; }
+          .nf-prompt-variable-unknown { color: #fb7185; background: rgba(251,113,133,0.12); border-color: rgba(251,113,133,0.32); -webkit-text-fill-color: #fb7185; }
           .nf-prompt-variable-legend { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-top: 6px; color: var(--nf-text-muted); font-size: 10.5px; line-height: 1.4; }
           .nf-prompt-variable-chip { color: #6ee7b7; background: rgba(110,231,183,0.12); border: 1px solid rgba(110,231,183,0.28); border-radius: 3px; padding: 1px 4px; font-family: var(--nf-font-mono); font-weight: 700; }
           .nf-prompt-variable-list { color: var(--nf-text-dim); }
           .nf-prompt-variable-owned-text { color: #f59e0b; }
           .nf-prompt-variable-unknown-text { color: #fb7185; }
-          .nf-prompt-variable-preview { margin-top: 6px; border: 1px solid var(--nf-border); border-radius: 4px; background: var(--nf-bg); color: var(--nf-text-dim); }
-          .nf-prompt-variable-preview summary { cursor: pointer; padding: 6px 8px; font-size: 10.5px; color: var(--nf-text-muted); user-select: none; }
-          .nf-prompt-variable-preview pre { margin: 0; padding: 8px; max-height: 180px; overflow: auto; white-space: pre-wrap; font-family: var(--nf-font-mono); font-size: 10.5px; line-height: 1.45; border-top: 1px solid var(--nf-border); }
 
           .nf-root { width: 100vw; height: 100vh; height: 100dvh; display: flex; font-family: var(--nf-font-body); background: var(--nf-bg-deep); color: var(--nf-text); overflow: hidden; font-size: 13px; transition: background 0.3s ease, color 0.3s ease; overscroll-behavior: none; -webkit-tap-highlight-color: transparent; padding: env(safe-area-inset-top, 0) env(safe-area-inset-right, 0) env(safe-area-inset-bottom, 0) env(safe-area-inset-left, 0); box-sizing: border-box; }
           .nf-btn, .nf-btn-icon, .nf-btn-icon-sm, .nf-btn-micro, button, [role="button"] { touch-action: manipulation; }
