@@ -2333,6 +2333,93 @@ const parseCharacterCueTableReply = (text = "", fields = []) => {
   }
   return result;
 };
+
+const _escapeRegExp = (value = "") => String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const _characterFieldSearchTerms = (fieldKey) => {
+  const safeKey = normalizeCharacterInterviewField(fieldKey);
+  if (!safeKey) return [];
+  const meta = CHARACTER_INTERVIEW_LABELS[safeKey] || {};
+  const aliasTerms = CHARACTER_FIELD_ALIASES[safeKey] || [];
+  const terms = [safeKey, meta.label, ...(aliasTerms || [])]
+    .map(v => String(v || "").trim())
+    .filter(Boolean);
+  const expanded = [];
+  for (const term of terms) {
+    expanded.push(term);
+    expanded.push(term.replace(/([a-z])([A-Z])/g, "$1 $2"));
+    expanded.push(term.replace(/[\/]/g, " "));
+  }
+  return [...new Set(expanded.map(t => normalizeCharacterCueLabel(t)).filter(t => t && t.length >= 3))];
+};
+const _fieldTermAppearsInText = (text, term) => {
+  const normalizedText = normalizeCharacterCueLabel(text);
+  const normalizedTerm = normalizeCharacterCueLabel(term);
+  if (!normalizedText || !normalizedTerm) return false;
+  const compactText = normalizedText.replace(/\s+/g, "");
+  const compactTerm = normalizedTerm.replace(/\s+/g, "");
+  if (compactTerm.length >= 4 && compactText.includes(compactTerm)) return true;
+  return new RegExp(`(?:^|\\b)${_escapeRegExp(normalizedTerm).replace(/\\\s+/g, "\\s+")}(?:\\b|$)`, "i").test(normalizedText);
+};
+const getRequestedCharacterCueFields = (text = "", character = {}, opts = {}) => {
+  const request = String(text || "").trim();
+  if (!request) return [];
+  const wantsPanelMutation = /\b(add|include|show|open|bring|put|give|need|want|insert|also|plus|with)\b/i.test(request)
+    || /\bplease\b/i.test(request)
+    || /\?\s*$/.test(request);
+  const out = [];
+  for (const [rawKey] of CHARACTER_INTERVIEW_FIELDS) {
+    const key = normalizeCharacterInterviewField(rawKey);
+    if (!key) continue;
+    if (!opts.allowFilled && !isCharacterInterviewFieldMissing(character, key)) continue;
+    const terms = _characterFieldSearchTerms(key);
+    if (terms.some(term => _fieldTermAppearsInText(request, term))) {
+      out.push(_characterInterviewMeta(key));
+    }
+  }
+  // When the cue table is already open, a plain field name like "habits please" should add that field.
+  // Outside that mode, only treat this as an interview request if the message sounds like a panel mutation.
+  if (!opts.alreadyInCueTable && !wantsPanelMutation) return [];
+  return out;
+};
+
+const isAddAllCharacterCueFieldsCommand = (text = "") => {
+  const s = String(text || "").toLowerCase().replace(/[’']/g, "'").trim();
+  if (!s) return false;
+  return /\b(add|include|show|open|put|give|bring|load)\b[\s\S]{0,40}\b(everything|all|all\s+(?:missing\s+)?(?:story\s+)?fields|every\s+(?:missing\s+)?(?:story\s+)?field|the\s+rest|remaining\s+(?:story\s+)?fields)\b/i.test(s)
+    || /\b(everything|all\s+(?:missing\s+)?(?:story\s+)?fields|every\s+(?:missing\s+)?(?:story\s+)?field|the\s+rest|remaining\s+(?:story\s+)?fields)\b[\s\S]{0,40}\b(please|now|too|also)?\b/i.test(s);
+};
+const getAllMissingCharacterCueFields = (character = {}, opts = {}) => {
+  const status = getCharacterInterviewStatus(character, { ...opts, includeOptional: true });
+  return uniqCharacterInterviewFields([...(status.missingCore || []), ...(status.missingOptional || [])]);
+};
+const CHARACTER_FIELD_SCHEMA_FOR_AI = CHARACTER_INTERVIEW_FIELDS.map(([key, label, cue]) => ({
+  key,
+  label,
+  aliases: CHARACTER_FIELD_ALIASES[key] || [key],
+  cue,
+}));
+const makeCharacterFieldSchemaForAi = (character = {}) => {
+  const rows = CHARACTER_FIELD_SCHEMA_FOR_AI.map(row => ({
+    ...row,
+    missing: isCharacterInterviewFieldMissing(character, row.key),
+  }));
+  return JSON.stringify({
+    allowedAuthorFacingFields: rows,
+    blockedManualOrInternalFields: [...CHARACTER_INTERVIEW_MANUAL_FIELDS, "currentEmotionalState", "obligationsOwed", "knowledgeState", "hasAppeared", "briefPersonality", "oneLineWant", "oneLineFear"],
+    instruction: "Map the author's wording to allowedAuthorFacingFields[].key only. Never return blocked fields. If the author says add everything/all/rest, return action add_all_missing.",
+  }, null, 2);
+};
+const uniqCharacterInterviewFields = (fields = []) => {
+  const seen = new Set();
+  const out = [];
+  for (const f of fields || []) {
+    const key = normalizeCharacterInterviewField(f?.key || f);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push(_characterInterviewMeta(key));
+  }
+  return out;
+};
 const makeCharacterMultiFieldJsonMessage = (characterName, values = {}, note = "", opts = {}) => makeCharacterFieldReviewMessage(characterName, values, { ...opts, note });
 
 
@@ -14397,11 +14484,63 @@ ${JSON.stringify(payload, null, 2)}
 \`\`\``;
   }, [settings]);
 
+
+  const resolveCharacterCueFieldsWithSchemaAI = useCallback(async ({ text, character, signal }) => {
+    const request = String(text || "").trim();
+    if (!request || !settings?.apiKey) return [];
+    const system = `You are a tiny command parser inside NovelForge.
+
+Task: map the author's chat command to character cue-panel fields.
+Return strict JSON only.
+
+Allowed actions:
+- { "action": "add_fields", "fields": ["fieldKey"] }
+- { "action": "add_all_missing", "fields": [] }
+- { "action": "none", "fields": [] }
+
+Rules:
+- Use only allowedAuthorFacingFields[].key from the provided schema.
+- Never return blocked manual/internal fields.
+- Do not generate character content. Only identify requested fields.
+- If the author asks for everything/all/rest/remaining fields, return add_all_missing.
+- If the author asks for an idea that matches multiple fields, return the few best field keys.
+- If uncertain, return none.`;
+    const user = `Author command: ${request}
+
+Selected character: ${character?.name || "this character"}
+
+Character field schema from the actual app code:
+${makeCharacterFieldSchemaForAi(character)}
+
+Return JSON only.`;
+    const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${settings.apiKey}`, "HTTP-Referer": window.location.origin, "X-Title": "NovelForge" },
+      body: JSON.stringify({
+        model: settings.tabModels?.characters || settings.model,
+        messages: [{ role: "system", content: system }, { role: "user", content: user }],
+        max_tokens: 500,
+        temperature: 0,
+        response_format: { type: "json_object" },
+      }),
+      signal,
+    });
+    if (!res.ok) return [];
+    const data = await res.json();
+    const raw = stripThinkingTokens(data.choices?.[0]?.message?.content || "");
+    let parsed = null;
+    try { parsed = JSON.parse(raw); } catch { parsed = tryRepairJson(raw); }
+    if (parsed?.action === "add_all_missing") return getAllMissingCharacterCueFields(character, { includeOptional: true });
+    const fields = Array.isArray(parsed?.fields) ? parsed.fields : [];
+    return uniqCharacterInterviewFields(fields.map(f => normalizeCharacterInterviewField(f)).filter(Boolean))
+      .filter(f => isCharacterInterviewFieldMissing(character, f.key));
+  }, [settings]);
+
   const maybeStartOrContinueCharacterInterview = useCallback(async ({ msgText, signal }) => {
     if (tabName !== "characters") return false;
     const lower = String(msgText || "").trim();
     const character = getEditingCharacter();
-    const wantsCharacterCuePanel = isCharacterInterviewRequest(lower);
+    const wantsCharacterCuePanel = isCharacterInterviewRequest(lower) || isAddAllCharacterCueFieldsCommand(lower);
 
     if (interviewState?.type === "newCharacterSeed") {
       if (!lower) return true;
@@ -14423,7 +14562,7 @@ ${JSON.stringify(payload, null, 2)}
         setMessages(prev => [...prev, { id: uid(), role: "assistant", content: `Stopped the character cue table for **${character.name || "this character"}**. You can restart it whenever you want.` }]);
         return true;
       }
-      const includeOptional = !!interviewState.includeOptional || wantsOptionalCharacterInterview(lower);
+      const includeOptional = !!interviewState.includeOptional || wantsOptionalCharacterInterview(lower) || isAddAllCharacterCueFieldsCommand(lower);
       const stateFields = (interviewState.fields || []).map(normalizeCharacterInterviewField).filter(Boolean);
       let fields = stateFields
         .map(key => _characterInterviewMeta(key))
@@ -14434,8 +14573,40 @@ ${JSON.stringify(payload, null, 2)}
         setMessages(prev => [...prev, { id: uid(), role: "assistant", content: makeCharacterInterviewCompleteMessage(character, getCharacterInterviewStatus(character, { includeOptional })) }]);
         return true;
       }
-      const cues = parseCharacterCueTableReply(msgText, fields);
+      const allMissingFields = uniqCharacterInterviewFields([
+        ...fields,
+        ...getCharacterInterviewStatus(character, { includeOptional: true }).missingCore,
+        ...getCharacterInterviewStatus(character, { includeOptional: true }).missingOptional,
+      ]);
+      const cues = parseCharacterCueTableReply(msgText, allMissingFields);
       if (!Object.keys(cues).length) {
+        const addAllRequested = isAddAllCharacterCueFieldsCommand(msgText);
+        let requestedFields = addAllRequested
+          ? getAllMissingCharacterCueFields(character, { includeOptional: true })
+          : getRequestedCharacterCueFields(msgText, character, { alreadyInCueTable: true });
+        if (!requestedFields.length && /\b(add|include|show|open|bring|put|give|need|want|insert|also|plus|with|everything|all|rest|remaining)\b/i.test(String(msgText || ""))) {
+          try {
+            requestedFields = await resolveCharacterCueFieldsWithSchemaAI({ text: msgText, character, signal });
+          } catch (schemaErr) {
+            console.warn("[NovelForge] Character schema field resolver failed:", schemaErr);
+          }
+        }
+        if (requestedFields.length) {
+          const nextIncludeOptional = includeOptional || addAllRequested || requestedFields.some(f => CHARACTER_INTERVIEW_OPTIONAL_FIELDS.has(f.key));
+          const refreshedFields = uniqCharacterInterviewFields([...fields, ...requestedFields]);
+          setInterviewState({ type: "characterCueTable", entityId: editingEntityId, fields: refreshedFields.map(f => f.key), includeOptional: nextIncludeOptional });
+          setMessages(prev => {
+            const messageId = uid();
+            const names = addAllRequested ? "all remaining author-facing story fields" : requestedFields.map(f => f.label).join(", ");
+            return [...prev, {
+              id: messageId,
+              role: "assistant",
+              content: `Added **${names}** to the cue panel. Type short cues in any boxes you want, then click **Expand filled cues**.`,
+              characterCueTable: makeCharacterCueTablePayload(character, refreshedFields, { includeOptional: nextIncludeOptional }),
+            }];
+          });
+          return true;
+        }
         const refreshedFields = getCharacterCueTableFields(character, { includeOptional });
         setInterviewState({ type: "characterCueTable", entityId: editingEntityId, fields: refreshedFields.map(f => f.key), includeOptional });
         setMessages(prev => {
@@ -14443,7 +14614,7 @@ ${JSON.stringify(payload, null, 2)}
           return [...prev, {
             id: messageId,
             role: "assistant",
-            content: `I didn’t catch any filled cues. Use the cue panel below, paste field cues, or say **stop**.`,
+            content: `I didn’t catch any filled cues or field names. Type into the boxes, paste lines like **Habits: bites his thumbnail when lying**, say **add everything**, ask me to add a specific story field, or say **stop**.`,
             characterCueTable: makeCharacterCueTablePayload(character, refreshedFields, { includeOptional }),
           }];
         });
@@ -14503,8 +14674,10 @@ ${JSON.stringify(payload, null, 2)}
       return true;
     }
 
-    const includeOptional = wantsOptionalCharacterInterview(lower);
-    const fields = getCharacterCueTableFields(character, { includeOptional });
+    const includeOptional = wantsOptionalCharacterInterview(lower) || isAddAllCharacterCueFieldsCommand(lower);
+    const fields = isAddAllCharacterCueFieldsCommand(lower)
+      ? getAllMissingCharacterCueFields(character, { includeOptional: true })
+      : getCharacterCueTableFields(character, { includeOptional });
     if (!fields.length) {
       setInterviewState(null);
       setMessages(prev => [...prev, { id: uid(), role: "assistant", content: makeCharacterInterviewCompleteMessage(character, getCharacterInterviewStatus(character, { includeOptional })) }]);
@@ -14521,7 +14694,7 @@ ${JSON.stringify(payload, null, 2)}
       }];
     });
     return true;
-  }, [tabName, editingEntityId, getEditingCharacter, interviewState, project?.characters, characterFieldFeedback, runSingleFieldCharacterExpansion, runMultiFieldCharacterExpansion, runNewCharacterSeedDraft, setMessages]);
+  }, [tabName, editingEntityId, getEditingCharacter, interviewState, project?.characters, characterFieldFeedback, runSingleFieldCharacterExpansion, runMultiFieldCharacterExpansion, runNewCharacterSeedDraft, resolveCharacterCueFieldsWithSchemaAI, setMessages]);
 
   const handleSend = useCallback(async (customMsg) => {
     const msgText = customMsg || input.trim();
@@ -14946,6 +15119,28 @@ Rules:
   }, [isGenerating, settings?.apiKey, getEditingCharacter, characterFieldFeedback, editingEntityId, addRejectedCharacterFieldFeedback, updateCharacterFieldCard, runSingleFieldCharacterExpansion]);
 
 
+
+  const handleAddAllCharacterCueFieldsToTable = useCallback((msg) => {
+    if (!msg?.characterCueTable || msg.characterCueTable.status === "expanded" || isGenerating) return;
+    const character = getEditingCharacter();
+    if (!character) {
+      setMessages(prev => [...prev, { id: uid(), role: "assistant", isError: true, content: "I lost the selected character. Select the character again, then reopen the cue table." }]);
+      return;
+    }
+    const allFields = getAllMissingCharacterCueFields(character, { includeOptional: true });
+    const mergedFields = uniqCharacterInterviewFields([...(msg.characterCueTable.fields || []), ...allFields]);
+    if (!mergedFields.length) {
+      setMessages(prev => [...prev, { id: uid(), role: "assistant", content: makeCharacterInterviewCompleteMessage(character, getCharacterInterviewStatus(character, { includeOptional: true })) }]);
+      return;
+    }
+    setInterviewState({ type: "characterCueTable", entityId: editingEntityId, fields: mergedFields.map(f => f.key), includeOptional: true });
+    setMessages(prev => prev.map(m => m.id === msg.id ? {
+      ...m,
+      content: `Added **all remaining author-facing story fields** to this cue panel. Fill any boxes you want, then click **Expand filled cues**.`,
+      characterCueTable: makeCharacterCueTablePayload(character, mergedFields, { includeOptional: true }),
+    } : m));
+  }, [isGenerating, getEditingCharacter, editingEntityId, setMessages]);
+
   const handleExpandCharacterCueTable = useCallback(async (msg) => {
     if (!msg?.characterCueTable || isGenerating) return;
     const character = getEditingCharacter();
@@ -15211,6 +15406,9 @@ Answer or return structured field suggestions when useful.`,
                   <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                     <button onClick={() => handleExpandCharacterCueTable(msg)} disabled={msg.characterCueTable.status === "expanded" || isGenerating} className="nf-btn-micro" style={{ borderColor: "var(--nf-accent-2)", color: "var(--nf-accent-2)" }}>
                       <Icons.Sparkle /> Expand filled cues
+                    </button>
+                    <button onClick={() => handleAddAllCharacterCueFieldsToTable(msg)} disabled={msg.characterCueTable.status === "expanded" || isGenerating} className="nf-btn-micro">
+                      <Icons.Plus /> Add all remaining fields
                     </button>
                     <button onClick={() => setMessages(prev => prev.map(m => m.id === msg.id ? { ...m, characterCueTable: { ...m.characterCueTable, status: "closed" } } : m))} disabled={msg.characterCueTable.status !== "open" || isGenerating} className="nf-btn-micro">
                       <Icons.X /> Close table
