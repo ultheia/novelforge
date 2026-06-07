@@ -2171,7 +2171,7 @@ const getCharacterInterviewMissingFields = (character = {}, opts = {}) => {
   return opts.includeOptional ? status.missingOptional : [];
 };
 const getNextCharacterInterviewField = (character = {}, opts = {}) => getCharacterInterviewMissingFields(character, opts)[0] || null;
-const isCharacterInterviewRequest = (text = "") => /\b(field[-\s]?by[-\s]?field|interview|fill\s+(?:the\s+)?(?:blank|empty|missing)|blank\s+fields|empty\s+fields|start\s+(?:a\s+)?character|generate\s+(?:a\s+)?character|create\s+(?:a\s+)?character|flesh\s+out|continue\s+optional|optional\s+fields)\b/i.test(String(text || ""));
+const isCharacterInterviewRequest = (text = "") => /\b(field[-\s]?by[-\s]?field|interview|cue[-\s]?table|missing[-\s]?field|missing\s+fields|fill\s+(?:the\s+)?(?:blank|empty|missing)|blank\s+fields|empty\s+fields|start\s+(?:a\s+)?character|generate\s+(?:a\s+)?character|create\s+(?:a\s+)?character|flesh\s+out|continue\s+optional|optional\s+fields)\b/i.test(String(text || ""));
 const wantsOptionalCharacterInterview = (text = "") => /\b(optional|continue\s+optional|complete\s+(?:the\s+)?sheet|all\s+(?:missing\s+)?fields|every\s+(?:missing\s+)?field)\b/i.test(String(text || ""));
 const isStopCharacterInterviewCommand = (text = "") => /^(stop|done|end|cancel|quit|enough|finish|finished)$/i.test(String(text || "").trim());
 const isSkipCharacterInterviewCommand = (text = "") => /^(skip|pass|not now)$/i.test(String(text || "").trim());
@@ -2252,6 +2252,23 @@ const getCharacterCueTableFields = (character = {}, opts = {}) => {
   const pool = status.missingCore.length ? status.missingCore : (opts.includeOptional ? status.missingOptional : []);
   return pool.slice(0, opts.limit || CHARACTER_CUE_TABLE_MAX_FIELDS);
 };
+const makeCharacterCueTablePayload = (character = {}, fields = [], opts = {}) => {
+  const status = getCharacterInterviewStatus(character, opts);
+  const progress = status.missingCore.length
+    ? `Core story fields left: ${status.missingCore.length}.`
+    : `Core story fields are done. Optional fields left: ${status.optionalMissingCount}.`;
+  return {
+    type: "characterCueTable",
+    characterId: character?.id || "",
+    characterName: character?.name || "this character",
+    includeOptional: !!opts.includeOptional,
+    progress,
+    contextRows: getCharacterContextRows(character, { limit: 18 }),
+    designSignals: detectCharacterDesignSignals(character),
+    fields: (fields || []).map(f => ({ key: f.key, label: f.label, cue: f.cue || "" })).filter(f => normalizeCharacterInterviewField(f.key)),
+    status: "open",
+  };
+};
 const makeCharacterCueTableMessage = (character = {}, fields = [], opts = {}) => {
   const name = character?.name || "this character";
   if (!fields.length) return makeCharacterInterviewCompleteMessage(character, getCharacterInterviewStatus(character, opts));
@@ -2259,11 +2276,17 @@ const makeCharacterCueTableMessage = (character = {}, fields = [], opts = {}) =>
   const progress = status.missingCore.length
     ? `Core story fields left: ${status.missingCore.length}.`
     : `Core story fields are done. Optional fields left: ${status.optionalMissingCount}.`;
-  const rows = fields.map(f => `| ${f.label} |  |`).join("\n");
   const examples = fields.slice(0, 3).map(f => `${f.label}:`).join("\n");
-  const contextCard = makeCharacterContextCard(character, { limit: 18 });
-  const designBlock = makeCharacterDesignSignalBlock(character);
-  return `Let’s do **${name}** in one compact pass instead of one question at a time. ${progress}\n\nWhat I’ll treat as already true:\n${contextCard}${designBlock}\n\nFill any rows you want. Leave rows blank to skip them for now.\n\n| Field | Short cue |\n|---|---|\n${rows}\n\nYou can also reply in this paste-friendly format:\n\`\`\`text\n${examples}\n\`\`\`\n\nI’ll expand only the fields you fill, flag useful contradictions, and return one review card per field. Nothing changes in the sheet until you click **Append** on a card.`;
+  return `I made a controlled missing-field cue panel for **${name}** below. ${progress}
+
+Filled fields are shown as context. Only author-facing story fields are editable here — no gender, pronouns, age, current emotional state, obligations, chapter-presence flags, or other internal runtime fields.
+
+Fill any boxes you want, then click **Expand filled cues**. I’ll return one review card per field with **Append / Reject / Rethink**.
+
+Paste-friendly format also works:
+\`\`\`text
+${examples}
+\`\`\``;
 };
 const parseCharacterCueTableReply = (text = "", fields = []) => {
   const result = {};
@@ -2324,16 +2347,20 @@ const CHARACTER_CONTEXT_CARD_FIELDS = [
   ["hiddenSecrets", "Hidden secrets"], ["allegiances", "Allegiances"], ["arc", "Arc"], ["canonNotes", "Canon notes"],
   ["tags", "Tags"], ["aliases", "Aliases"],
 ];
-const makeCharacterContextCard = (character = {}, opts = {}) => {
+const getCharacterContextRows = (character = {}, opts = {}) => {
   const rows = [];
   for (const [key, label] of CHARACTER_CONTEXT_CARD_FIELDS) {
     const value = key === "name" ? character?.name : _getCharacterFieldValue(character, key);
     const text = _fieldValueToContextText(value);
-    if (text) rows.push(`- ${label}: ${text}`);
+    if (text) rows.push({ key, label, value: text });
   }
-  if (!rows.length) return "No usable filled fields yet.";
   const limit = opts.limit || 28;
-  return rows.slice(0, limit).join("\n");
+  return rows.slice(0, limit);
+};
+const makeCharacterContextCard = (character = {}, opts = {}) => {
+  const rows = getCharacterContextRows(character, opts);
+  if (!rows.length) return "No usable filled fields yet.";
+  return rows.map(r => `- ${r.label}: ${r.value}`).join("\n");
 };
 const detectCharacterDesignSignals = (character = {}, cues = {}) => {
   const signals = [];
@@ -14168,6 +14195,7 @@ const TabAIChat = memo(({ project, settings, appConfig, appConfigLiveLoader = nu
   const [agentLogOpen, setAgentLogOpen] = useState(true);
   const [interviewState, setInterviewState] = useState(null);
   const [characterFieldFeedback, setCharacterFieldFeedback] = useState([]);
+  const [characterCueDrafts, setCharacterCueDrafts] = useState({});
 
   // A10: Track mounted state — don't update local state after unmount, but let fetch complete
   const mountedRef = useRef(true);
@@ -14182,6 +14210,15 @@ const TabAIChat = memo(({ project, settings, appConfig, appConfigLiveLoader = nu
     if (tabName !== "characters" || !editingEntityId) return null;
     return (project?.characters || []).find(c => c.id === editingEntityId) || null;
   }, [tabName, editingEntityId, project?.characters]);
+
+  const updateCharacterCueDraft = useCallback((messageId, field, value) => {
+    const safeField = normalizeCharacterInterviewField(field);
+    if (!safeField) return;
+    setCharacterCueDrafts(prev => ({
+      ...prev,
+      [messageId]: { ...(prev[messageId] || {}), [safeField]: value },
+    }));
+  }, []);
 
   const runSingleFieldCharacterExpansion = useCallback(async ({ character, field, cue, signal, rejectedDrafts = [] }) => {
     const safeField = normalizeCharacterInterviewField(field);
@@ -14345,7 +14382,7 @@ Rules: leave any field blank if the seed does not imply it. Do not invent a full
     let parsed = null;
     try { parsed = JSON.parse(raw); } catch { parsed = tryRepairJson(raw); }
     const payload = parsed || { type: "characters", data: { backstory: seed } };
-    return `Here’s a minimal first-character draft from that seed. Apply it, then select the character and use the missing-field cue table for anything else you want to build.
+    return `Here’s a minimal first-character draft from that seed. Apply it, then select the character and use the missing story-field cue panel for anything else you want to build.
 
 \`\`\`json
 ${JSON.stringify(payload, null, 2)}
@@ -14392,7 +14429,15 @@ ${JSON.stringify(payload, null, 2)}
       if (!Object.keys(cues).length) {
         const refreshedFields = getCharacterCueTableFields(character, { includeOptional });
         setInterviewState({ type: "characterCueTable", entityId: editingEntityId, fields: refreshedFields.map(f => f.key), includeOptional });
-        setMessages(prev => [...prev, { id: uid(), role: "assistant", content: `I didn’t catch any filled cues. Paste short cues beside the fields you want me to expand, or say **stop**.\n\n${makeCharacterCueTableMessage(character, refreshedFields, { includeOptional })}` }]);
+        setMessages(prev => {
+          const messageId = uid();
+          return [...prev, {
+            id: messageId,
+            role: "assistant",
+            content: `I didn’t catch any filled cues. Use the cue panel below, paste field cues, or say **stop**.`,
+            characterCueTable: makeCharacterCueTablePayload(character, refreshedFields, { includeOptional }),
+          }];
+        });
         return true;
       }
       const rejectedDrafts = characterFieldFeedback.filter(f => f.entityId === editingEntityId && Object.prototype.hasOwnProperty.call(cues, f.field));
@@ -14407,21 +14452,23 @@ ${JSON.stringify(payload, null, 2)}
       // Convert it into the current cue-table flow so the assistant never resumes the stale treadmill.
       if (!character) {
         setInterviewState(null);
-        setMessages(prev => [...prev, { id: uid(), role: "assistant", content: "I lost the selected character. Select the character again, then restart the missing-field cue table." }]);
+        setMessages(prev => [...prev, { id: uid(), role: "assistant", content: "I lost the selected character. Select the character again, then restart the missing story-field cue panel." }]);
         return true;
       }
       const includeOptional = wantsOptionalCharacterInterview(lower);
       const fields = getCharacterCueTableFields(character, { includeOptional });
       setInterviewState(fields.length ? { type: "characterCueTable", entityId: editingEntityId, fields: fields.map(f => f.key), includeOptional } : null);
-      setMessages(prev => [...prev, {
-        id: uid(),
-        role: "assistant",
-        content: fields.length
-          ? `I’ve moved this out of the old one-question-at-a-time interview. Fill any rows you want, and I’ll expand only those rows.
-
-${makeCharacterCueTableMessage(character, fields, { includeOptional })}`
-          : makeCharacterInterviewCompleteMessage(character, getCharacterInterviewStatus(character, { includeOptional })),
-      }]);
+      setMessages(prev => {
+        const messageId = uid();
+        return [...prev, {
+          id: messageId,
+          role: "assistant",
+          content: fields.length
+            ? "I’ve moved this out of the old one-question-at-a-time interview. Use the cue panel below and I’ll expand only the boxes you fill."
+            : makeCharacterInterviewCompleteMessage(character, getCharacterInterviewStatus(character, { includeOptional })),
+          characterCueTable: fields.length ? makeCharacterCueTablePayload(character, fields, { includeOptional }) : undefined,
+        }];
+      });
       return true;
     }
 
@@ -14434,7 +14481,7 @@ ${makeCharacterCueTableMessage(character, fields, { includeOptional })}`
         id: uid(),
         role: "assistant",
         content: hasAnyCharacter
-          ? "Select the character you want to build first, then I’ll show a compact missing-field cue table."
+          ? "Select the character you want to build first, then I’ll show a controlled missing story-field cue panel."
           : "Let’s create the first character from a seed first. Give me a name, role, or one-line premise, and I’ll draft only the fields directly implied by it.",
       }]);
       return true;
@@ -14455,11 +14502,15 @@ ${makeCharacterCueTableMessage(character, fields, { includeOptional })}`
       return true;
     }
     setInterviewState({ type: "characterCueTable", entityId: editingEntityId, fields: fields.map(f => f.key), includeOptional });
-    setMessages(prev => [...prev, {
-      id: uid(),
-      role: "assistant",
-      content: makeCharacterCueTableMessage(character, fields, { includeOptional }),
-    }]);
+    setMessages(prev => {
+      const messageId = uid();
+      return [...prev, {
+        id: messageId,
+        role: "assistant",
+        content: makeCharacterCueTableMessage(character, fields, { includeOptional }),
+        characterCueTable: makeCharacterCueTablePayload(character, fields, { includeOptional }),
+      }];
+    });
     return true;
   }, [tabName, editingEntityId, getEditingCharacter, interviewState, project?.characters, characterFieldFeedback, runSingleFieldCharacterExpansion, runMultiFieldCharacterExpansion, runNewCharacterSeedDraft, setMessages]);
 
@@ -14555,6 +14606,7 @@ Rules:
 - Respect canon, current chapter position, existing fields, constrained values, and the active tab schema.
 - Fill only fields requested or marked empty; do not overwrite existing content unless the user asks.
 - In Characters chat, never ask the user for gender, pronouns, age, orientation, height, build, role, or status as AI interview fields. Those are manual form controls.
+- In Characters chat, never present internal/living-state keys like currentEmotionalState, obligationsOwed, knowledgeState, hasAppeared, briefPersonality, backstoryRevealed, or secretRevealed as author-facing cue-table targets.
 - Do not output deprecated reveal/chapter fields.`;
       const allMessages = [
         { role: "system", content: tabPromptTpl?.system ? renderConfigTemplate(tabPromptTpl.system, tabPromptVars) : tabSystemFallback },
@@ -14885,11 +14937,49 @@ Rules:
   }, [isGenerating, settings?.apiKey, getEditingCharacter, characterFieldFeedback, editingEntityId, addRejectedCharacterFieldFeedback, updateCharacterFieldCard, runSingleFieldCharacterExpansion]);
 
 
+  const handleExpandCharacterCueTable = useCallback(async (msg) => {
+    if (!msg?.characterCueTable || isGenerating) return;
+    const character = getEditingCharacter();
+    if (!character) {
+      setMessages(prev => [...prev, { id: uid(), role: "assistant", isError: true, content: "I lost the selected character. Select the character again, then reopen the cue table." }]);
+      return;
+    }
+    const draftMap = characterCueDrafts[msg.id] || {};
+    const cues = {};
+    for (const f of msg.characterCueTable.fields || []) {
+      const key = normalizeCharacterInterviewField(f.key);
+      const value = String(draftMap[key] || "").trim();
+      if (key && value) cues[key] = value;
+    }
+    if (!Object.keys(cues).length) {
+      setMessages(prev => [...prev, { id: uid(), role: "assistant", isError: true, content: "Fill at least one cue box first, then click **Expand filled cues**." }]);
+      return;
+    }
+    const controller = new AbortController();
+    abortRef.current = controller;
+    setIsGenerating(true);
+    try {
+      const rejectedDrafts = characterFieldFeedback.filter(f => f.entityId === editingEntityId && Object.prototype.hasOwnProperty.call(cues, f.field));
+      const draft = await runMultiFieldCharacterExpansion({ character, cues, signal: controller.signal, rejectedDrafts });
+      setInterviewState(null);
+      setMessages(prev => [
+        ...prev.map(m => m.id === msg.id ? { ...m, characterCueTable: { ...m.characterCueTable, status: "expanded" } } : m),
+        { id: uid(), role: "assistant", ...draft },
+      ]);
+    } catch (err) {
+      if (err?.name === "AbortError") return;
+      setMessages(prev => [...prev, { id: uid(), role: "assistant", isError: true, content: err?.message || "Could not expand those cues." }]);
+    } finally {
+      abortRef.current = null;
+      if (mountedRef.current) setIsGenerating(false);
+    }
+  }, [isGenerating, getEditingCharacter, characterCueDrafts, characterFieldFeedback, editingEntityId, runMultiFieldCharacterExpansion, setMessages]);
+
   const quickActions = useMemo(() => {
     switch (tabName) {
       case "characters": {
         const actions = [
-          { label: "✦ Fill missing story fields", msg: `Show me a compact missing-field cue table for the selected character. Use filled fields as context. Do not ask one question at a time. Do not ask about gender, pronouns, age, orientation, height, build, role, or status. After I fill rows, expand only those rows into separate review cards with Append / Reject / Rethink.` },
+          { label: "✦ Fill missing story fields", msg: `Show me a controlled missing story-field cue panel for the selected character. Use filled fields as context. Do not ask one question at a time. Do not ask about gender, pronouns, age, orientation, height, build, role, or status. After I fill rows, expand only those rows into separate review cards with Append / Reject / Rethink.` },
         ];
         // D18: Contextual fill — reference which fields are actually empty
         if (editingEntityId && project?.characters) {
@@ -14897,7 +14987,7 @@ Rules:
           if (char) {
             const emptyFields = getCharacterInterviewMissingFields(char);
             if (emptyFields.length > 0) {
-              actions.push({ label: `Cue-table ${emptyFields.length} missing fields`, msg: `Show me a compact missing-field cue table for "${char.name || "this character"}". Use filled fields as context. Do not ask one question at a time. Do not ask about gender, pronouns, age, orientation, height, build, role, or status. After I fill rows, expand only those rows into separate review cards with Append / Reject / Rethink.` });
+              actions.push({ label: `Cue-table ${emptyFields.length} missing fields`, msg: `Show me a controlled missing story-field cue panel for "${char.name || "this character"}". Use filled fields as context. Do not ask one question at a time. Do not ask about gender, pronouns, age, orientation, height, build, role, or status. After I fill rows, expand only those rows into separate review cards with Append / Reject / Rethink.` });
             }
             // Psychology quick action
             const psychFields = ["fears","flaws","strengths","internalConflict","externalConflict"].filter(k => !char[k]);
@@ -15068,6 +15158,58 @@ Answer or return structured field suggestions when useful.`,
               color: "var(--nf-text)", fontSize: 12, lineHeight: 1.7, wordBreak: "break-word",
             }}
             dangerouslySetInnerHTML={{ __html: msg.role === "assistant" ? renderMarkdownCached(msg.content) : msg.content.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/\n/g,"<br/>") }} />
+            {msg.role === "assistant" && msg.characterCueTable && Array.isArray(msg.characterCueTable.fields) && msg.characterCueTable.fields.length > 0 && msg.characterCueTable.status !== "closed" && (
+              <div style={{ marginTop: 10, border: "1px solid var(--nf-border)", borderRadius: 8, background: "var(--nf-bg-surface)", overflow: "hidden" }}>
+                <div style={{ padding: "8px 10px", borderBottom: "1px solid var(--nf-border)", background: "var(--nf-bg-deep)", display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center" }}>
+                  <div>
+                    <div style={{ fontSize: 11, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--nf-text)" }}>Missing story-field cues</div>
+                    <div style={{ fontSize: 10, color: "var(--nf-text-muted)", marginTop: 2 }}>{msg.characterCueTable.characterName} · {msg.characterCueTable.progress}</div>
+                  </div>
+                  <span style={{ fontSize: 10, color: msg.characterCueTable.status === "expanded" ? "var(--nf-success)" : "var(--nf-text-muted)" }}>{msg.characterCueTable.status === "expanded" ? "Expanded" : "Open"}</span>
+                </div>
+                {Array.isArray(msg.characterCueTable.contextRows) && msg.characterCueTable.contextRows.length > 0 && (
+                  <div style={{ padding: "8px 10px", borderBottom: "1px solid var(--nf-border)", background: "var(--nf-bg-deep)", display: "grid", gap: 4 }}>
+                    <div style={{ fontSize: 10, fontWeight: 700, color: "var(--nf-text-muted)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Already filled context</div>
+                    {msg.characterCueTable.contextRows.slice(0, 10).map(row => (
+                      <div key={`${msg.id}:ctx:${row.key}`} style={{ fontSize: 11, color: "var(--nf-text-dim)", lineHeight: 1.45 }}><strong style={{ color: "var(--nf-text)" }}>{row.label}:</strong> {String(row.value).slice(0, 180)}{String(row.value).length > 180 ? "…" : ""}</div>
+                    ))}
+                  </div>
+                )}
+                {Array.isArray(msg.characterCueTable.designSignals) && msg.characterCueTable.designSignals.length > 0 && (
+                  <div style={{ padding: "8px 10px", borderBottom: "1px solid var(--nf-border)", background: "var(--nf-bg-deep)", display: "grid", gap: 5 }}>
+                    <div style={{ fontSize: 10, fontWeight: 700, color: "var(--nf-accent-2)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Design notes</div>
+                    {msg.characterCueTable.designSignals.map((note, i) => <div key={`${msg.id}:sig:${i}`} style={{ fontSize: 11, color: "var(--nf-text-dim)", lineHeight: 1.5 }}>{note}</div>)}
+                  </div>
+                )}
+                <div style={{ padding: 10, display: "grid", gap: 8 }}>
+                  {msg.characterCueTable.fields.map(field => {
+                    const value = characterCueDrafts[msg.id]?.[field.key] || "";
+                    return (
+                      <div key={`${msg.id}:cue:${field.key}`} style={{ border: "1px solid var(--nf-border)", borderRadius: 7, padding: 8, background: "var(--nf-bg)" }}>
+                        <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: "var(--nf-text)", marginBottom: 4 }}>{field.label}</label>
+                        {field.cue && <div style={{ fontSize: 10, color: "var(--nf-text-muted)", lineHeight: 1.45, marginBottom: 6 }}>{field.cue}</div>}
+                        <textarea
+                          value={value}
+                          onChange={e => updateCharacterCueDraft(msg.id, field.key, e.target.value)}
+                          placeholder="Short cue…"
+                          disabled={msg.characterCueTable.status === "expanded" || isGenerating}
+                          className="nf-chat-textarea"
+                          style={{ minHeight: 42, fontSize: 11, resize: "vertical" }}
+                        />
+                      </div>
+                    );
+                  })}
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                    <button onClick={() => handleExpandCharacterCueTable(msg)} disabled={msg.characterCueTable.status === "expanded" || isGenerating} className="nf-btn-micro" style={{ borderColor: "var(--nf-accent-2)", color: "var(--nf-accent-2)" }}>
+                      <Icons.Sparkle /> Expand filled cues
+                    </button>
+                    <button onClick={() => setMessages(prev => prev.map(m => m.id === msg.id ? { ...m, characterCueTable: { ...m.characterCueTable, status: "closed" } } : m))} disabled={msg.characterCueTable.status !== "open" || isGenerating} className="nf-btn-micro">
+                      <Icons.X /> Close table
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
             {msg.role === "assistant" && Array.isArray(msg.characterFieldCards) && msg.characterFieldCards.length > 0 && (
               <div style={{ marginTop: 10, display: "grid", gap: 8 }}>
                 {msg.characterFieldCards.map(card => (
