@@ -23,6 +23,7 @@ const GDRIVE_FILE_NAME = "novelforge-backup.json";
 const LS_IMAGE_WORKSPACE = "novelforge:imageWorkspace";
 const AGENT_TOKEN_MULTIPLIER = 5;
 const AGENT_TOKEN_HARD_CAP = 100000;
+const NF_DECLUTTER_UI = true; // v21: Marie Kondo mode — hide dashboards, diagnostics, duplicate tools, and advanced chrome by default.
 
 const loadImageWorkspaceValue = (key, fallback) => {
   try {
@@ -1496,7 +1497,43 @@ const estimateTokens = (text) => {
 };
 const stripThinkingTokens = (text) => {
   if (!text) return text;
-  let result = String(text).replace(/<think>[\s\S]*?<\/think>/gi, '');
+
+
+// ─── AI MODEL FALLBACK ───
+const _getModel = (settings) => settings?.model || "anthropic/claude-sonnet-4";
+
+
+// ─── AI RATE LIMIT TRACKER ───
+const _aiRateTracker = {
+  _lastCall: 0,
+  _minInterval: 500, // ms between calls
+  canCall() {
+    const now = Date.now();
+    if (now - this._lastCall < this._minInterval) return false;
+    this._lastCall = now;
+    return true;
+  }
+};
+
+// ─── SAFE AI FETCH — handles HTTP errors, strips thinking tokens ───
+const _safeAIFetch = async (url, options, signal) => {
+  const opts = { ...options };
+  if (signal) opts.signal = signal;
+  const res = await fetch(url, opts);
+  if (!res.ok) {
+    const status = res.status;
+    if (status === 429) throw new Error("Rate limited — wait a moment and try again");
+    if (status === 401 || status === 403) throw new Error("Invalid API key — check your key in Settings");
+    if (status === 402) throw new Error("Insufficient credits — add credits to your OpenRouter account");
+    if (status >= 500) throw new Error("AI service temporarily unavailable — try again");
+    throw new Error(`API error (${status})`);
+  }
+  return res;
+};
+  // I2: First strip complete think blocks, then strip unclosed think tags
+  // Use lazy match for complete blocks, and for unclosed tags only strip to end
+  let result = text.replace(/<think>[\s\S]*?<\/think>/gi, '');
+  // Only strip unclosed <think> if it's the LAST occurrence with no closing tag after it
   const unclosedIdx = result.lastIndexOf('<think>');
   if (unclosedIdx !== -1 && result.indexOf('</think>', unclosedIdx) === -1) {
     result = result.slice(0, unclosedIdx);
@@ -2021,470 +2058,6 @@ const CHARACTER_TEXT_FIELDS = [
   "internalConflict","externalConflict","signatureItems","secrets","hiddenSecrets",
   "allegiances","arc","canonNotes",
 ];
-
-// Character cue-table interview helpers.
-// This list intentionally contains story-development fields only. Identity/dropdown fields
-// like gender, pronouns, age, orientation, height, and build are manual form controls.
-const CHARACTER_INTERVIEW_FIELDS = [
-  // Story-interview fields only. Manual identity/form fields (gender, pronouns, age, orientation,
-  // height, build, role, status) must never be asked by the AI interview flow.
-  ["occupation", "Occupation / title", "What is their job, public role, or title? A short cue is enough."],
-  ["appearance", "Appearance", "What is the visual cue for their appearance?"],
-  ["personality", "Personality", "What personality cue should anchor them?"],
-  ["backstory", "Backstory", "What should be the cue for their backstory?"],
-  ["desires", "Desires", "What do they want most?"],
-  ["shortTermGoals", "Short-term goals", "What is their immediate goal?"],
-  ["longTermGoals", "Long-term goals", "What is their long-term goal?"],
-  ["speechPattern", "Speech pattern", "What should their voice or speech cue be?"],
-  ["voiceSamples", "Voice samples", "Give one line or phrase that sounds like them."],
-  ["habits", "Habits / mannerisms", "What habit, tic, or mannerism should they have?"],
-  ["fears", "Fears", "What are they afraid of?"],
-  ["flaws", "Flaws", "What flaw should complicate them?"],
-  ["strengths", "Strengths", "What strength defines them?"],
-  ["skills", "Skills", "What skill or capability matters in the story?"],
-  ["internalConflict", "Internal conflict", "What inner contradiction should drive them?"],
-  ["externalConflict", "External conflict", "What outside pressure or enemy blocks them?"],
-  ["signatureItems", "Signature items", "What object, possession, or motif is tied to them?"],
-  ["secrets", "Known secrets", "What secret can the story use?"],
-  ["hiddenSecrets", "Hidden secrets", "What secret should stay hidden from the reader/AI until revealed?"],
-  ["allegiances", "Allegiances", "Who or what are they loyal to?"],
-  ["arc", "Arc", "What change should they undergo?"],
-  ["canonNotes", "Canon notes", "What canon note should never be contradicted?"],
-  ["tags", "Tags", "What labels should help classify them?"],
-  ["aliases", "Aliases", "Any aliases, nicknames, or titles?"],
-];
-const CHARACTER_INTERVIEW_LABELS = Object.fromEntries(CHARACTER_INTERVIEW_FIELDS.map(([key, label, cue]) => [key, { label, cue }]));
-
-// The interview is intentionally not a “fill every blank forever” treadmill.
-// By default it only asks for core story anchors. Optional sheet fields are available
-// only when the author explicitly asks to continue/complete optional details.
-const CHARACTER_INTERVIEW_CORE_FIELDS = new Set([
-  "occupation", "appearance", "personality", "backstory", "desires",
-  "speechPattern", "internalConflict", "externalConflict", "arc",
-]);
-const CHARACTER_INTERVIEW_OPTIONAL_FIELDS = new Set(
-  CHARACTER_INTERVIEW_FIELDS.map(([key]) => key).filter(key => !CHARACTER_INTERVIEW_CORE_FIELDS.has(key))
-);
-const CHARACTER_INTERVIEW_CORE_TARGET = CHARACTER_INTERVIEW_CORE_FIELDS.size;
-
-// Character cue-table interviews should focus on story-useful fields. Identity anchors and
-// dropdown demographics are manual controls in the form, so the interview must not ask
-// for them just because a stale object, alias mismatch, or default value made them look blank.
-const CHARACTER_INTERVIEW_MANUAL_FIELDS = new Set([
-  // Form/manual identity anchors. The AI interview can use these as context but must never ask for them.
-  "name", "role", "status", "gender", "pronouns", "age", "orientation", "height", "build",
-  "lookAlike", "image", "backstoryRevealed", "secretRevealed",
-]);
-const CHARACTER_INTERVIEW_ALLOWED_FIELDS = new Set(CHARACTER_INTERVIEW_FIELDS.map(([key]) => key));
-const normalizeCharacterInterviewField = (field) => {
-  const key = String(field || "").trim();
-  if (!key) return null;
-  if (CHARACTER_INTERVIEW_MANUAL_FIELDS.has(key)) return null;
-  if (CHARACTER_INTERVIEW_ALLOWED_FIELDS.has(key)) return key;
-  const lower = key.toLowerCase();
-  for (const allowedKey of CHARACTER_INTERVIEW_ALLOWED_FIELDS) {
-    if (allowedKey.toLowerCase() === lower) return allowedKey;
-  }
-  return null;
-};
-const CHARACTER_FIELD_ALIASES = {
-  occupation: ["occupation", "occupationTitle", "profession", "job", "title"],
-  appearance: ["appearance", "physicalAppearance", "visualDescription", "description"],
-  personality: ["personality", "traits", "temperament"],
-  backstory: ["backstory", "history", "past"],
-  desires: ["desires", "desire", "wants", "motivation", "motives"],
-  shortTermGoals: ["shortTermGoals", "shortTermGoal", "immediateGoal"],
-  longTermGoals: ["longTermGoals", "longTermGoal", "ultimateGoal"],
-  speechPattern: ["speechPattern", "speech", "voice", "voiceStyle", "dialogueStyle"],
-  voiceSamples: ["voiceSamples", "voiceSample", "sampleDialogue", "dialogueSamples"],
-  habits: ["habits", "mannerisms", "tics"],
-  fears: ["fears", "fear"],
-  flaws: ["flaws", "flaw"],
-  strengths: ["strengths", "strength"],
-  skills: ["skills", "skill"],
-  internalConflict: ["internalConflict", "innerConflict"],
-  externalConflict: ["externalConflict", "outerConflict"],
-  signatureItems: ["signatureItems", "signatureItem", "objects", "items"],
-  secrets: ["secrets", "knownSecrets"],
-  hiddenSecrets: ["hiddenSecrets", "hiddenSecret"],
-  allegiances: ["allegiances", "loyalties", "alliance"],
-  arc: ["arc", "characterArc"],
-  canonNotes: ["canonNotes", "canon", "notes"],
-  tags: ["tags", "labels"],
-  aliases: ["aliases", "nicknames"],
-};
-const _hasUsableFieldValue = (value) => {
-  if (value === null || value === undefined) return false;
-  if (typeof value === "number") return Number.isFinite(value) && value !== 0;
-  if (typeof value === "boolean") return true;
-  if (Array.isArray(value)) return value.some(_hasUsableFieldValue);
-  if (typeof value === "object") return Object.values(value).some(_hasUsableFieldValue);
-  const s = String(value).replace(/<[^>]*>/g, "").trim();
-  if (!s) return false;
-  if (/^(n\/?a|none|null|undefined|unknown|tbd|to be decided|placeholder|select\.\.\.|e\.g\.)$/i.test(s)) return false;
-  return true;
-};
-const _getCharacterFieldValue = (character = {}, key) => {
-  const aliases = CHARACTER_FIELD_ALIASES[key] || [key];
-  for (const alias of aliases) {
-    if (Object.prototype.hasOwnProperty.call(character, alias) && _hasUsableFieldValue(character[alias])) return character[alias];
-  }
-  const lowerKeyMap = Object.keys(character || {}).reduce((acc, k) => { acc[k.toLowerCase()] = k; return acc; }, {});
-  for (const alias of aliases) {
-    const realKey = lowerKeyMap[String(alias).toLowerCase()];
-    if (realKey && _hasUsableFieldValue(character[realKey])) return character[realKey];
-  }
-  return undefined;
-};
-const isCharacterInterviewFieldMissing = (character = {}, key) => {
-  const safeKey = normalizeCharacterInterviewField(key);
-  if (!safeKey) return false;
-  if (character?.isBulk && ["voiceSamples", "aliases", "tags"].includes(safeKey)) return false;
-  return !_hasUsableFieldValue(_getCharacterFieldValue(character, safeKey));
-};
-const _characterInterviewMeta = (key) => {
-  const meta = CHARACTER_INTERVIEW_LABELS[key] || { label: key, cue: `What should ${key} be?` };
-  return { key, label: meta.label || key, cue: meta.cue || `What should ${key} be?` };
-};
-const getCharacterInterviewStatus = (character = {}, opts = {}) => {
-  const skipped = new Set((opts.skippedFields || []).map(normalizeCharacterInterviewField).filter(Boolean));
-  const coreFields = [...CHARACTER_INTERVIEW_CORE_FIELDS];
-  const optionalFields = [...CHARACTER_INTERVIEW_OPTIONAL_FIELDS];
-  const isMissing = (key) => isCharacterInterviewFieldMissing(character, key) && !skipped.has(key);
-  const missingCore = coreFields.filter(isMissing).map(_characterInterviewMeta);
-  const missingOptional = optionalFields.filter(isMissing).map(_characterInterviewMeta);
-  const coreFilled = coreFields.length - coreFields.filter(key => isCharacterInterviewFieldMissing(character, key)).length;
-  return {
-    coreTotal: CHARACTER_INTERVIEW_CORE_TARGET,
-    coreFilled,
-    coreMissingCount: missingCore.length,
-    optionalMissingCount: missingOptional.length,
-    missingCore,
-    missingOptional,
-    skippedFields: [...skipped],
-    coreComplete: missingCore.length === 0,
-  };
-};
-const getCharacterInterviewMissingFields = (character = {}, opts = {}) => {
-  const status = getCharacterInterviewStatus(character, opts);
-  if (status.missingCore.length) return status.missingCore;
-  return opts.includeOptional ? status.missingOptional : [];
-};
-const getNextCharacterInterviewField = (character = {}, opts = {}) => getCharacterInterviewMissingFields(character, opts)[0] || null;
-const isCharacterInterviewRequest = (text = "") => {
-  const s = String(text || "").toLowerCase().replace(/[’']/g, "'").trim();
-  if (!s) return false;
-  // Catch natural user requests like "missing-field cue table", "where is the table I can fill",
-  // "give me boxes", "fill missing story fields", and "cue panel" locally. If this misses,
-  // the request falls through to the model and the model can hallucinate markdown tables/internal fields.
-  const asksForCueUi = /\b(cue\s*(table|panel|form|boxes?|cards?)|fill(?:able)?\s*(table|form|boxes?|panel)|table\s+(?:i|we)\s+can\s+fill|where\s+(?:is|are).*\b(table|boxes?|form|panel)\b|boxes?\s+(?:to|i|we)\s*(?:fill|type)|form\s+(?:to|i|we)\s*(?:fill|type))\b/i.test(s);
-  const asksForMissingFields = /\b(missing|blank|empty|unfilled|incomplete)\b[\s\S]{0,50}\b(field|fields|story\s*fields|story-field|sheet|profile|details|slots?)\b/i.test(s)
-    || /\b(field|fields|story\s*fields|story-field|sheet|profile|details|slots?)\b[\s\S]{0,50}\b(missing|blank|empty|unfilled|incomplete)\b/i.test(s);
-  const asksToFill = /\b(fill|complete|expand|build|flesh\s*out|develop|draft)\b[\s\S]{0,60}\b(character|fields?|story\s*fields|story-field|sheet|profile|details|blanks?|empt(?:y|ies)|missing)\b/i.test(s);
-  const startsCharacter = /\b(start|generate|create|make|draft)\s+(?:a\s+)?(?:new\s+)?character\b/i.test(s);
-  const oldInterviewTerms = /\b(field[-\s]?by[-\s]?field|interview|continue\s+optional|optional\s+fields)\b/i.test(s);
-  return asksForCueUi || asksForMissingFields || asksToFill || startsCharacter || oldInterviewTerms;
-};
-const wantsOptionalCharacterInterview = (text = "") => /\b(optional|continue\s+optional|complete\s+(?:the\s+)?sheet|all\s+(?:missing\s+)?fields|every\s+(?:missing\s+)?field)\b/i.test(String(text || ""));
-const isStopCharacterInterviewCommand = (text = "") => /^(stop|done|end|cancel|quit|enough|finish|finished)$/i.test(String(text || "").trim());
-const isSkipCharacterInterviewCommand = (text = "") => /^(skip|pass|not now)$/i.test(String(text || "").trim());
-const isAutoCharacterInterviewCommand = (text = "") => /^(auto|autofill|auto-fill|use current context|infer)$/i.test(String(text || "").trim());
-const makeCharacterInterviewPromptMessage = (character, target, status, opts = {}) => {
-  const name = character?.name || "this character";
-  const mode = opts.includeOptional ? "optional detail" : "core story";
-  const progress = opts.includeOptional
-    ? `Core interview is done. Optional fields left: ${status.optionalMissingCount}.`
-    : `Core progress: ${status.coreFilled}/${status.coreTotal}.`;
-  return `Let’s keep this focused for **${name}**. I’ll ask only for ${mode} anchors, not every blank box. ${progress}
-
-Next: **${target.label}**. ${target.cue}
-
-Reply with a short cue, **skip**, **auto**, or **stop**.`;
-};
-const makeCharacterInterviewCompleteMessage = (character, status) => {
-  const name = character?.name || "This character";
-  if (status.optionalMissingCount > 0) {
-    const labels = status.missingOptional.slice(0, 6).map(f => f.label).join(", ");
-    return `**${name}** has the core story anchors filled. I’ll stop the interview here.
-
-Optional blanks remain: ${labels}${status.optionalMissingCount > 6 ? ", …" : ""}.
-
-Say **continue optional** if you want to fill those too, or tell me a specific field to refine.`;
-  }
-  return `**${name}** has no remaining core or optional interview fields. Tell me a specific field if you want to refine something.`;
-};
-const makeCharacterFieldReviewCards = (characterName, values = {}, opts = {}) => {
-  const cards = [];
-  const cues = opts.cues || {};
-  const rejected = opts.rejected || {};
-  for (const [rawKey, rawValue] of Object.entries(values || {})) {
-    const field = normalizeCharacterInterviewField(rawKey);
-    if (!field) continue;
-    const value = typeof rawValue === "string" ? rawValue.trim() : normalizeAiValue(rawValue);
-    if (!_hasUsableFieldValue(value)) continue;
-    const meta = CHARACTER_INTERVIEW_LABELS[field] || { label: field };
-    cards.push({
-      id: uid(),
-      type: "characterFieldDraft",
-      characterName: characterName || "this character",
-      field,
-      label: meta.label || field,
-      cue: cues[field] || "",
-      value,
-      status: "pending",
-      rejectedDrafts: rejected[field] || [],
-      createdAt: new Date().toISOString(),
-    });
-  }
-  return cards;
-};
-const makeCharacterFieldReviewMessage = (characterName, values = {}, opts = {}) => {
-  const cards = makeCharacterFieldReviewCards(characterName, values, opts);
-  const note = String(opts.note || "").trim();
-  const intro = note || `I drafted ${cards.length} field${cards.length === 1 ? "" : "s"} for **${characterName || "this character"}**.`;
-  return {
-    content: `${intro}
-
-Review each field separately. **Append** applies only that one card. **Reject** saves it as negative context for the next pass. **Rethink** regenerates only that one card right away.`,
-    characterFieldCards: cards,
-  };
-};
-const makeCharacterFieldJsonMessage = (characterName, field, value, opts = {}) => makeCharacterFieldReviewMessage(characterName, { [field]: value }, opts);
-
-
-const CHARACTER_CUE_TABLE_MAX_FIELDS = 8;
-const normalizeCharacterCueLabel = (value = "") => String(value || "")
-  .replace(/<[^>]*>/g, " ")
-  .replace(/[*_`#>]/g, "")
-  .replace(/\s+/g, " ")
-  .replace(/[：:]+$/g, "")
-  .trim()
-  .toLowerCase();
-const getCharacterCueTableFields = (character = {}, opts = {}) => {
-  const status = getCharacterInterviewStatus(character, opts);
-  const pool = status.missingCore.length ? status.missingCore : (opts.includeOptional ? status.missingOptional : []);
-  return pool.slice(0, opts.limit || CHARACTER_CUE_TABLE_MAX_FIELDS);
-};
-const makeCharacterCueTablePayload = (character = {}, fields = [], opts = {}) => {
-  const status = getCharacterInterviewStatus(character, opts);
-  const progress = status.missingCore.length
-    ? `Core story fields left: ${status.missingCore.length}.`
-    : `Core story fields are done. Optional fields left: ${status.optionalMissingCount}.`;
-  return {
-    type: "characterCueTable",
-    characterId: character?.id || "",
-    characterName: character?.name || "this character",
-    includeOptional: !!opts.includeOptional,
-    progress,
-    contextRows: getCharacterContextRows(character, { limit: 18 }),
-    designSignals: detectCharacterDesignSignals(character),
-    fields: (fields || []).map(f => ({ key: f.key, label: f.label, cue: f.cue || "" })).filter(f => normalizeCharacterInterviewField(f.key)),
-    status: "open",
-  };
-};
-const makeCharacterCueTableMessage = (character = {}, fields = [], opts = {}) => {
-  const name = character?.name || "this character";
-  if (!fields.length) return makeCharacterInterviewCompleteMessage(character, getCharacterInterviewStatus(character, opts));
-  const status = getCharacterInterviewStatus(character, opts);
-  const progress = status.missingCore.length
-    ? `Core story fields left: ${status.missingCore.length}.`
-    : `Core story fields are done. Optional fields left: ${status.optionalMissingCount}.`;
-  return `I opened a controlled fillable cue panel for **${name}**. ${progress}
-
-Use the boxes below. Filled character fields are shown as context; only author-facing story fields appear as editable boxes. No gender, pronouns, age, emotional-state trackers, obligations, chapter-presence flags, or other internal runtime fields.
-
-Fill any boxes you want, then click **Expand filled cues**. I’ll return one separate review card per field with **Append / Reject / Rethink**.`;
-};
-
-const parseCharacterCueTableReply = (text = "", fields = []) => {
-  const result = {};
-  const fieldByLabel = new Map();
-  for (const f of fields || []) {
-    if (!f?.key) continue;
-    fieldByLabel.set(normalizeCharacterCueLabel(f.label), f.key);
-    fieldByLabel.set(normalizeCharacterCueLabel(f.key), f.key);
-  }
-  const cleanCue = (value = "") => String(value || "")
-    .replace(/^[-–—:\s|]+/, "")
-    .replace(/\s+\|\s*$/, "")
-    .trim();
-  const isBlankCue = (value = "") => {
-    const v = cleanCue(value).toLowerCase();
-    return !v || /^(skip|pass|blank|none|n\/?a|na|tbd|not now|leave blank)$/i.test(v);
-  };
-  const lines = String(text || "").split(/\r?\n/).map(l => l.trim()).filter(Boolean);
-  for (const line of lines) {
-    if (/^\|?\s*-{2,}\s*\|/.test(line) || /field\s*\|\s*short cue/i.test(line)) continue;
-    if (line.includes("|")) {
-      const cells = line.split("|").map(c => c.trim()).filter(Boolean);
-      if (cells.length >= 2) {
-        const key = fieldByLabel.get(normalizeCharacterCueLabel(cells[0]));
-        const cue = cleanCue(cells.slice(1).join(" | "));
-        if (key && !isBlankCue(cue)) result[key] = cue;
-        continue;
-      }
-    }
-    const m = line.match(/^[-*\s]*(.+?)(?:\s*[:：]\s+|\s+[—–-]\s+)(.+)$/);
-    if (m) {
-      const key = fieldByLabel.get(normalizeCharacterCueLabel(m[1]));
-      const cue = cleanCue(m[2]);
-      if (key && !isBlankCue(cue)) result[key] = cue;
-    }
-  }
-  return result;
-};
-
-const _escapeRegExp = (value = "") => String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-const _characterFieldSearchTerms = (fieldKey) => {
-  const safeKey = normalizeCharacterInterviewField(fieldKey);
-  if (!safeKey) return [];
-  const meta = CHARACTER_INTERVIEW_LABELS[safeKey] || {};
-  const aliasTerms = CHARACTER_FIELD_ALIASES[safeKey] || [];
-  const terms = [safeKey, meta.label, ...(aliasTerms || [])]
-    .map(v => String(v || "").trim())
-    .filter(Boolean);
-  const expanded = [];
-  for (const term of terms) {
-    expanded.push(term);
-    expanded.push(term.replace(/([a-z])([A-Z])/g, "$1 $2"));
-    expanded.push(term.replace(/[\/]/g, " "));
-  }
-  return [...new Set(expanded.map(t => normalizeCharacterCueLabel(t)).filter(t => t && t.length >= 3))];
-};
-const _fieldTermAppearsInText = (text, term) => {
-  const normalizedText = normalizeCharacterCueLabel(text);
-  const normalizedTerm = normalizeCharacterCueLabel(term);
-  if (!normalizedText || !normalizedTerm) return false;
-  const compactText = normalizedText.replace(/\s+/g, "");
-  const compactTerm = normalizedTerm.replace(/\s+/g, "");
-  if (compactTerm.length >= 4 && compactText.includes(compactTerm)) return true;
-  return new RegExp(`(?:^|\\b)${_escapeRegExp(normalizedTerm).replace(/\\\s+/g, "\\s+")}(?:\\b|$)`, "i").test(normalizedText);
-};
-const getRequestedCharacterCueFields = (text = "", character = {}, opts = {}) => {
-  const request = String(text || "").trim();
-  if (!request) return [];
-  const wantsPanelMutation = /\b(add|include|show|open|bring|put|give|need|want|insert|also|plus|with)\b/i.test(request)
-    || /\bplease\b/i.test(request)
-    || /\?\s*$/.test(request);
-  const out = [];
-  for (const [rawKey] of CHARACTER_INTERVIEW_FIELDS) {
-    const key = normalizeCharacterInterviewField(rawKey);
-    if (!key) continue;
-    if (!opts.allowFilled && !isCharacterInterviewFieldMissing(character, key)) continue;
-    const terms = _characterFieldSearchTerms(key);
-    if (terms.some(term => _fieldTermAppearsInText(request, term))) {
-      out.push(_characterInterviewMeta(key));
-    }
-  }
-  // When the cue table is already open, a plain field name like "habits please" should add that field.
-  // Outside that mode, only treat this as an interview request if the message sounds like a panel mutation.
-  if (!opts.alreadyInCueTable && !wantsPanelMutation) return [];
-  return out;
-};
-
-const isAddAllCharacterCueFieldsCommand = (text = "") => {
-  const s = String(text || "").toLowerCase().replace(/[’']/g, "'").trim();
-  if (!s) return false;
-  return /\b(add|include|show|open|put|give|bring|load)\b[\s\S]{0,40}\b(everything|all|all\s+(?:missing\s+)?(?:story\s+)?fields|every\s+(?:missing\s+)?(?:story\s+)?field|the\s+rest|remaining\s+(?:story\s+)?fields)\b/i.test(s)
-    || /\b(everything|all\s+(?:missing\s+)?(?:story\s+)?fields|every\s+(?:missing\s+)?(?:story\s+)?field|the\s+rest|remaining\s+(?:story\s+)?fields)\b[\s\S]{0,40}\b(please|now|too|also)?\b/i.test(s);
-};
-const getAllMissingCharacterCueFields = (character = {}, opts = {}) => {
-  const status = getCharacterInterviewStatus(character, { ...opts, includeOptional: true });
-  return uniqCharacterInterviewFields([...(status.missingCore || []), ...(status.missingOptional || [])]);
-};
-const CHARACTER_FIELD_SCHEMA_FOR_AI = CHARACTER_INTERVIEW_FIELDS.map(([key, label, cue]) => ({
-  key,
-  label,
-  aliases: CHARACTER_FIELD_ALIASES[key] || [key],
-  cue,
-}));
-const makeCharacterFieldSchemaForAi = (character = {}) => {
-  const rows = CHARACTER_FIELD_SCHEMA_FOR_AI.map(row => ({
-    ...row,
-    missing: isCharacterInterviewFieldMissing(character, row.key),
-  }));
-  return JSON.stringify({
-    allowedAuthorFacingFields: rows,
-    blockedManualOrInternalFields: [...CHARACTER_INTERVIEW_MANUAL_FIELDS, "currentEmotionalState", "obligationsOwed", "knowledgeState", "hasAppeared", "briefPersonality", "oneLineWant", "oneLineFear"],
-    instruction: "Map the author's wording to allowedAuthorFacingFields[].key only. Never return blocked fields. If the author says add everything/all/rest, return action add_all_missing.",
-  }, null, 2);
-};
-const uniqCharacterInterviewFields = (fields = []) => {
-  const seen = new Set();
-  const out = [];
-  for (const f of fields || []) {
-    const key = normalizeCharacterInterviewField(f?.key || f);
-    if (!key || seen.has(key)) continue;
-    seen.add(key);
-    out.push(_characterInterviewMeta(key));
-  }
-  return out;
-};
-const makeCharacterMultiFieldJsonMessage = (characterName, values = {}, note = "", opts = {}) => makeCharacterFieldReviewMessage(characterName, values, { ...opts, note });
-
-
-const _fieldValueToContextText = (value) => {
-  if (!_hasUsableFieldValue(value)) return "";
-  if (Array.isArray(value)) return value.map(_fieldValueToContextText).filter(Boolean).join(", ");
-  if (typeof value === "object") return Object.entries(value)
-    .filter(([, v]) => _hasUsableFieldValue(v))
-    .map(([k, v]) => `${k}: ${_fieldValueToContextText(v)}`)
-    .join("; ");
-  return String(value).replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
-};
-const CHARACTER_CONTEXT_CARD_FIELDS = [
-  ["name", "Name"], ["role", "Role"], ["status", "Status"], ["gender", "Gender"], ["pronouns", "Pronouns"], ["age", "Age"],
-  ["occupation", "Occupation"], ["appearance", "Appearance"], ["personality", "Personality"], ["backstory", "Backstory"],
-  ["desires", "Desires"], ["shortTermGoals", "Short-term goal"], ["longTermGoals", "Long-term goal"],
-  ["speechPattern", "Speech pattern"], ["voiceSamples", "Voice samples"], ["habits", "Habits"], ["fears", "Fears"],
-  ["flaws", "Flaws"], ["strengths", "Strengths"], ["skills", "Skills"], ["internalConflict", "Internal conflict"],
-  ["externalConflict", "External conflict"], ["signatureItems", "Signature items"], ["secrets", "Known secrets"],
-  ["hiddenSecrets", "Hidden secrets"], ["allegiances", "Allegiances"], ["arc", "Arc"], ["canonNotes", "Canon notes"],
-  ["tags", "Tags"], ["aliases", "Aliases"],
-];
-const getCharacterContextRows = (character = {}, opts = {}) => {
-  const rows = [];
-  for (const [key, label] of CHARACTER_CONTEXT_CARD_FIELDS) {
-    const value = key === "name" ? character?.name : _getCharacterFieldValue(character, key);
-    const text = _fieldValueToContextText(value);
-    if (text) rows.push({ key, label, value: text });
-  }
-  const limit = opts.limit || 28;
-  return rows.slice(0, limit);
-};
-const makeCharacterContextCard = (character = {}, opts = {}) => {
-  const rows = getCharacterContextRows(character, opts);
-  if (!rows.length) return "No usable filled fields yet.";
-  return rows.map(r => `- ${r.label}: ${r.value}`).join("\n");
-};
-const detectCharacterDesignSignals = (character = {}, cues = {}) => {
-  const signals = [];
-  const role = `${character?.role || ""} ${character?.archetype || ""} ${character?.tags || ""}`.toLowerCase();
-  const personality = `${character?.personality || ""} ${cues?.personality || ""}`.toLowerCase();
-  const desires = `${character?.desires || ""} ${cues?.desires || ""}`.toLowerCase();
-  const backstory = `${character?.backstory || ""} ${cues?.backstory || ""}`.toLowerCase();
-  const goodWords = /\b(kind|gentle|good|honest|loyal|warm|generous|protective|principled|empathetic|compassionate|soft[-\s]?hearted|decent|selfless)\b/i;
-  const antagonistWords = /\b(antagonist|villain|rival|enemy|opposition|opposes|foil)\b/i;
-  if (antagonistWords.test(role) && goodWords.test(personality)) {
-    signals.push("Creative tension: they are positioned as an antagonist but have good or warm traits. Treat this as an opportunity, not an error: they can oppose the protagonist for principled, protective, loyal, ideological, or misinformed reasons.");
-  }
-  if (antagonistWords.test(role) && goodWords.test(`${desires} ${backstory}`)) {
-    signals.push("Motivation check: their opposition should probably come from a sympathetic goal, a moral blind spot, conflicting loyalties, or a harmful method rather than cartoon evil.");
-  }
-  if (/\bhero|protagonist\b/i.test(role) && /\b(cruel|cold|selfish|manipulative|violent|dishonest)\b/i.test(personality)) {
-    signals.push("Creative tension: they are framed as a protagonist/hero but carry abrasive traits. Use that as a flaw, mask, trauma response, or arc pressure.");
-  }
-  if (/\b(dead|deceased)\b/i.test(`${character?.status || ""}`) && /\b(goal|want|desire|plan|future)\b/i.test(`${desires} ${cues?.longTermGoals || ""}`)) {
-    signals.push("Continuity check: this character is marked dead/deceased. Frame active goals through legacy, flashback, recorded intent, haunting, memory, or consequences unless their status changes.");
-  }
-  return signals.slice(0, 4);
-};
-const makeCharacterDesignSignalBlock = (character = {}, cues = {}) => {
-  const signals = detectCharacterDesignSignals(character, cues);
-  if (!signals.length) return "";
-  return `\n\nDesign notes I notice:\n${signals.map(s => `- ${s}`).join("\n")}`;
-};
-
 // World fields the editor renders, keyed by category. "description"/"keywords" + the two common
 // fields (history, culturalNorms) apply to every category; category-specific fields follow.
 const WORLD_COMMON_FIELDS = ["description","keywords","history","culturalNorms"];
@@ -14288,9 +13861,6 @@ const TabAIChat = memo(({ project, settings, appConfig, appConfigLiveLoader = nu
   const abortRef = useRef(null);
   const [agentEvents, setAgentEvents] = useState([]);
   const [agentLogOpen, setAgentLogOpen] = useState(true);
-  const [interviewState, setInterviewState] = useState(null);
-  const [characterFieldFeedback, setCharacterFieldFeedback] = useState([]);
-  const [characterCueDrafts, setCharacterCueDrafts] = useState({});
 
   // A10: Track mounted state — don't update local state after unmount, but let fetch complete
   const mountedRef = useRef(true);
@@ -14300,401 +13870,6 @@ const TabAIChat = memo(({ project, settings, appConfig, appConfigLiveLoader = nu
   }, []);
 
   useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages]);
-
-  const getEditingCharacter = useCallback(() => {
-    if (tabName !== "characters" || !editingEntityId) return null;
-    return (project?.characters || []).find(c => c.id === editingEntityId) || null;
-  }, [tabName, editingEntityId, project?.characters]);
-
-  const updateCharacterCueDraft = useCallback((messageId, field, value) => {
-    const safeField = normalizeCharacterInterviewField(field);
-    if (!safeField) return;
-    setCharacterCueDrafts(prev => ({
-      ...prev,
-      [messageId]: { ...(prev[messageId] || {}), [safeField]: value },
-    }));
-  }, []);
-
-  const runSingleFieldCharacterExpansion = useCallback(async ({ character, field, cue, signal, rejectedDrafts = [] }) => {
-    const safeField = normalizeCharacterInterviewField(field);
-    if (!safeField) throw new Error("That field is not an AI interview field. Edit it directly in the character form.");
-    field = safeField;
-    const meta = CHARACTER_INTERVIEW_LABELS[field] || { label: field };
-    if (!settings?.apiKey) throw new Error("Missing OpenRouter API key");
-    const facts = JSON.stringify({
-      name: character?.name || "",
-      role: character?.role || "",
-      gender: character?.gender || "",
-      age: character?.age || "",
-      pronouns: character?.pronouns || "",
-      occupation: character?.occupation || "",
-      appearance: character?.appearance || "",
-      personality: character?.personality || "",
-      backstory: character?.backstory || "",
-      desires: character?.desires || "",
-      speechPattern: character?.speechPattern || "",
-      canonNotes: character?.canonNotes || "",
-    }, null, 2);
-    const system = "You expand one NovelForge character field. Return strict JSON only. Do not fill any other fields. Do not overwrite unrelated facts. Use the cue as the highest priority. Keep the result useful for a fiction character sheet. Do not repeat any rejected draft shown by the author.";
-    const user = `Character: ${character?.name || "Unnamed"}
-Existing facts:
-${facts}
-
-Target field: ${field} (${meta.label})
-Author cue: ${cue}
-
-Rejected drafts for this field to avoid:
-${rejectedDrafts.length ? rejectedDrafts.map((r, i) => `${i + 1}. ${r}`).join("\n") : "None"}
-
-Return JSON exactly like this shape, with only this target field inside data:
-{ "type": "characters", "data": { "${field}": "expanded field value" } }`;
-    const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${settings.apiKey}`, "HTTP-Referer": window.location.origin, "X-Title": "NovelForge" },
-      body: JSON.stringify({
-        model: settings.tabModels?.characters || settings.model,
-        messages: [{ role: "system", content: system }, { role: "user", content: user }],
-        max_tokens: 1200,
-        temperature: 0.65,
-        response_format: { type: "json_object" },
-      }),
-      signal,
-    });
-    if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error?.message || `API error ${res.status}`); }
-    const data = await res.json();
-    const raw = stripThinkingTokens(data.choices?.[0]?.message?.content || "");
-    let parsed = null;
-    try { parsed = JSON.parse(raw); } catch { parsed = tryRepairJson(raw); }
-    const value = parsed?.data?.[field] ?? parsed?.[field] ?? raw;
-    return makeCharacterFieldJsonMessage(character?.name, field, value, { cues: { [field]: cue }, rejected: { [field]: rejectedDrafts } });
-  }, [settings]);
-
-  const runMultiFieldCharacterExpansion = useCallback(async ({ character, cues, signal, rejectedDrafts = [] }) => {
-    const safeCues = {};
-    for (const [rawKey, rawCue] of Object.entries(cues || {})) {
-      const safeKey = normalizeCharacterInterviewField(rawKey);
-      const cue = String(rawCue || "").trim();
-      if (safeKey && cue && isCharacterInterviewFieldMissing(character, safeKey)) safeCues[safeKey] = cue;
-    }
-    if (!Object.keys(safeCues).length) throw new Error("No usable cues were provided for currently missing story fields.");
-    const rejectedByField = {};
-    for (const item of rejectedDrafts || []) {
-      const f = normalizeCharacterInterviewField(item?.field);
-      if (!f || !safeCues[f]) continue;
-      const text = String(item?.value || item?.draft || "").trim();
-      if (!text) continue;
-      if (!rejectedByField[f]) rejectedByField[f] = [];
-      rejectedByField[f].push(text);
-    }
-    if (!settings?.apiKey) throw new Error("Missing OpenRouter API key");
-    const contextCard = makeCharacterContextCard(character, { limit: 28 });
-    const designSignals = detectCharacterDesignSignals(character, safeCues);
-    const system = `You are NovelForge's character architect: conversational, practical, and sharp.
-
-You expand only the character fields the author gave cues for. Existing filled fields are canon. Do not overwrite them. Do not fill blank fields without cues. If the existing facts contain creative tension, treat it as design material, not an error.
-
-Return strict JSON only with this shape:
-{
-  "note": "1-3 conversational sentences explaining the design logic or any useful tension you noticed.",
-  "type": "characters",
-  "data": { }
-}
-
-Rules:
-- data may contain only these requested keys: ${Object.keys(safeCues).join(", ")}.
-- Make each field useful for a fiction character sheet.
-- Keep prose concrete, not generic.
-- If antagonist + good personality, explain how opposition can come from motive/method/loyalty, not evilness.
-- Do not mention gender/pronouns/age unless they are already provided as context and relevant.
-- Do not repeat rejected drafts. Use them as negative examples.`;
-    const user = `Character currently selected: ${character?.name || "Unnamed"}
-
-Filled-field context to treat as true:
-${contextCard}
-${designSignals.length ? `\nCreative/common-sense notes already detected:\n${designSignals.map(s => `- ${s}`).join("\n")}` : ""}
-
-Author cues to expand:
-${JSON.stringify(safeCues, null, 2)}
-
-Rejected field drafts to avoid:
-${Object.keys(rejectedByField).length ? JSON.stringify(rejectedByField, null, 2) : "None"}
-
-Return JSON only.`;
-    const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${settings.apiKey}`, "HTTP-Referer": window.location.origin, "X-Title": "NovelForge" },
-      body: JSON.stringify({
-        model: settings.tabModels?.characters || settings.model,
-        messages: [{ role: "system", content: system }, { role: "user", content: user }],
-        max_tokens: Math.max(1600, Math.min(3500, Object.keys(safeCues).length * 650)),
-        temperature: 0.72,
-        response_format: { type: "json_object" },
-      }),
-      signal,
-    });
-    if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error?.message || `API error ${res.status}`); }
-    const data = await res.json();
-    const raw = stripThinkingTokens(data.choices?.[0]?.message?.content || "");
-    let parsed = null;
-    try { parsed = JSON.parse(raw); } catch { parsed = tryRepairJson(raw); }
-    const payload = parsed && typeof parsed === "object" ? parsed : { note: "I expanded the cues into character-sheet fields.", data: safeCues };
-    const out = {};
-    const dataObj = payload.data && typeof payload.data === "object" ? payload.data : payload;
-    for (const key of Object.keys(safeCues)) {
-      const value = dataObj?.[key];
-      if (_hasUsableFieldValue(value)) out[key] = value;
-    }
-    if (!Object.keys(out).length) Object.assign(out, safeCues);
-    const localSignals = detectCharacterDesignSignals(character, safeCues);
-    const note = payload.note || (localSignals.length ? localSignals.join(" ") : "I expanded only the cues you filled, using the existing character fields as context.");
-    return makeCharacterMultiFieldJsonMessage(character?.name, out, note, { cues: safeCues, rejected: rejectedByField });
-  }, [settings]);
-
-  const runNewCharacterSeedDraft = useCallback(async ({ seed, signal }) => {
-    if (!settings?.apiKey) throw new Error("Missing OpenRouter API key");
-    const system = "You turn an author's first-character seed into a minimal NovelForge character JSON draft. Do not fill the whole sheet. Only include fields directly implied by the seed plus one compact backstory premise. Return strict JSON only.";
-    const user = `Author seed: ${seed}
-
-Return JSON shape:
-{ "type": "characters", "data": { "name": "", "role": "", "gender": "", "age": "", "pronouns": "", "occupation": "", "backstory": "" } }
-
-Rules: leave any field blank if the seed does not imply it. Do not invent a full profile.`;
-    const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${settings.apiKey}`, "HTTP-Referer": window.location.origin, "X-Title": "NovelForge" },
-      body: JSON.stringify({
-        model: settings.tabModels?.characters || settings.model,
-        messages: [{ role: "system", content: system }, { role: "user", content: user }],
-        max_tokens: 1000,
-        temperature: 0.55,
-        response_format: { type: "json_object" },
-      }),
-      signal,
-    });
-    if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error?.message || `API error ${res.status}`); }
-    const data = await res.json();
-    const raw = stripThinkingTokens(data.choices?.[0]?.message?.content || "");
-    let parsed = null;
-    try { parsed = JSON.parse(raw); } catch { parsed = tryRepairJson(raw); }
-    const payload = parsed || { type: "characters", data: { backstory: seed } };
-    return `Here’s a minimal first-character draft from that seed. Apply it, then select the character and use the missing story-field cue panel for anything else you want to build.
-
-\`\`\`json
-${JSON.stringify(payload, null, 2)}
-\`\`\``;
-  }, [settings]);
-
-
-  const resolveCharacterCueFieldsWithSchemaAI = useCallback(async ({ text, character, signal }) => {
-    const request = String(text || "").trim();
-    if (!request || !settings?.apiKey) return [];
-    const system = `You are a tiny command parser inside NovelForge.
-
-Task: map the author's chat command to character cue-panel fields.
-Return strict JSON only.
-
-Allowed actions:
-- { "action": "add_fields", "fields": ["fieldKey"] }
-- { "action": "add_all_missing", "fields": [] }
-- { "action": "none", "fields": [] }
-
-Rules:
-- Use only allowedAuthorFacingFields[].key from the provided schema.
-- Never return blocked manual/internal fields.
-- Do not generate character content. Only identify requested fields.
-- If the author asks for everything/all/rest/remaining fields, return add_all_missing.
-- If the author asks for an idea that matches multiple fields, return the few best field keys.
-- If uncertain, return none.`;
-    const user = `Author command: ${request}
-
-Selected character: ${character?.name || "this character"}
-
-Character field schema from the actual app code:
-${makeCharacterFieldSchemaForAi(character)}
-
-Return JSON only.`;
-    const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${settings.apiKey}`, "HTTP-Referer": window.location.origin, "X-Title": "NovelForge" },
-      body: JSON.stringify({
-        model: settings.tabModels?.characters || settings.model,
-        messages: [{ role: "system", content: system }, { role: "user", content: user }],
-        max_tokens: 500,
-        temperature: 0,
-        response_format: { type: "json_object" },
-      }),
-      signal,
-    });
-    if (!res.ok) return [];
-    const data = await res.json();
-    const raw = stripThinkingTokens(data.choices?.[0]?.message?.content || "");
-    let parsed = null;
-    try { parsed = JSON.parse(raw); } catch { parsed = tryRepairJson(raw); }
-    if (parsed?.action === "add_all_missing") return getAllMissingCharacterCueFields(character, { includeOptional: true });
-    const fields = Array.isArray(parsed?.fields) ? parsed.fields : [];
-    return uniqCharacterInterviewFields(fields.map(f => normalizeCharacterInterviewField(f)).filter(Boolean))
-      .filter(f => isCharacterInterviewFieldMissing(character, f.key));
-  }, [settings]);
-
-  const maybeStartOrContinueCharacterInterview = useCallback(async ({ msgText, signal }) => {
-    if (tabName !== "characters") return false;
-    const lower = String(msgText || "").trim();
-    const character = getEditingCharacter();
-    const wantsCharacterCuePanel = isCharacterInterviewRequest(lower) || isAddAllCharacterCueFieldsCommand(lower);
-
-    if (interviewState?.type === "newCharacterSeed") {
-      if (!lower) return true;
-      const content = await runNewCharacterSeedDraft({ seed: lower, signal });
-      setInterviewState(null);
-      setMessages(prev => [...prev, { id: uid(), role: "assistant", content, hasAutoFill: true }]);
-      return true;
-    }
-
-    if (interviewState?.type === "characterCueTable" && interviewState?.entityId === editingEntityId) {
-      if (!lower) return true;
-      if (!character) {
-        setInterviewState(null);
-        setMessages(prev => [...prev, { id: uid(), role: "assistant", content: "I lost the selected character. Select the character again, then restart the character cue table." }]);
-        return true;
-      }
-      if (isStopCharacterInterviewCommand(lower)) {
-        setInterviewState(null);
-        setMessages(prev => [...prev, { id: uid(), role: "assistant", content: `Stopped the character cue table for **${character.name || "this character"}**. You can restart it whenever you want.` }]);
-        return true;
-      }
-      const includeOptional = !!interviewState.includeOptional || wantsOptionalCharacterInterview(lower) || isAddAllCharacterCueFieldsCommand(lower);
-      const stateFields = (interviewState.fields || []).map(normalizeCharacterInterviewField).filter(Boolean);
-      let fields = stateFields
-        .map(key => _characterInterviewMeta(key))
-        .filter(f => isCharacterInterviewFieldMissing(character, f.key));
-      if (!fields.length) fields = getCharacterCueTableFields(character, { includeOptional });
-      if (!fields.length) {
-        setInterviewState(null);
-        setMessages(prev => [...prev, { id: uid(), role: "assistant", content: makeCharacterInterviewCompleteMessage(character, getCharacterInterviewStatus(character, { includeOptional })) }]);
-        return true;
-      }
-      const allMissingFields = uniqCharacterInterviewFields([
-        ...fields,
-        ...getCharacterInterviewStatus(character, { includeOptional: true }).missingCore,
-        ...getCharacterInterviewStatus(character, { includeOptional: true }).missingOptional,
-      ]);
-      const cues = parseCharacterCueTableReply(msgText, allMissingFields);
-      if (!Object.keys(cues).length) {
-        const addAllRequested = isAddAllCharacterCueFieldsCommand(msgText);
-        let requestedFields = addAllRequested
-          ? getAllMissingCharacterCueFields(character, { includeOptional: true })
-          : getRequestedCharacterCueFields(msgText, character, { alreadyInCueTable: true });
-        if (!requestedFields.length && /\b(add|include|show|open|bring|put|give|need|want|insert|also|plus|with|everything|all|rest|remaining)\b/i.test(String(msgText || ""))) {
-          try {
-            requestedFields = await resolveCharacterCueFieldsWithSchemaAI({ text: msgText, character, signal });
-          } catch (schemaErr) {
-            console.warn("[NovelForge] Character schema field resolver failed:", schemaErr);
-          }
-        }
-        if (requestedFields.length) {
-          const nextIncludeOptional = includeOptional || addAllRequested || requestedFields.some(f => CHARACTER_INTERVIEW_OPTIONAL_FIELDS.has(f.key));
-          const refreshedFields = uniqCharacterInterviewFields([...fields, ...requestedFields]);
-          setInterviewState({ type: "characterCueTable", entityId: editingEntityId, fields: refreshedFields.map(f => f.key), includeOptional: nextIncludeOptional });
-          setMessages(prev => {
-            const messageId = uid();
-            const names = addAllRequested ? "all remaining author-facing story fields" : requestedFields.map(f => f.label).join(", ");
-            return [...prev, {
-              id: messageId,
-              role: "assistant",
-              content: `Added **${names}** to the cue panel. Type short cues in any boxes you want, then click **Expand filled cues**.`,
-              characterCueTable: makeCharacterCueTablePayload(character, refreshedFields, { includeOptional: nextIncludeOptional }),
-            }];
-          });
-          return true;
-        }
-        const refreshedFields = getCharacterCueTableFields(character, { includeOptional });
-        setInterviewState({ type: "characterCueTable", entityId: editingEntityId, fields: refreshedFields.map(f => f.key), includeOptional });
-        setMessages(prev => {
-          const messageId = uid();
-          return [...prev, {
-            id: messageId,
-            role: "assistant",
-            content: `I didn’t catch any filled cues or field names. Type into the boxes, paste lines like **Habits: bites his thumbnail when lying**, say **add everything**, ask me to add a specific story field, or say **stop**.`,
-            characterCueTable: makeCharacterCueTablePayload(character, refreshedFields, { includeOptional }),
-          }];
-        });
-        return true;
-      }
-      const rejectedDrafts = characterFieldFeedback.filter(f => f.entityId === editingEntityId && Object.prototype.hasOwnProperty.call(cues, f.field));
-      const draft = await runMultiFieldCharacterExpansion({ character, cues, signal, rejectedDrafts });
-      setInterviewState(null);
-      setMessages(prev => [...prev, { id: uid(), role: "assistant", ...draft }]);
-      return true;
-    }
-
-    if (interviewState?.type === "characterFieldCue" && interviewState?.entityId === editingEntityId) {
-      // Legacy safety: older in-session state may still point at the removed one-field interview flow.
-      // Convert it into the current cue-table flow so the assistant never resumes the stale treadmill.
-      if (!character) {
-        setInterviewState(null);
-        setMessages(prev => [...prev, { id: uid(), role: "assistant", content: "I lost the selected character. Select the character again, then restart the missing story-field cue panel." }]);
-        return true;
-      }
-      const includeOptional = wantsOptionalCharacterInterview(lower);
-      const fields = getCharacterCueTableFields(character, { includeOptional });
-      setInterviewState(fields.length ? { type: "characterCueTable", entityId: editingEntityId, fields: fields.map(f => f.key), includeOptional } : null);
-      setMessages(prev => {
-        const messageId = uid();
-        return [...prev, {
-          id: messageId,
-          role: "assistant",
-          content: fields.length
-            ? "I’ve moved this out of the old one-question-at-a-time interview. Use the cue panel below and I’ll expand only the boxes you fill."
-            : makeCharacterInterviewCompleteMessage(character, getCharacterInterviewStatus(character, { includeOptional })),
-          characterCueTable: fields.length ? makeCharacterCueTablePayload(character, fields, { includeOptional }) : undefined,
-        }];
-      });
-      return true;
-    }
-
-    if (!wantsCharacterCuePanel) return false;
-
-    if (!character) {
-      const hasAnyCharacter = (project?.characters || []).length > 0;
-      setInterviewState(hasAnyCharacter ? null : { type: "newCharacterSeed" });
-      setMessages(prev => [...prev, {
-        id: uid(),
-        role: "assistant",
-        content: hasAnyCharacter
-          ? "Select the character you want to build first, then I’ll show a controlled missing story-field cue panel."
-          : "Let’s create the first character from a seed first. Give me a name, role, or one-line premise, and I’ll draft only the fields directly implied by it.",
-      }]);
-      return true;
-    }
-
-    const missing = getCharacterInterviewMissingFields(character);
-    if (!missing.length) {
-      setInterviewState(null);
-      setMessages(prev => [...prev, { id: uid(), role: "assistant", content: `**${character.name || "This character"}** has no blank story-interview fields. Tell me which field you want to refine.` }]);
-      return true;
-    }
-
-    const includeOptional = wantsOptionalCharacterInterview(lower) || isAddAllCharacterCueFieldsCommand(lower);
-    const fields = isAddAllCharacterCueFieldsCommand(lower)
-      ? getAllMissingCharacterCueFields(character, { includeOptional: true })
-      : getCharacterCueTableFields(character, { includeOptional });
-    if (!fields.length) {
-      setInterviewState(null);
-      setMessages(prev => [...prev, { id: uid(), role: "assistant", content: makeCharacterInterviewCompleteMessage(character, getCharacterInterviewStatus(character, { includeOptional })) }]);
-      return true;
-    }
-    setInterviewState({ type: "characterCueTable", entityId: editingEntityId, fields: fields.map(f => f.key), includeOptional });
-    setMessages(prev => {
-      const messageId = uid();
-      return [...prev, {
-        id: messageId,
-        role: "assistant",
-        content: makeCharacterCueTableMessage(character, fields, { includeOptional }),
-        characterCueTable: makeCharacterCueTablePayload(character, fields, { includeOptional }),
-      }];
-    });
-    return true;
-  }, [tabName, editingEntityId, getEditingCharacter, interviewState, project?.characters, characterFieldFeedback, runSingleFieldCharacterExpansion, runMultiFieldCharacterExpansion, runNewCharacterSeedDraft, resolveCharacterCueFieldsWithSchemaAI, setMessages]);
 
   const handleSend = useCallback(async (customMsg) => {
     const msgText = customMsg || input.trim();
@@ -14706,18 +13881,7 @@ Return JSON only.`;
     setAgentLogOpen(true);
     setIsGenerating(true);
 
-    const controller = new AbortController();
-    abortRef.current = controller;
-
     try {
-      const handledByInterview = await maybeStartOrContinueCharacterInterview({ msgText, signal: controller.signal });
-      if (handledByInterview) {
-        abortRef.current = null;
-        setAgentEvents([]);
-        setAgentLogOpen(false);
-        if (mountedRef.current) setIsGenerating(false);
-        return;
-      }
       const liveAppConfig = appConfigLiveLoader
         ? await appConfigLiveLoader(PROMPT_TEMPLATE_TABLE_KEYS_WITH_LEGACY, `tab chat:${tabName}`)
         : appConfig;
@@ -14733,7 +13897,7 @@ Return JSON only.`;
             taskHint: `Tab: ${tabName}. EditingEntity: ${editingEntityId || "none"}.`,
             settings,
             appConfig: liveAppConfig,
-            signal: controller.signal,
+            signal: null,
             onProgress: (event) => setAgentEvents(prev => [...prev.slice(-18), { id: uid(), at: new Date().toISOString(), ...event }]),
           });
           contextInfo = agentResult.assembledContext;
@@ -14745,26 +13909,6 @@ Return JSON only.`;
         }
       } else {
         contextInfo = ContextEngine.buildTabContext(project, chapterIdx, tabName, editingEntityId);
-      }
-
-      if (tabName === "characters") {
-        const activeCharacter = getEditingCharacter();
-        if (activeCharacter) {
-          const characterContextCard = makeCharacterContextCard(activeCharacter, { limit: 30 });
-          const designBlock = makeCharacterDesignSignalBlock(activeCharacter);
-          const rejectedFeedback = characterFieldFeedback
-            .filter(f => f.entityId === editingEntityId)
-            .slice(0, 12)
-            .map(f => `- ${f.label || f.field}: rejected draft to avoid → ${String(f.value || "").slice(0, 500)}`)
-            .join("\n");
-          contextInfo = `${contextInfo || ""}
-
-ACTIVE CHARACTER FIELD CONTEXT — filled fields are facts, blank fields are targets only when requested:
-${characterContextCard}${designBlock}${rejectedFeedback ? `
-
-RECENT REJECTED FIELD DRAFTS — treat these as negative context and do not repeat them:
-${rejectedFeedback}` : ""}`.trim();
-        }
       }
 
       // G6: Increase history to 10, keep first message for context continuity
@@ -14787,14 +13931,15 @@ Rules:
 - Return app fields as flat keys directly inside data. Never group fields under headings.
 - Respect canon, current chapter position, existing fields, constrained values, and the active tab schema.
 - Fill only fields requested or marked empty; do not overwrite existing content unless the user asks.
-- In Characters chat, never ask the user for gender, pronouns, age, orientation, height, build, role, or status as AI interview fields. Those are manual form controls.
-- In Characters chat, never present internal/living-state keys like currentEmotionalState, obligationsOwed, knowledgeState, hasAppeared, briefPersonality, backstoryRevealed, or secretRevealed as author-facing cue-table targets.
 - Do not output deprecated reveal/chapter fields.`;
       const allMessages = [
         { role: "system", content: tabPromptTpl?.system ? renderConfigTemplate(tabPromptTpl.system, tabPromptVars) : tabSystemFallback },
         ...history,
         { role: "user", content: tabPromptTpl?.user ? renderConfigTemplate(tabPromptTpl.user, tabPromptVars) : msgText },
       ];
+
+      const controller = new AbortController();
+      abortRef.current = controller;
 
       // G9: Per-tab temperature — character gen more creative, world more consistent
       const tabTemperatures = { characters: 0.85, world: 0.7, plot: 0.8, relationships: 0.8 };
@@ -14881,7 +14026,7 @@ Rules:
     }
     abortRef.current = null;
     if (mountedRef.current) setIsGenerating(false);
-  }, [input, isGenerating, messages, project, settings, appConfig, appConfigLiveLoader, tabContext, tabName, setMessages, chapterIdx, editingEntityId, getEditingCharacter, characterFieldFeedback, maybeStartOrContinueCharacterInterview]);
+  }, [input, isGenerating, messages, project, settings, appConfig, appConfigLiveLoader, tabContext, tabName, setMessages, chapterIdx, editingEntityId]);
 
   const handleAutoFill = useCallback((content) => {
     try {
@@ -15044,154 +14189,24 @@ Rules:
     } catch { /* silent */ }
   }, [onAutoFill, tabName]);
 
-  const updateCharacterFieldCard = useCallback((messageId, cardId, updater) => {
-    setMessages(prev => prev.map(msg => {
-      if (msg.id !== messageId || !Array.isArray(msg.characterFieldCards)) return msg;
-      return {
-        ...msg,
-        characterFieldCards: msg.characterFieldCards.map(card => {
-          if (card.id !== cardId) return card;
-          const patch = typeof updater === "function" ? updater(card) : updater;
-          return { ...card, ...patch };
-        }),
-      };
-    }));
-  }, [setMessages]);
-
-  const addRejectedCharacterFieldFeedback = useCallback((card, reason = "rejected") => {
-    const field = normalizeCharacterInterviewField(card?.field);
-    const value = String(card?.value || "").trim();
-    if (!editingEntityId || !field || !value) return;
-    setCharacterFieldFeedback(prev => [
-      { id: uid(), entityId: editingEntityId, field, label: card?.label || field, value, reason, cue: card?.cue || "", at: new Date().toISOString() },
-      ...prev,
-    ].slice(0, 40));
-  }, [editingEntityId]);
-
-  const handleAppendCharacterFieldCard = useCallback((messageId, card) => {
-    if (!card || card.status === "appended" || card.status === "thinking") return;
-    const field = normalizeCharacterInterviewField(card.field);
-    if (!field || !onAutoFill) return;
-    onAutoFill({ [field]: card.value });
-    updateCharacterFieldCard(messageId, card.id, { status: "appended", appendedAt: new Date().toISOString() });
-  }, [onAutoFill, updateCharacterFieldCard]);
-
-  const handleRejectCharacterFieldCard = useCallback((messageId, card) => {
-    if (!card || card.status === "rejected") return;
-    addRejectedCharacterFieldFeedback(card, "rejected");
-    updateCharacterFieldCard(messageId, card.id, { status: "rejected", rejectedAt: new Date().toISOString() });
-  }, [addRejectedCharacterFieldFeedback, updateCharacterFieldCard]);
-
-  const handleRethinkCharacterFieldCard = useCallback(async (messageId, card) => {
-    if (!card || isGenerating || !settings?.apiKey) return;
-    const character = getEditingCharacter();
-    const field = normalizeCharacterInterviewField(card.field);
-    if (!character || !field) return;
-    const rejectedDrafts = [
-      ...characterFieldFeedback.filter(f => f.entityId === editingEntityId && f.field === field).map(f => f.value),
-      String(card.value || "").trim(),
-    ].filter(Boolean);
-    addRejectedCharacterFieldFeedback(card, "rethink");
-    updateCharacterFieldCard(messageId, card.id, { status: "thinking" });
-    const controller = new AbortController();
-    abortRef.current = controller;
-    setIsGenerating(true);
-    try {
-      const cue = card.cue || `Create a better alternative for ${card.label || field}.`;
-      const draft = await runSingleFieldCharacterExpansion({ character, field, cue, signal: controller.signal, rejectedDrafts });
-      const nextCard = draft?.characterFieldCards?.[0];
-      if (!nextCard) throw new Error("The model did not return a usable field draft.");
-      updateCharacterFieldCard(messageId, card.id, oldCard => ({
-        ...nextCard,
-        id: oldCard.id,
-        status: "pending",
-        version: (oldCard.version || 1) + 1,
-        rejectedDrafts,
-      }));
-    } catch (err) {
-      if (err?.name !== "AbortError") {
-        updateCharacterFieldCard(messageId, card.id, { status: "pending", error: err?.message || "Rethink failed" });
-      }
-    } finally {
-      abortRef.current = null;
-      if (mountedRef.current) setIsGenerating(false);
-    }
-  }, [isGenerating, settings?.apiKey, getEditingCharacter, characterFieldFeedback, editingEntityId, addRejectedCharacterFieldFeedback, updateCharacterFieldCard, runSingleFieldCharacterExpansion]);
-
-
-
-  const handleAddAllCharacterCueFieldsToTable = useCallback((msg) => {
-    if (!msg?.characterCueTable || msg.characterCueTable.status === "expanded" || isGenerating) return;
-    const character = getEditingCharacter();
-    if (!character) {
-      setMessages(prev => [...prev, { id: uid(), role: "assistant", isError: true, content: "I lost the selected character. Select the character again, then reopen the cue table." }]);
-      return;
-    }
-    const allFields = getAllMissingCharacterCueFields(character, { includeOptional: true });
-    const mergedFields = uniqCharacterInterviewFields([...(msg.characterCueTable.fields || []), ...allFields]);
-    if (!mergedFields.length) {
-      setMessages(prev => [...prev, { id: uid(), role: "assistant", content: makeCharacterInterviewCompleteMessage(character, getCharacterInterviewStatus(character, { includeOptional: true })) }]);
-      return;
-    }
-    setInterviewState({ type: "characterCueTable", entityId: editingEntityId, fields: mergedFields.map(f => f.key), includeOptional: true });
-    setMessages(prev => prev.map(m => m.id === msg.id ? {
-      ...m,
-      content: `Added **all remaining author-facing story fields** to this cue panel. Fill any boxes you want, then click **Expand filled cues**.`,
-      characterCueTable: makeCharacterCueTablePayload(character, mergedFields, { includeOptional: true }),
-    } : m));
-  }, [isGenerating, getEditingCharacter, editingEntityId, setMessages]);
-
-  const handleExpandCharacterCueTable = useCallback(async (msg) => {
-    if (!msg?.characterCueTable || isGenerating) return;
-    const character = getEditingCharacter();
-    if (!character) {
-      setMessages(prev => [...prev, { id: uid(), role: "assistant", isError: true, content: "I lost the selected character. Select the character again, then reopen the cue table." }]);
-      return;
-    }
-    const draftMap = characterCueDrafts[msg.id] || {};
-    const cues = {};
-    for (const f of msg.characterCueTable.fields || []) {
-      const key = normalizeCharacterInterviewField(f.key);
-      const value = String(draftMap[key] || "").trim();
-      if (key && value) cues[key] = value;
-    }
-    if (!Object.keys(cues).length) {
-      setMessages(prev => [...prev, { id: uid(), role: "assistant", isError: true, content: "Fill at least one cue box first, then click **Expand filled cues**." }]);
-      return;
-    }
-    const controller = new AbortController();
-    abortRef.current = controller;
-    setIsGenerating(true);
-    try {
-      const rejectedDrafts = characterFieldFeedback.filter(f => f.entityId === editingEntityId && Object.prototype.hasOwnProperty.call(cues, f.field));
-      const draft = await runMultiFieldCharacterExpansion({ character, cues, signal: controller.signal, rejectedDrafts });
-      setInterviewState(null);
-      setMessages(prev => [
-        ...prev.map(m => m.id === msg.id ? { ...m, characterCueTable: { ...m.characterCueTable, status: "expanded" } } : m),
-        { id: uid(), role: "assistant", ...draft },
-      ]);
-    } catch (err) {
-      if (err?.name === "AbortError") return;
-      setMessages(prev => [...prev, { id: uid(), role: "assistant", isError: true, content: err?.message || "Could not expand those cues." }]);
-    } finally {
-      abortRef.current = null;
-      if (mountedRef.current) setIsGenerating(false);
-    }
-  }, [isGenerating, getEditingCharacter, characterCueDrafts, characterFieldFeedback, editingEntityId, runMultiFieldCharacterExpansion, setMessages]);
-
   const quickActions = useMemo(() => {
     switch (tabName) {
       case "characters": {
         const actions = [
-          { label: "✦ Open fillable field boxes", msg: `Open the fillable missing-field cue table for the selected character. Use filled fields as context. Do not ask one question at a time. Do not ask about gender, pronouns, age, orientation, height, build, role, or status. After I fill boxes, expand only those boxes into separate review cards with Append / Reject / Rethink.` },
+          { label: "✦ Generate character", msg: `Generate a compelling character for my story. You MUST fill ALL of these fields — none may be blank:
+name, role, gender, age, pronouns, orientation, aliases, occupation, height, build, tags, appearance, personality, backstory, desires, shortTermGoals, longTermGoals, speechPattern, voiceSamples, habits, fears, flaws, strengths, skills, internalConflict, externalConflict, signatureItems, secrets, hiddenSecrets, allegiances, arc, canonNotes, status.
+
+For 'gender', 'orientation', 'role', 'status', 'pronouns', 'build' — use ONLY the exact values specified in the system rules.
+If this character's occupation implies membership in an existing organization or location from the context, set 'allegiances' to that org's exact name and reference it in 'backstory'/'canonNotes'.
+Return as structured JSON with the character data wrapped in { "type": "characters", "data": { ... } }.` },
         ];
         // D18: Contextual fill — reference which fields are actually empty
         if (editingEntityId && project?.characters) {
           const char = project.characters.find(c => c.id === editingEntityId);
           if (char) {
-            const emptyFields = getCharacterInterviewMissingFields(char);
+            const emptyFields = [...CHARACTER_TEXT_FIELDS].filter(k => !char[k]);
             if (emptyFields.length > 0) {
-              actions.push({ label: `Fillable boxes for ${emptyFields.length} missing fields`, msg: `Open the fillable missing-field cue table for "${char.name || "this character"}". Use filled fields as context. Do not ask one question at a time. Do not ask about gender, pronouns, age, orientation, height, build, role, or status. After I fill boxes, expand only those boxes into separate review cards with Append / Reject / Rethink.` });
+              actions.push({ label: `Fill ${emptyFields.length} empty fields`, msg: `Fill in these specific empty fields for "${char.name || "this character"}": ${emptyFields.join(", ")}. Respect the dropdown constraints (gender, orientation, role values must match exact spelling from system rules). If the character's role/occupation implies membership in an existing organization from context, include that org's exact name in 'allegiances'. Base suggestions on existing details and genre. Return structured JSON with { "type": "characters", "data": { ... } }.` });
             }
             // Psychology quick action
             const psychFields = ["fears","flaws","strengths","internalConflict","externalConflict"].filter(k => !char[k]);
@@ -15290,7 +14305,7 @@ Tab context:
 Project/tab data:
 {{contextInfo}}
 
-Answer or return structured field suggestions when useful.`,
+Answer or return structured JSON when useful.`,
                     maxTokens: 12000,
                     temperature: 0.8,
                     json: "FALSE",
@@ -15362,89 +14377,6 @@ Answer or return structured field suggestions when useful.`,
               color: "var(--nf-text)", fontSize: 12, lineHeight: 1.7, wordBreak: "break-word",
             }}
             dangerouslySetInnerHTML={{ __html: msg.role === "assistant" ? renderMarkdownCached(msg.content) : msg.content.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/\n/g,"<br/>") }} />
-            {msg.role === "assistant" && msg.characterCueTable && Array.isArray(msg.characterCueTable.fields) && msg.characterCueTable.fields.length > 0 && msg.characterCueTable.status !== "closed" && (
-              <div style={{ marginTop: 10, border: "1px solid var(--nf-border)", borderRadius: 8, background: "var(--nf-bg-surface)", overflow: "hidden" }}>
-                <div style={{ padding: "8px 10px", borderBottom: "1px solid var(--nf-border)", background: "var(--nf-bg-deep)", display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center" }}>
-                  <div>
-                    <div style={{ fontSize: 11, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--nf-text)" }}>Missing story-field cues</div>
-                    <div style={{ fontSize: 10, color: "var(--nf-text-muted)", marginTop: 2 }}>{msg.characterCueTable.characterName} · {msg.characterCueTable.progress}</div>
-                  </div>
-                  <span style={{ fontSize: 10, color: msg.characterCueTable.status === "expanded" ? "var(--nf-success)" : "var(--nf-text-muted)" }}>{msg.characterCueTable.status === "expanded" ? "Expanded" : "Open"}</span>
-                </div>
-                {Array.isArray(msg.characterCueTable.contextRows) && msg.characterCueTable.contextRows.length > 0 && (
-                  <div style={{ padding: "8px 10px", borderBottom: "1px solid var(--nf-border)", background: "var(--nf-bg-deep)", display: "grid", gap: 4 }}>
-                    <div style={{ fontSize: 10, fontWeight: 700, color: "var(--nf-text-muted)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Already filled context</div>
-                    {msg.characterCueTable.contextRows.slice(0, 10).map(row => (
-                      <div key={`${msg.id}:ctx:${row.key}`} style={{ fontSize: 11, color: "var(--nf-text-dim)", lineHeight: 1.45 }}><strong style={{ color: "var(--nf-text)" }}>{row.label}:</strong> {String(row.value).slice(0, 180)}{String(row.value).length > 180 ? "…" : ""}</div>
-                    ))}
-                  </div>
-                )}
-                {Array.isArray(msg.characterCueTable.designSignals) && msg.characterCueTable.designSignals.length > 0 && (
-                  <div style={{ padding: "8px 10px", borderBottom: "1px solid var(--nf-border)", background: "var(--nf-bg-deep)", display: "grid", gap: 5 }}>
-                    <div style={{ fontSize: 10, fontWeight: 700, color: "var(--nf-accent-2)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Design notes</div>
-                    {msg.characterCueTable.designSignals.map((note, i) => <div key={`${msg.id}:sig:${i}`} style={{ fontSize: 11, color: "var(--nf-text-dim)", lineHeight: 1.5 }}>{note}</div>)}
-                  </div>
-                )}
-                <div style={{ padding: 10, display: "grid", gap: 8 }}>
-                  {msg.characterCueTable.fields.map(field => {
-                    const value = characterCueDrafts[msg.id]?.[field.key] || "";
-                    return (
-                      <div key={`${msg.id}:cue:${field.key}`} style={{ border: "1px solid var(--nf-border)", borderRadius: 7, padding: 8, background: "var(--nf-bg)" }}>
-                        <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: "var(--nf-text)", marginBottom: 4 }}>{field.label}</label>
-                        {field.cue && <div style={{ fontSize: 10, color: "var(--nf-text-muted)", lineHeight: 1.45, marginBottom: 6 }}>{field.cue}</div>}
-                        <textarea
-                          value={value}
-                          onChange={e => updateCharacterCueDraft(msg.id, field.key, e.target.value)}
-                          placeholder="Short cue…"
-                          disabled={msg.characterCueTable.status === "expanded" || isGenerating}
-                          className="nf-chat-textarea"
-                          style={{ minHeight: 42, fontSize: 11, resize: "vertical" }}
-                        />
-                      </div>
-                    );
-                  })}
-                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                    <button onClick={() => handleExpandCharacterCueTable(msg)} disabled={msg.characterCueTable.status === "expanded" || isGenerating} className="nf-btn-micro" style={{ borderColor: "var(--nf-accent-2)", color: "var(--nf-accent-2)" }}>
-                      <Icons.Sparkle /> Expand filled cues
-                    </button>
-                    <button onClick={() => handleAddAllCharacterCueFieldsToTable(msg)} disabled={msg.characterCueTable.status === "expanded" || isGenerating} className="nf-btn-micro">
-                      <Icons.Plus /> Add all remaining fields
-                    </button>
-                    <button onClick={() => setMessages(prev => prev.map(m => m.id === msg.id ? { ...m, characterCueTable: { ...m.characterCueTable, status: "closed" } } : m))} disabled={msg.characterCueTable.status !== "open" || isGenerating} className="nf-btn-micro">
-                      <Icons.X /> Close table
-                    </button>
-                  </div>
-                </div>
-              </div>
-            )}
-            {msg.role === "assistant" && Array.isArray(msg.characterFieldCards) && msg.characterFieldCards.length > 0 && (
-              <div style={{ marginTop: 10, display: "grid", gap: 8 }}>
-                {msg.characterFieldCards.map(card => (
-                  <div key={card.id} style={{ border: "1px solid var(--nf-border)", borderRadius: 8, background: "var(--nf-bg-surface)", overflow: "hidden" }}>
-                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "7px 9px", borderBottom: "1px solid var(--nf-border)", background: "var(--nf-bg-deep)" }}>
-                      <div style={{ fontSize: 11, fontWeight: 700, color: "var(--nf-text)", textTransform: "uppercase", letterSpacing: "0.06em" }}>{card.label || card.field}</div>
-                      <div style={{ fontSize: 10, color: card.status === "appended" ? "var(--nf-success)" : card.status === "rejected" ? "var(--nf-error)" : card.status === "thinking" ? "var(--nf-accent-2)" : "var(--nf-text-muted)" }}>
-                        {card.status === "appended" ? "Appended" : card.status === "rejected" ? "Rejected" : card.status === "thinking" ? "Rethinking…" : card.version > 1 ? `Draft v${card.version}` : "Draft"}
-                      </div>
-                    </div>
-                    {card.cue && <div style={{ padding: "6px 9px 0", fontSize: 10, color: "var(--nf-text-muted)", fontStyle: "italic" }}>Cue: {card.cue}</div>}
-                    <div style={{ padding: 9, fontSize: 12, lineHeight: 1.65, color: "var(--nf-text)", whiteSpace: "pre-wrap" }}>{String(card.value || "")}</div>
-                    {card.error && <div style={{ padding: "0 9px 6px", fontSize: 10, color: "var(--nf-error)" }}>{card.error}</div>}
-                    <div style={{ display: "flex", gap: 6, padding: "0 9px 9px", flexWrap: "wrap" }}>
-                      <button onClick={() => handleAppendCharacterFieldCard(msg.id, card)} disabled={card.status === "appended" || card.status === "rejected" || card.status === "thinking"} className="nf-btn-micro" style={{ borderColor: "var(--nf-accent-2)", color: "var(--nf-accent-2)" }}>
-                        <Icons.Check /> Append
-                      </button>
-                      <button onClick={() => handleRejectCharacterFieldCard(msg.id, card)} disabled={card.status === "appended" || card.status === "rejected" || card.status === "thinking"} className="nf-btn-micro">
-                        <Icons.X /> Reject
-                      </button>
-                      <button onClick={() => handleRethinkCharacterFieldCard(msg.id, card)} disabled={card.status === "thinking" || card.status === "appended"} className="nf-btn-micro">
-                        <Icons.Redo /> Rethink
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
             {msg.role === "assistant" && msg.hasAutoFill && !msg.isError && (
               <button onClick={() => handleAutoFill(msg.content)} className="nf-btn-micro" style={{ marginTop: 4, borderColor: "var(--nf-accent-2)", color: "var(--nf-accent-2)" }}>
                 <Icons.Sparkle /> Apply to fields
@@ -24088,12 +23020,12 @@ The FIRST attached image is the master photograph of this exact room. ${WALL_REF
             </div>
             <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
               <button onClick={() => { setImageToolsOpen(true); setImageMode("create"); }} className="nf-btn nf-btn-primary" style={{ fontSize: 12 }}><Icons.Plus /> Create Image</button>
-              <button onClick={() => { setImageToolsOpen(v => !v); setImageMode(imageMode === "library" ? "review" : imageMode); }} className="nf-btn nf-btn-ghost" style={{ fontSize: 12 }}>{imageToolsOpen ? "Hide Tools" : "Image Tools"}</button>
+              {!NF_DECLUTTER_UI && <button onClick={() => { setImageToolsOpen(v => !v); setImageMode(imageMode === "library" ? "review" : imageMode); }} className="nf-btn nf-btn-ghost" style={{ fontSize: 12 }}>{imageToolsOpen ? "Hide Tools" : "Image Tools"}</button>}
               <button onClick={() => setImageLibraryOpen(true)} className="nf-btn nf-btn-ghost" style={{ fontSize: 12 }}>Global Library</button>
             </div>
           </div>
 
-          <div className="nf-card" style={{ marginBottom: 14, padding: 14 }}>
+          <div className="nf-card" style={{ display: NF_DECLUTTER_UI ? "none" : "block", marginBottom: 14, padding: 14 }}>
             <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "flex-start", marginBottom: 12, flexWrap: "wrap" }}>
               <div>
                 <div style={{ fontSize: 13, fontWeight: 800, color: "var(--nf-text)" }}>Visual Desk</div>
@@ -24166,7 +23098,7 @@ The FIRST attached image is the master photograph of this exact room. ${WALL_REF
                 <button onClick={batchDelete} className="nf-btn-micro" style={{ color: "var(--nf-danger, #c0504d)" }}>Delete</button>
               </div>
             )}
-            <div style={{ marginTop: 10, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", gap: 8 }}>
+            <div style={{ display: NF_DECLUTTER_UI ? "none" : "grid", marginTop: 10, gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", gap: 8 }}>
               {[
                 { label: "Visible", value: sortedImages.length, hint: `${filteredImages.length} matched` },
                 { label: "Needs review", value: visiblePriority, hint: "Priority sort target" },
@@ -24183,7 +23115,7 @@ The FIRST attached image is the master photograph of this exact room. ${WALL_REF
             </div>
           </div>
 
-          {imageToolsOpen && (
+          {!NF_DECLUTTER_UI && imageToolsOpen && (
             <div className="nf-card" style={{ marginBottom: 14, padding: 12 }}>
               <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center", marginBottom: 10, flexWrap: "wrap" }}>
                 <div>
@@ -24207,7 +23139,7 @@ The FIRST attached image is the master photograph of this exact room. ${WALL_REF
 
           {(
             <>
-              <div className="nf-card" style={{ marginBottom: 12, padding: 10 }}>
+              <div className="nf-card" style={{ display: NF_DECLUTTER_UI ? "none" : "block", marginBottom: 12, padding: 10 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
                   <div style={{ fontSize: 12, fontWeight: 700, color: "var(--nf-text)" }}>Library</div>
                   <div style={{ fontSize: 10, color: "var(--nf-text-muted)" }}>{sortedImages.length} shown · sorted by {imageSortMode === "priority" ? "needs review" : imageSortMode}</div>
@@ -24218,13 +23150,13 @@ The FIRST attached image is the master photograph of this exact room. ${WALL_REF
                   ))}
                 </div>
               </div>
-              <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 16 }}>
+              <div style={{ display: NF_DECLUTTER_UI ? "none" : "flex", gap: 6, flexWrap: "wrap", marginBottom: 16 }}>
                 <button onClick={() => setImageSmartAlbum("all")} className={`nf-btn-micro ${imageSmartAlbum === "all" ? "nf-btn-primary" : ""}`}>All</button>
                 {smartAlbums.map(a => (
                   <button key={a.id} onClick={() => { setImageSmartAlbum(a.id); if (a.id === "failed") { setImageToolsOpen(true); setImageMode("review"); } }} className={`nf-btn-micro ${imageSmartAlbum === a.id ? "nf-btn-primary" : ""}`}>{a.label} ({a.count})</button>
                 ))}
               </div>
-              {imageSets.length > 0 && (
+              {!NF_DECLUTTER_UI && imageSets.length > 0 && (
                 <div className="nf-card" style={{ marginBottom: 14, padding: 12 }}>
                   <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center", marginBottom: 8 }}>
                     <h3 className="nf-card-title" style={{ margin: 0 }}>Image Sets</h3>
@@ -24237,7 +23169,7 @@ The FIRST attached image is the master photograph of this exact room. ${WALL_REF
                   </div>
                 </div>
               )}
-              {projectBoardIds.length > 0 && (
+              {!NF_DECLUTTER_UI && projectBoardIds.length > 0 && (
                 <div className="nf-card" style={{ marginBottom: 14, padding: 12 }}>
                   <h3 className="nf-card-title" style={{ marginBottom: 8 }}>Project Visual Board</h3>
                   <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(92px, 1fr))", gap: 8 }}>
@@ -24367,9 +23299,9 @@ The FIRST attached image is the master photograph of this exact room. ${WALL_REF
             </div>
           )}
 
-          {imageToolsOpen && imageMode === "review" && (
+          {!NF_DECLUTTER_UI && imageToolsOpen && imageMode === "review" && (
             <div style={{ display: "grid", gap: 14 }}>
-              <div className="nf-card" style={{ display: "grid", gridTemplateColumns: "120px minmax(0,1fr)", gap: 14, alignItems: "center" }}>
+              <div className="nf-card" style={{ display: NF_DECLUTTER_UI ? "none" : "grid", gridTemplateColumns: "120px minmax(0,1fr)", gap: 14, alignItems: "center" }}>
                 <div style={{ width: 96, height: 96, borderRadius: "50%", border: "8px solid var(--nf-accent)", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--nf-text)", fontSize: 24, fontWeight: 800 }}>{libraryHealth}%</div>
                 <div>
                   <h3 className="nf-card-title" style={{ marginBottom: 6 }}>Library Health</h3>
@@ -24381,7 +23313,7 @@ The FIRST attached image is the master photograph of this exact room. ${WALL_REF
                   </div>
                 </div>
               </div>
-              <div className="nf-card">
+              <div className="nf-card" style={{ display: NF_DECLUTTER_UI ? "none" : "block" }}>
                 <h3 className="nf-card-title">Generation Queue</h3>
                 {imageJobs.length === 0 ? (
                   <p className="nf-hint" style={{ margin: 0 }}>No tracked image jobs yet. Generated or imported images land in Image Inbox.</p>
@@ -24428,7 +23360,7 @@ The FIRST attached image is the master photograph of this exact room. ${WALL_REF
                 )}
               </div>
               {duplicateGroups.length > 0 && (
-                <div className="nf-card">
+                <div className="nf-card" style={{ display: NF_DECLUTTER_UI ? "none" : "block" }}>
                   <h3 className="nf-card-title">Possible duplicates</h3>
                   <div style={{ display: "grid", gap: 10 }}>
                     {duplicateGroups.slice(0, 4).map((group, idx) => (
@@ -24440,7 +23372,7 @@ The FIRST attached image is the master photograph of this exact room. ${WALL_REF
                   </div>
                 </div>
               )}
-              <div className="nf-card">
+              <div className="nf-card" style={{ display: NF_DECLUTTER_UI ? "none" : "block" }}>
                 <h3 className="nf-card-title">Image Rules</h3>
                 <div style={{ display: "grid", gap: 8 }}>
                   {imageRules.map(rule => (
@@ -26241,7 +25173,7 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
           </div>
         </div>
         )}
-        {!focusMode && !viewingDraftId && (
+        {!NF_DECLUTTER_UI && !focusMode && !viewingDraftId && (
           <SceneBriefStrip
             project={project}
             chapterIdx={activeChapterIdx}
@@ -26252,7 +25184,7 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
             onOpenWorld={() => setActiveTab("world")}
           />
         )}
-        <WritingProgressStrip
+        {!NF_DECLUTTER_UI && <WritingProgressStrip
           silent={settings.silentWritingMode}
           chapterWords={currentChapterWords}
           totalWords={totalProjectWords}
@@ -26263,8 +25195,8 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
           onStartTimedSprint={() => setSprint({ mode: "time", target: 20, startWords: totalProjectWords, endsAt: Date.now() + 20 * 60000, startedAt: Date.now() })}
           onStartWordSprint={() => setSprint({ mode: "words", target: 500, startWords: totalProjectWords, startedAt: Date.now() })}
           onSprintEnd={(completed) => { setSprint(null); if (completed) showToast("Sprint complete", "success"); }}
-        />
-        {!focusMode && !viewingDraftId && (
+        />}
+        {!NF_DECLUTTER_UI && !focusMode && !viewingDraftId && (
           <CharacterPresenceStrip
             characters={project?.characters}
             chapterContent={activeChapter?.content}
@@ -26279,7 +25211,7 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
           />
         )}
         <RichTextToolbar editorRef={editorRef} onContentChange={syncEditorContent} />
-        <ColorModeBar colorMode={colorMode} setColorMode={setColorMode} characters={project?.characters} />
+        {!NF_DECLUTTER_UI && <ColorModeBar colorMode={colorMode} setColorMode={setColorMode} characters={project?.characters} />}
         <div className="nf-editor-split">
           {!focusMode && (
             <GlyphRail
@@ -26944,12 +25876,12 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                   setCharViewMode("preview");
                 }}
                 className="nf-btn-icon-sm" aria-label="Add character" title="Add character from selected template"><Icons.Plus /></button>
-              <button onClick={() => setShowGroupForm(prev => !prev)}
-                className="nf-btn-icon-sm" aria-label="Add bulk group" title="Add bulk character group" style={{ color: "var(--nf-accent-2)", borderColor: "var(--nf-accent-2)" }}><Icons.Users /></button>
-              <button onClick={() => setShowLineup(true)} className="nf-btn-icon-sm" aria-label="Height lineup" title="Compare character heights">↕</button>
+              {!NF_DECLUTTER_UI && <button onClick={() => setShowGroupForm(prev => !prev)}
+                className="nf-btn-icon-sm" aria-label="Add bulk group" title="Add bulk character group" style={{ color: "var(--nf-accent-2)", borderColor: "var(--nf-accent-2)" }}><Icons.Users /></button>}
+              {!NF_DECLUTTER_UI && <button onClick={() => setShowLineup(true)} className="nf-btn-icon-sm" aria-label="Height lineup" title="Compare character heights">↕</button>}
             </div>
           </div>
-          {characterTemplates.length > 0 && (
+          {!NF_DECLUTTER_UI && characterTemplates.length > 0 && (
             <div style={{ padding: "8px 10px", borderBottom: "1px solid var(--nf-border)", display: "grid", gap: 4 }}>
               <label style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--nf-text-muted)", fontWeight: 700 }}>New character template</label>
               <select value={charNewTemplateId} onChange={e => setCharNewTemplateId(e.target.value)} className="nf-input nf-input-compact" style={{ fontSize: 11 }}>
@@ -27194,7 +26126,7 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                       <Icons.Target /> {nextBestAction.label}
                     </button>
                   )}
-                  <div style={{ display: "inline-flex", border: "1px solid var(--nf-border)", borderRadius: 999, overflow: "hidden" }}>
+                  <div style={{ display: NF_DECLUTTER_UI ? "none" : "inline-flex", border: "1px solid var(--nf-border)", borderRadius: 999, overflow: "hidden" }}>
                     {[{ v: "preview", l: "View" }, { v: "edit", l: "Edit" }].map(o => (
                       <button key={o.v} onClick={() => setCharViewMode(o.v)}
                         style={{ fontSize: 10, padding: "4px 9px", border: "none", cursor: "pointer", background: charViewMode === o.v ? "var(--nf-accent)" : "transparent", color: charViewMode === o.v ? "#fff" : "var(--nf-text-muted)", fontWeight: 700 }}>
@@ -27208,7 +26140,7 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                 </div>
               </div>
 
-              {!editingChar.isBulk && selectedHealth.length > 0 && (
+              {!NF_DECLUTTER_UI && !editingChar.isBulk && selectedHealth.length > 0 && (
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginTop: 10, alignItems: "center" }} title="Character readiness: tap to jump">
                   <span style={{ fontSize: 10, color: "var(--nf-text-muted)", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>Readiness</span>
                   {selectedHealth.map(seg => {
@@ -27223,7 +26155,7 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                 </div>
               )}
 
-              {selectedStoryLens.length > 0 && (
+              {!NF_DECLUTTER_UI && selectedStoryLens.length > 0 && (
                 <div style={{ marginTop: 12 }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, marginBottom: 6 }}>
                     <div style={{ fontSize: 10, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--nf-text-muted)" }}>Story lens</div>
@@ -27324,7 +26256,7 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                 </div>
               )}
 
-              {!editingChar.isBulk && (
+              {!NF_DECLUTTER_UI && !editingChar.isBulk && (
                 <div style={{ marginTop: 12, padding: "10px 12px", background: "var(--nf-bg-deep)", border: "1px solid var(--nf-border)", borderRadius: 6 }}>
                   <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start", flexWrap: "wrap" }}>
                     <div style={{ minWidth: 240, flex: 1 }}>
@@ -27361,7 +26293,7 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                 </div>
               )}
 
-              <div style={{ display: "grid", gridTemplateColumns: selectedNeeds.length ? "minmax(0, 1fr) minmax(220px, 0.8fr)" : "1fr", gap: 12, marginTop: 12 }}>
+              <div style={{ display: NF_DECLUTTER_UI ? "none" : "grid", gridTemplateColumns: selectedNeeds.length ? "minmax(0, 1fr) minmax(220px, 0.8fr)" : "1fr", gap: 12, marginTop: 12 }}>
                 <div style={{ padding: "10px 12px", background: "var(--nf-bg-deep)", border: "1px solid var(--nf-border)", borderRadius: 4 }}>
                   <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--nf-text-muted)", marginBottom: 6 }}>At a glance</div>
                   {charViewMode === "preview" && (
@@ -27434,7 +26366,7 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
 
             </div>
 
-            {charViewMode === "preview" && (
+            {!NF_DECLUTTER_UI && charViewMode === "preview" && (
               <div className="nf-char-section" id="character-dossier" style={{ scrollMarginTop: 110, padding: 16 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, marginBottom: 12 }}>
                   <div>
@@ -27463,9 +26395,9 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
               </div>
             )}
 
-            <div style={{ display: charViewMode === "preview" ? "none" : "contents" }}>
+            <div style={{ display: NF_DECLUTTER_UI ? "contents" : (charViewMode === "preview" ? "none" : "contents") }}>
 
-            <div className="nf-char-section" id="character-edit-map" style={{ scrollMarginTop: 110, padding: 14 }}>
+            <div className="nf-char-section" id="character-edit-map" style={{ display: NF_DECLUTTER_UI ? "none" : "block", scrollMarginTop: 110, padding: 14 }}>
               <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, marginBottom: 10 }}>
                 <div>
                   <div style={{ fontSize: 11, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--nf-text-muted)" }}>Edit map</div>
@@ -28756,11 +27688,11 @@ ${lookAlikeLock}` : ""}`;
                 {cfgOptions("world.category", WORLD_UI_CATEGORIES).map(cat => <option key={cat.value} value={cat.value}>{cat.label}</option>)}
               </select>
               <button onClick={() => createWorldEntry(worldTemplateCategory)} className="nf-btn nf-btn-primary" style={{ fontSize: 12 }}><Icons.Plus /> Add</button>
-              <button onClick={() => setShowWorldTools(v => !v)} className="nf-btn nf-btn-ghost" style={{ fontSize: 12 }}>{showWorldTools ? "Hide Tools" : "World Tools"}</button>
+              {!NF_DECLUTTER_UI && <button onClick={() => setShowWorldTools(v => !v)} className="nf-btn nf-btn-ghost" style={{ fontSize: 12 }}>{showWorldTools ? "Hide Tools" : "World Tools"}</button>}
             </div>
           </div>
 
-          <div className="nf-card" style={{ marginBottom: 12, padding: 12 }}>
+          <div className="nf-card" style={{ display: NF_DECLUTTER_UI ? "none" : "block", marginBottom: 12, padding: 12 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
               <div>
                 <div style={{ fontSize: 20, fontWeight: 700, color: "var(--nf-text)" }}>{items.length} entr{items.length === 1 ? "y" : "ies"}</div>
@@ -28810,7 +27742,7 @@ ${lookAlikeLock}` : ""}`;
             })}
           </div>
 
-          {showWorldTools && (
+          {!NF_DECLUTTER_UI && showWorldTools && (
             <div className="nf-card" style={{ marginBottom: 14, padding: 12 }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
                 <div>
@@ -30137,10 +29069,10 @@ Formal group portrait, higher ranks center/front, appropriate setting.`;
               </div>
               <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                 <button onClick={addPlotChapter} className="nf-btn-icon-sm"><Icons.Plus /> Add Chapter</button>
-                <button onClick={() => setShowPlotTools(v => !v)} className="nf-btn-micro">{showPlotTools ? "Hide Tools" : "Tools"}</button>
+                {!NF_DECLUTTER_UI && <button onClick={() => setShowPlotTools(v => !v)} className="nf-btn-micro">{showPlotTools ? "Hide Tools" : "Tools"}</button>}
               </div>
             </div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 8, marginTop: 12 }}>
+            <div style={{ display: NF_DECLUTTER_UI ? "none" : "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 8, marginTop: 12 }}>
               <button type="button" onClick={() => setPlotFocusFilter("all")} className="nf-card" style={{ padding: 10, textAlign: "left", borderColor: plotFocusFilter === "all" ? "var(--nf-accent)" : "var(--nf-border)", background: plotFocusFilter === "all" ? "var(--nf-accent-glow)" : "var(--nf-bg-raised)", cursor: "pointer" }}>
                 <div style={{ fontSize: 18, fontWeight: 700 }}>{plotStats.total}</div><div style={{ fontSize: 11, color: "var(--nf-text-muted)" }}>Chapters</div>
               </button>
@@ -30157,7 +29089,7 @@ Formal group portrait, higher ranks center/front, appropriate setting.`;
             </div>
           </div>
 
-          {plotFlowRows.length > 0 && (
+          {!NF_DECLUTTER_UI && plotFlowRows.length > 0 && (
             <div className="nf-card" style={{ marginBottom: 14, padding: "12px 14px" }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap", marginBottom: 10 }}>
                 <div>
@@ -30213,14 +29145,14 @@ Formal group portrait, higher ranks center/front, appropriate setting.`;
 
           <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 10 }}>
             <input value={plotSearch} onChange={e => setPlotSearch(e.target.value)} placeholder="Search plot…" className="nf-input" style={{ flex: 1, minWidth: 180, fontSize: 12, padding: "7px 10px" }} />
-            {focusChips.map(chip => (
+            {!NF_DECLUTTER_UI && focusChips.map(chip => (
               <button key={chip.key} type="button" onClick={() => setPlotFocusFilter(chip.key)} className="nf-btn-micro" style={{ borderColor: plotFocusFilter === chip.key ? "var(--nf-accent)" : "var(--nf-border)", color: plotFocusFilter === chip.key ? "var(--nf-accent)" : "var(--nf-text-muted)", background: plotFocusFilter === chip.key ? "var(--nf-accent-glow)" : "transparent" }}>
                 {chip.label}{chip.count != null ? ` ${chip.count}` : ""}
               </button>
             ))}
           </div>
 
-          {showPlotTools && (
+          {!NF_DECLUTTER_UI && showPlotTools && (
             <div className="nf-card" style={{ marginBottom: 14, padding: 12 }}>
               <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center", marginBottom: 10 }}>
                 <div>
@@ -30800,11 +29732,11 @@ Formal group portrait, higher ranks center/front, appropriate setting.`;
             <div style={{ display: "flex", gap: 6, flexShrink: 0, flexWrap: "wrap", justifyContent: "flex-end" }}>
               {settings.apiKey && <button onClick={handleSyncRelationshipsFromStory} disabled={relDraftBusy} className="nf-btn nf-btn-primary"><Icons.Wand /> {relDraftBusy === "storySync" ? "Syncing…" : "Sync Story"}</button>}
               <button onClick={addRelationship} className="nf-btn nf-btn-primary"><Icons.Plus /> Add</button>
-              <button onClick={() => setShowRelTools(v => !v)} className="nf-btn nf-btn-ghost"><Icons.Settings /> Tools</button>
+              {!NF_DECLUTTER_UI && <button onClick={() => setShowRelTools(v => !v)} className="nf-btn nf-btn-ghost"><Icons.Settings /> Tools</button>}
             </div>
           </div>
 
-          <div className="nf-card" style={{ marginBottom: 12, padding: 14 }}>
+          <div className="nf-card" style={{ display: NF_DECLUTTER_UI ? "none" : "block", marginBottom: 12, padding: 14 }}>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 8 }}>
               {[
                 { label: "Connections", value: relStats.total, hint: `${relStats.complete} ready` },
@@ -30828,7 +29760,7 @@ Formal group portrait, higher ranks center/front, appropriate setting.`;
             </div>
           </div>
 
-          <div className="nf-card" style={{ marginBottom: 12, padding: 14 }}>
+          <div className="nf-card" style={{ display: NF_DECLUTTER_UI ? "none" : "block", marginBottom: 12, padding: 14 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, marginBottom: 12, flexWrap: "wrap" }}>
               <div>
                 <div style={{ fontSize: 12, fontWeight: 800, color: "var(--nf-text)", letterSpacing: "0.04em", textTransform: "uppercase" }}>Relationship Pulse</div>
@@ -30895,14 +29827,14 @@ Formal group portrait, higher ranks center/front, appropriate setting.`;
               <Icons.Search />
               <input value={relSearch} onChange={e => setRelSearch(e.target.value)} placeholder="Search people, status, tension, notes…" className="nf-input" style={{ width: "100%", paddingLeft: 32 }} />
             </div>
-            <div style={{ display: "flex", gap: 6, overflowX: "auto", paddingBottom: 2 }}>
+            <div style={{ display: NF_DECLUTTER_UI ? "none" : "flex", gap: 6, overflowX: "auto", paddingBottom: 2 }}>
               {relFilterChips.map(chip => (
                 <button key={chip.key} onClick={() => setRelFilter(chip.key)} className={`nf-btn-micro ${relFilter === chip.key ? "nf-btn-primary" : ""}`} style={{ whiteSpace: "nowrap" }}>{chip.label}</button>
               ))}
             </div>
           </div>
 
-          {showRelTools && (
+          {!NF_DECLUTTER_UI && showRelTools && (
             <div className="nf-card" style={{ marginBottom: 14, padding: 14 }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, marginBottom: 10 }}>
                 <div>
@@ -31730,7 +30662,7 @@ Speech pattern: ${char.speechPattern || ""}` },
         <p className="nf-hint" style={{ marginBottom: 24 }}>Smart context payload — only relevant characters, world entries, and relationships are sent to the AI based on what appears in your current chapter.</p>
 
         {/* Phase 21: Review Desk — first-glance memory health before raw diagnostics */}
-        <div className="nf-card" style={{ marginBottom: 24, padding: 18, background: "linear-gradient(135deg, var(--nf-bg-raised), var(--nf-bg-deep))" }}>
+        <div className="nf-card" style={{ display: NF_DECLUTTER_UI ? "none" : "block", marginBottom: 24, padding: 18, background: "linear-gradient(135deg, var(--nf-bg-raised), var(--nf-bg-deep))" }}>
           <div style={{ display: "flex", justifyContent: "space-between", gap: 18, alignItems: "flex-start", marginBottom: 14, flexWrap: "wrap" }}>
             <div style={{ minWidth: 220, flex: "1 1 280px" }}>
               <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase", color: "var(--nf-accent-2)", marginBottom: 5 }}>Review Desk</div>
@@ -32222,7 +31154,7 @@ Speech pattern: ${char.speechPattern || ""}` },
           },
         ];
         return (
-          <div className="nf-card nf-settings-desk">
+          <div className="nf-card nf-settings-desk" style={{ display: NF_DECLUTTER_UI ? "none" : undefined }}>
             <div className="nf-settings-desk-head">
               <div>
                 <div className="nf-section-eyebrow">Setup desk</div>
@@ -32291,7 +31223,7 @@ Speech pattern: ${char.speechPattern || ""}` },
       </div>
 
       {/* ─── Mental Health & Ambient Environment ─── */}
-      <div id="nf-settings-comfort" className="nf-card" style={{ marginTop: 16 }}>
+      <div id="nf-settings-comfort" className="nf-card" style={{ display: NF_DECLUTTER_UI ? "none" : "block", marginTop: 16 }}>
         <h3 className="nf-card-title">🌿 Writing Environment</h3>
         <p className="nf-hint" style={{ marginTop: -4, marginBottom: 12 }}>Designed for mental rest. No gamification, no streaks, no pressure.</p>
 
@@ -32538,7 +31470,7 @@ Speech pattern: ${char.speechPattern || ""}` },
       </div>
 
       {/* Multi-Agent System Settings */}
-      <div id="nf-settings-agents" className="nf-card" style={{ marginTop: 16 }}>
+      <div id="nf-settings-agents" className="nf-card" style={{ display: NF_DECLUTTER_UI ? "none" : "block", marginTop: 16 }}>
         <h3 className="nf-card-title">🎭 Multi-Agent System</h3>
         <p style={{ fontSize: 11, color: "var(--nf-text-muted)", marginBottom: 14, lineHeight: 1.6 }}>
           Delegate memory retrieval and context assembly to specialized agents running in parallel.
@@ -32824,7 +31756,7 @@ Speech pattern: ${char.speechPattern || ""}` },
         )}
       </div>
 
-      <div id="nf-settings-config" className="nf-card">
+      <div id="nf-settings-config" className="nf-card" style={{ display: NF_DECLUTTER_UI ? "none" : "block" }}>
         <h3 className="nf-card-title">⚙ App Config Sheet</h3>
         <p style={{ fontSize: 12, color: "var(--nf-text-muted)", marginBottom: 14, lineHeight: 1.6 }}>
           Customize dropdowns, prompts, character templates, image templates, image rules, and world templates from one Google Sheet. The app keeps working from local defaults if the sheet is disconnected.
