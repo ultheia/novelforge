@@ -2171,7 +2171,20 @@ const getCharacterInterviewMissingFields = (character = {}, opts = {}) => {
   return opts.includeOptional ? status.missingOptional : [];
 };
 const getNextCharacterInterviewField = (character = {}, opts = {}) => getCharacterInterviewMissingFields(character, opts)[0] || null;
-const isCharacterInterviewRequest = (text = "") => /\b(field[-\s]?by[-\s]?field|interview|cue[-\s]?table|missing[-\s]?field|missing\s+fields|fill\s+(?:the\s+)?(?:blank|empty|missing)|blank\s+fields|empty\s+fields|start\s+(?:a\s+)?character|generate\s+(?:a\s+)?character|create\s+(?:a\s+)?character|flesh\s+out|continue\s+optional|optional\s+fields)\b/i.test(String(text || ""));
+const isCharacterInterviewRequest = (text = "") => {
+  const s = String(text || "").toLowerCase().replace(/[’']/g, "'").trim();
+  if (!s) return false;
+  // Catch natural user requests like "missing-field cue table", "where is the table I can fill",
+  // "give me boxes", "fill missing story fields", and "cue panel" locally. If this misses,
+  // the request falls through to the model and the model can hallucinate markdown tables/internal fields.
+  const asksForCueUi = /\b(cue\s*(table|panel|form|boxes?|cards?)|fill(?:able)?\s*(table|form|boxes?|panel)|table\s+(?:i|we)\s+can\s+fill|where\s+(?:is|are).*\b(table|boxes?|form|panel)\b|boxes?\s+(?:to|i|we)\s*(?:fill|type)|form\s+(?:to|i|we)\s*(?:fill|type))\b/i.test(s);
+  const asksForMissingFields = /\b(missing|blank|empty|unfilled|incomplete)\b[\s\S]{0,50}\b(field|fields|story\s*fields|story-field|sheet|profile|details|slots?)\b/i.test(s)
+    || /\b(field|fields|story\s*fields|story-field|sheet|profile|details|slots?)\b[\s\S]{0,50}\b(missing|blank|empty|unfilled|incomplete)\b/i.test(s);
+  const asksToFill = /\b(fill|complete|expand|build|flesh\s*out|develop|draft)\b[\s\S]{0,60}\b(character|fields?|story\s*fields|story-field|sheet|profile|details|blanks?|empt(?:y|ies)|missing)\b/i.test(s);
+  const startsCharacter = /\b(start|generate|create|make|draft)\s+(?:a\s+)?(?:new\s+)?character\b/i.test(s);
+  const oldInterviewTerms = /\b(field[-\s]?by[-\s]?field|interview|continue\s+optional|optional\s+fields)\b/i.test(s);
+  return asksForCueUi || asksForMissingFields || asksToFill || startsCharacter || oldInterviewTerms;
+};
 const wantsOptionalCharacterInterview = (text = "") => /\b(optional|continue\s+optional|complete\s+(?:the\s+)?sheet|all\s+(?:missing\s+)?fields|every\s+(?:missing\s+)?field)\b/i.test(String(text || ""));
 const isStopCharacterInterviewCommand = (text = "") => /^(stop|done|end|cancel|quit|enough|finish|finished)$/i.test(String(text || "").trim());
 const isSkipCharacterInterviewCommand = (text = "") => /^(skip|pass|not now)$/i.test(String(text || "").trim());
@@ -2276,18 +2289,13 @@ const makeCharacterCueTableMessage = (character = {}, fields = [], opts = {}) =>
   const progress = status.missingCore.length
     ? `Core story fields left: ${status.missingCore.length}.`
     : `Core story fields are done. Optional fields left: ${status.optionalMissingCount}.`;
-  const examples = fields.slice(0, 3).map(f => `${f.label}:`).join("\n");
-  return `I made a controlled missing-field cue panel for **${name}** below. ${progress}
+  return `I opened a controlled fillable cue panel for **${name}**. ${progress}
 
-Filled fields are shown as context. Only author-facing story fields are editable here — no gender, pronouns, age, current emotional state, obligations, chapter-presence flags, or other internal runtime fields.
+Use the boxes below. Filled character fields are shown as context; only author-facing story fields appear as editable boxes. No gender, pronouns, age, emotional-state trackers, obligations, chapter-presence flags, or other internal runtime fields.
 
-Fill any boxes you want, then click **Expand filled cues**. I’ll return one review card per field with **Append / Reject / Rethink**.
-
-Paste-friendly format also works:
-\`\`\`text
-${examples}
-\`\`\``;
+Fill any boxes you want, then click **Expand filled cues**. I’ll return one separate review card per field with **Append / Reject / Rethink**.`;
 };
+
 const parseCharacterCueTableReply = (text = "", fields = []) => {
   const result = {};
   const fieldByLabel = new Map();
@@ -14393,6 +14401,7 @@ ${JSON.stringify(payload, null, 2)}
     if (tabName !== "characters") return false;
     const lower = String(msgText || "").trim();
     const character = getEditingCharacter();
+    const wantsCharacterCuePanel = isCharacterInterviewRequest(lower);
 
     if (interviewState?.type === "newCharacterSeed") {
       if (!lower) return true;
@@ -14472,7 +14481,7 @@ ${JSON.stringify(payload, null, 2)}
       return true;
     }
 
-    if (!isCharacterInterviewRequest(lower)) return false;
+    if (!wantsCharacterCuePanel) return false;
 
     if (!character) {
       const hasAnyCharacter = (project?.characters || []).length > 0;
@@ -14979,7 +14988,7 @@ Rules:
     switch (tabName) {
       case "characters": {
         const actions = [
-          { label: "✦ Fill missing story fields", msg: `Show me a controlled missing story-field cue panel for the selected character. Use filled fields as context. Do not ask one question at a time. Do not ask about gender, pronouns, age, orientation, height, build, role, or status. After I fill rows, expand only those rows into separate review cards with Append / Reject / Rethink.` },
+          { label: "✦ Open fillable field boxes", msg: `Open the fillable missing-field cue table for the selected character. Use filled fields as context. Do not ask one question at a time. Do not ask about gender, pronouns, age, orientation, height, build, role, or status. After I fill boxes, expand only those boxes into separate review cards with Append / Reject / Rethink.` },
         ];
         // D18: Contextual fill — reference which fields are actually empty
         if (editingEntityId && project?.characters) {
@@ -14987,7 +14996,7 @@ Rules:
           if (char) {
             const emptyFields = getCharacterInterviewMissingFields(char);
             if (emptyFields.length > 0) {
-              actions.push({ label: `Cue-table ${emptyFields.length} missing fields`, msg: `Show me a controlled missing story-field cue panel for "${char.name || "this character"}". Use filled fields as context. Do not ask one question at a time. Do not ask about gender, pronouns, age, orientation, height, build, role, or status. After I fill rows, expand only those rows into separate review cards with Append / Reject / Rethink.` });
+              actions.push({ label: `Fillable boxes for ${emptyFields.length} missing fields`, msg: `Open the fillable missing-field cue table for "${char.name || "this character"}". Use filled fields as context. Do not ask one question at a time. Do not ask about gender, pronouns, age, orientation, height, build, role, or status. After I fill boxes, expand only those boxes into separate review cards with Append / Reject / Rethink.` });
             }
             // Psychology quick action
             const psychFields = ["fears","flaws","strengths","internalConflict","externalConflict"].filter(k => !char[k]);
