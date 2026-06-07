@@ -23,7 +23,6 @@ const GDRIVE_FILE_NAME = "novelforge-backup.json";
 const LS_IMAGE_WORKSPACE = "novelforge:imageWorkspace";
 const AGENT_TOKEN_MULTIPLIER = 5;
 const AGENT_TOKEN_HARD_CAP = 100000;
-const NF_DECLUTTER_UI = true; // v21: Marie Kondo mode — hide dashboards, diagnostics, duplicate tools, and advanced chrome by default.
 
 const loadImageWorkspaceValue = (key, fallback) => {
   try {
@@ -22346,11 +22345,159 @@ The FIRST attached image is the master photograph of this exact room. ${WALL_REF
     }
   }, [editingCharId, updateCharById, updateProject, project, showToast]);
 
+  // ─── WORLD AI NORMALIZATION ───
+  // AI often returns friendly/location-specific keys (locationName, locationType, locationAddress, etc.).
+  // The editor stores app-owned fields (name, category, atmosphere, sensoryDetails...).
+  // This mapper is intentionally app-side so Apply to fields never creates blank shells again.
+  const normalizeWorldAiData = useCallback((rawInput, currentWorldEntries = project?.worldBuilding || []) => {
+    const isObj = (v) => v && typeof v === "object" && !Array.isArray(v);
+    const firstNonBlank = (...vals) => vals.find(v => {
+      if (v == null) return false;
+      if (Array.isArray(v)) return v.length > 0;
+      if (isObj(v)) return Object.keys(v).length > 0;
+      return String(v).trim() !== "";
+    });
+    const asText = (v) => {
+      if (v == null) return "";
+      if (Array.isArray(v)) return v.map(x => isObj(x) ? JSON.stringify(x) : String(x)).filter(Boolean).join(", ");
+      if (isObj(v)) return Object.entries(v).map(([k, val]) => `${k}: ${asText(val)}`).join("; ");
+      return String(v).trim();
+    };
+    const pick = (obj, aliases) => {
+      for (const key of aliases) {
+        if (Object.prototype.hasOwnProperty.call(obj, key) && firstNonBlank(obj[key]) !== undefined) return obj[key];
+      }
+      const lowerMap = Object.fromEntries(Object.keys(obj).map(k => [k.toLowerCase(), k]));
+      for (const key of aliases) {
+        const found = lowerMap[String(key).toLowerCase()];
+        if (found && firstNonBlank(obj[found]) !== undefined) return obj[found];
+      }
+      return undefined;
+    };
+    const unwrap = (raw) => {
+      let x = raw;
+      for (let i = 0; i < 4; i++) {
+        if (!isObj(x)) break;
+        if (isObj(x.data)) { x = x.data; continue; }
+        if (isObj(x.updates)) { x = x.updates; continue; }
+        if (isObj(x.item)) { x = x.item; continue; }
+        if (isObj(x.entry)) { x = x.entry; continue; }
+        if (isObj(x.location)) { x = x.location; continue; }
+        if (isObj(x.organization)) { x = x.organization; continue; }
+        if (isObj(x.world)) { x = x.world; continue; }
+        break;
+      }
+      return x;
+    };
+    const normalizeCategory = (rawCat, obj) => {
+      const validCats = ["Location","Rule / Law","Culture","Organization","Magic System","Technology","History","Flora / Fauna","Language","Religion","Other"];
+      const text = asText(rawCat).toLowerCase().replace(/[_-]+/g, " ").replace(/\s*\/\s*/g, "/").replace(/\s+/g, " ").trim();
+      if (text) {
+        const direct = validCats.find(c => c.toLowerCase().replace(/\s*\/\s*/g, "/") === text);
+        if (direct) return direct;
+        if (/organi[sz]ation|agency|department|precinct|company|guild|council|bureau|unit|squad|institution|faction|team|office/.test(text)) return "Organization";
+        if (/rule|law|policy|edict|ordinance|code/.test(text)) return "Rule / Law";
+        if (/culture|custom|society|tradition/.test(text)) return "Culture";
+        if (/magic|arcane|spell/.test(text)) return "Magic System";
+        if (/tech|device|system|machine/.test(text)) return "Technology";
+        if (/religion|faith|cult|church/.test(text)) return "Religion";
+        if (/language|dialect|tongue/.test(text)) return "Language";
+        if (/history|event|war|era/.test(text)) return "History";
+        if (/flora|fauna|creature|animal|plant|species/.test(text)) return "Flora / Fauna";
+        if (/location|place|room|apartment|residence|house|building|street|district|city|bar|office|station|precinct house|headquarters|hq/.test(text)) return "Location";
+      }
+      const joinedKeys = Object.keys(obj || {}).join(" ").toLowerCase();
+      if (pick(obj, ["organizationName","orgName","orgPurpose","orgMission","orgHierarchy","orgMembers","positions","ranks"]) || /org|hierarchy|members/.test(joinedKeys)) return "Organization";
+      if (pick(obj, ["locationName","placeName","settingName","locationAddress","locationDistrict","locationCity","locationAtmosphere","locationKeyFeatures"])) return "Location";
+      return "Location";
+    };
+    const raw = unwrap(rawInput);
+    if (!isObj(raw)) return {};
+    const norm = {};
+    const rawCategoryValue = firstNonBlank(pick(raw, ["category","worldCategory","entryCategory"]), pick(raw, ["locationCategory","organizationCategory"]));
+    const descriptiveType = firstNonBlank(pick(raw, ["locationType","placeType","organizationType","orgType","type","worldType","entryType"]));
+    const chosenCategory = normalizeCategory(firstNonBlank(rawCategoryValue, descriptiveType), raw);
+    norm.category = chosenCategory;
+
+    norm.name = asText(firstNonBlank(pick(raw, ["name","locationName","placeName","settingName","worldName","organizationName","orgName","buildingName","roomName","siteName","title"]))).trim();
+
+    // Copy exact app fields first. Alias values below can fill empty exact fields but do not erase them.
+    ["description","keywords","atmosphere","sensoryDetails","subLocations","dangers","rules","population","resources","history","culturalNorms","orgPurpose","orgHierarchy","orgMembers","frequentCharacters","connectedTo",
+     "enforcement","scope","loopholes","publicOpinion","enactedBy","values","customs","socialHierarchy","taboos","artForms","dialect","magicSource","magicRules","magicCost","magicRarity","magicTypes","magicPerception","magicPractitioners",
+     "techFunction","techMechanism","techAvailability","techLimitations","techImpact","techCreator","historyDate","historyFigures","historyCauses","historyConsequences","historyLegacy","historyDisputed",
+     "habitat","floraAppearance","behavior","floraUses","floraRarity","floraCultural","langSpeakers","langWriting","langPhrases","langGrammar","langRelated","langStatus","deities","coreBeliefs","rituals","sacredPlaces","clergy","heresies","followers","additionalNotes"
+    ].forEach(k => { if (firstNonBlank(raw[k]) !== undefined) norm[k] = raw[k]; });
+
+    const aliasMap = {
+      description: ["locationDescription","placeDescription","settingDescription","organizationDescription","orgDescription","summary","details","overview"],
+      keywords: ["tags","locationTags","organizationTags","searchKeywords"],
+      atmosphere: ["locationAtmosphere","placeAtmosphere","mood","vibe","ambience","ambiance"],
+      sensoryDetails: ["locationSensoryPalette","sensoryPalette","sensoryDetails","sensoryDescription","sensory"],
+      subLocations: ["locationKeyFeatures","keyFeatures","notableFeatures","features","rooms","areas","sections","notableAreas","interiorFeatures"],
+      dangers: ["locationDangers","threats","risks","hazards"],
+      rules: ["locationRules","houseRules","localRules","codes"],
+      population: ["residents","inhabitants","locals","staff","occupants"],
+      resources: ["assets","facilities","equipment","availableResources"],
+      orgPurpose: ["organizationPurpose","orgMission","mission","purpose","mandate","function"],
+      orgHierarchy: ["organizationHierarchy","hierarchy","positions","ranks","positionsAndRanks"],
+      orgMembers: ["organizationMembers","members","personnel","staff","knownMembers"],
+      frequentCharacters: ["frequentCharacters","associatedCharacters","characters","regulars","occupantsCharacters"],
+      connectedTo: ["connectedTo","connections","linkedTo","relatedLocations","headquarters","hq","building","basedAt","operatesFrom","station","precinctHouse","homeBase"],
+      history: ["locationHistory","organizationHistory","backstory","origin","founding"],
+      culturalNorms: ["culture","norms","customsAndNorms"],
+    };
+    Object.entries(aliasMap).forEach(([target, aliases]) => {
+      if (firstNonBlank(norm[target]) === undefined) {
+        const v = pick(raw, aliases);
+        if (firstNonBlank(v) !== undefined) norm[target] = v;
+      }
+    });
+
+    // Preserve rich friendly metadata by folding it into description/keywords instead of dropping it.
+    const detailPairs = [
+      ["Type", descriptiveType],
+      ["Address", pick(raw, ["locationAddress","address","streetAddress"])],
+      ["District", pick(raw, ["locationDistrict","district","neighborhood","borough"])],
+      ["City", pick(raw, ["locationCity","city"])],
+      ["Size", pick(raw, ["locationSize","size","layout"])],
+      ["Narrative role", pick(raw, ["locationNarrativeRole","narrativeRole","storyRole"])],
+      ["Tension level", pick(raw, ["locationTensionLevel","tensionLevel"])],
+      ["Status", pick(raw, ["locationStatus","status"])],
+      ["Notes", pick(raw, ["locationNotes","notes"])],
+    ].filter(([, v]) => firstNonBlank(v) !== undefined).map(([label, v]) => `${label}: ${asText(v)}`);
+    if (detailPairs.length) {
+      const base = asText(norm.description);
+      norm.description = [base, detailPairs.join("\n")].filter(Boolean).join(base ? "\n\n" : "");
+    }
+    if (descriptiveType && chosenCategory !== asText(descriptiveType)) {
+      const kw = asText(norm.keywords);
+      const typeText = asText(descriptiveType);
+      if (typeText && !kw.toLowerCase().includes(typeText.toLowerCase())) norm.keywords = [kw, typeText].filter(Boolean).join(", ");
+    }
+
+    // Normalise list-like strings. Keep orgHierarchy as structured array when present.
+    ["frequentCharacters","orgMembers","connectedTo"].forEach(k => {
+      if (typeof norm[k] === "string") norm[k] = norm[k].split(/[,;\n]/).map(s => s.trim()).filter(Boolean);
+    });
+    if (!Array.isArray(norm.orgHierarchy) && typeof norm.orgHierarchy === "string") {
+      norm.orgHierarchy = norm.orgHierarchy.split(/\n|;/).map(line => {
+        const [name, role] = line.split(/:|—|-/).map(s => s.trim());
+        return name ? { id: uid(), name, role: role || "", parentId: "", charId: "" } : null;
+      }).filter(Boolean);
+    }
+
+    // Drop friendly keys so they cannot create stray fields in the saved object.
+    Object.keys(raw).forEach(k => {
+      if (!(k in norm) && /^(location|organization|org|place|setting|world|entry)/i.test(k)) delete norm[k];
+    });
+    return norm;
+  }, [project?.worldBuilding]);
+
   const handleWorldAutoFill = useCallback((data) => {
     if (!data) return;
     const rawItems = Array.isArray(data) ? data : [data];
-    const items = rawItems.map(sanitizeAiCharData);
     const currentWorld = project?.worldBuilding || [];
+    const items = rawItems.map(item => normalizeWorldAiData(sanitizeAiCharData(item), currentWorld)).filter(item => item && typeof item === "object");
     const allChars = project?.characters || [];
     let newWorld = [...currentWorld];
     let added = 0, updated = 0;
@@ -22411,21 +22558,24 @@ The FIRST attached image is the master photograph of this exact room. ${WALL_REF
     // All possible world entry fields — generic merge for ANY category
     const worldFields = ["name","category", ...ALL_WORLD_TEXT_FIELDS];
 
+    const resolveWorldRefs = (raw) => {
+      if (!raw) return [];
+      const refs = Array.isArray(raw) ? raw : String(raw).split(/[,;\n]/).map(s => s.trim()).filter(Boolean);
+      return refs.map(ref => {
+        if (currentWorld.some(w => w.id === ref)) return ref;
+        const match = newWorld.find(w => w.name && w.name.toLowerCase() === String(ref).toLowerCase());
+        return match ? match.id : null;
+      }).filter(Boolean);
+    };
+
     for (const raw of items) {
       const norm = Object.fromEntries(Object.entries(raw).map(([k, v]) => {
         if (["frequentCharacters","orgMembers","connectedTo","orgHierarchy"].includes(k)) return [k, v];
         return [k, normalizeAiValue(v)];
       }));
-      // Normalize category to exact option spelling (accept "location" → "Location", "rule/law" → "Rule / Law")
-      if (norm.category) {
-        const validCats = ["Location","Rule / Law","Culture","Organization","Magic System","Technology","History","Flora / Fauna","Language","Religion","Other"];
-        const rawCat = String(norm.category).toLowerCase().replace(/\s+/g, " ").trim();
-        const match = validCats.find(c => {
-          const normalized = c.toLowerCase().replace(/\s*\/\s*/g, "/").replace(/\s+/g, " ");
-          const compared = rawCat.replace(/\s*\/\s*/g, "/");
-          return normalized === compared || normalized === rawCat || c.toLowerCase() === rawCat;
-        });
-        if (match) norm.category = match;
+      if (!norm.name || !String(norm.name).trim()) {
+        console.warn("[NovelForge] Skipping AI world entry with no usable name after normalization", raw);
+        continue;
       }
       const existing = newWorld.find(w => w.name && norm.name && w.name.toLowerCase() === norm.name.toLowerCase());
       if (existing) {
@@ -22438,6 +22588,11 @@ The FIRST attached image is the master photograph of this exact room. ${WALL_REF
         if (norm.category) merged.category = norm.category;
         // Special arrays — resolve names to IDs
         if (norm.frequentCharacters) merged.frequentCharacters = resolveCharNames(norm.frequentCharacters);
+        if (norm.connectedTo) {
+          const resolvedLinks = resolveWorldRefs(norm.connectedTo);
+          const existingLinks = Array.isArray(merged.connectedTo) ? merged.connectedTo : [];
+          merged.connectedTo = [...new Set([...existingLinks, ...resolvedLinks])];
+        }
         if (norm.orgMembers && Array.isArray(norm.orgMembers)) {
           // Resolve: could be names OR IDs. Accept both.
           const resolved = norm.orgMembers.map(ref => {
@@ -22470,7 +22625,7 @@ The FIRST attached image is the master photograph of this exact room. ${WALL_REF
         const entry = {
           id: uid(), referenceImages: {}, imagePrompts: {},
           frequentCharacters: resolvedFreq,
-          connectedTo: [],
+          connectedTo: resolveWorldRefs(norm.connectedTo),
           orgMembers: mergedMembers,
           orgHierarchy: resolveOrgHierarchy(norm.orgHierarchy),
         };
@@ -22496,7 +22651,7 @@ The FIRST attached image is the master photograph of this exact room. ${WALL_REF
       : 0;
     const parts = [added && `${added} added`, updated && `${updated} updated`, autoLinkCount > 0 && `${autoLinkCount} existing character${autoLinkCount !== 1 ? "s" : ""} auto-linked`].filter(Boolean);
     showToast(`World entries: ${parts.join(", ")}`, "success");
-  }, [project, updateProject, showToast]);
+  }, [project, updateProject, showToast, normalizeWorldAiData, sanitizeAiCharData]);
 
   const handlePlotAutoFill = useCallback((data) => {
     if (!data) return;
@@ -23020,12 +23175,12 @@ The FIRST attached image is the master photograph of this exact room. ${WALL_REF
             </div>
             <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
               <button onClick={() => { setImageToolsOpen(true); setImageMode("create"); }} className="nf-btn nf-btn-primary" style={{ fontSize: 12 }}><Icons.Plus /> Create Image</button>
-              {!NF_DECLUTTER_UI && <button onClick={() => { setImageToolsOpen(v => !v); setImageMode(imageMode === "library" ? "review" : imageMode); }} className="nf-btn nf-btn-ghost" style={{ fontSize: 12 }}>{imageToolsOpen ? "Hide Tools" : "Image Tools"}</button>}
+              <button onClick={() => { setImageToolsOpen(v => !v); setImageMode(imageMode === "library" ? "review" : imageMode); }} className="nf-btn nf-btn-ghost" style={{ fontSize: 12 }}>{imageToolsOpen ? "Hide Tools" : "Image Tools"}</button>
               <button onClick={() => setImageLibraryOpen(true)} className="nf-btn nf-btn-ghost" style={{ fontSize: 12 }}>Global Library</button>
             </div>
           </div>
 
-          <div className="nf-card" style={{ display: NF_DECLUTTER_UI ? "none" : "block", marginBottom: 14, padding: 14 }}>
+          <div className="nf-card" style={{ marginBottom: 14, padding: 14 }}>
             <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "flex-start", marginBottom: 12, flexWrap: "wrap" }}>
               <div>
                 <div style={{ fontSize: 13, fontWeight: 800, color: "var(--nf-text)" }}>Visual Desk</div>
@@ -23098,7 +23253,7 @@ The FIRST attached image is the master photograph of this exact room. ${WALL_REF
                 <button onClick={batchDelete} className="nf-btn-micro" style={{ color: "var(--nf-danger, #c0504d)" }}>Delete</button>
               </div>
             )}
-            <div style={{ display: NF_DECLUTTER_UI ? "none" : "grid", marginTop: 10, gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", gap: 8 }}>
+            <div style={{ marginTop: 10, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", gap: 8 }}>
               {[
                 { label: "Visible", value: sortedImages.length, hint: `${filteredImages.length} matched` },
                 { label: "Needs review", value: visiblePriority, hint: "Priority sort target" },
@@ -23115,7 +23270,7 @@ The FIRST attached image is the master photograph of this exact room. ${WALL_REF
             </div>
           </div>
 
-          {!NF_DECLUTTER_UI && imageToolsOpen && (
+          {imageToolsOpen && (
             <div className="nf-card" style={{ marginBottom: 14, padding: 12 }}>
               <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center", marginBottom: 10, flexWrap: "wrap" }}>
                 <div>
@@ -23139,7 +23294,7 @@ The FIRST attached image is the master photograph of this exact room. ${WALL_REF
 
           {(
             <>
-              <div className="nf-card" style={{ display: NF_DECLUTTER_UI ? "none" : "block", marginBottom: 12, padding: 10 }}>
+              <div className="nf-card" style={{ marginBottom: 12, padding: 10 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
                   <div style={{ fontSize: 12, fontWeight: 700, color: "var(--nf-text)" }}>Library</div>
                   <div style={{ fontSize: 10, color: "var(--nf-text-muted)" }}>{sortedImages.length} shown · sorted by {imageSortMode === "priority" ? "needs review" : imageSortMode}</div>
@@ -23150,13 +23305,13 @@ The FIRST attached image is the master photograph of this exact room. ${WALL_REF
                   ))}
                 </div>
               </div>
-              <div style={{ display: NF_DECLUTTER_UI ? "none" : "flex", gap: 6, flexWrap: "wrap", marginBottom: 16 }}>
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 16 }}>
                 <button onClick={() => setImageSmartAlbum("all")} className={`nf-btn-micro ${imageSmartAlbum === "all" ? "nf-btn-primary" : ""}`}>All</button>
                 {smartAlbums.map(a => (
                   <button key={a.id} onClick={() => { setImageSmartAlbum(a.id); if (a.id === "failed") { setImageToolsOpen(true); setImageMode("review"); } }} className={`nf-btn-micro ${imageSmartAlbum === a.id ? "nf-btn-primary" : ""}`}>{a.label} ({a.count})</button>
                 ))}
               </div>
-              {!NF_DECLUTTER_UI && imageSets.length > 0 && (
+              {imageSets.length > 0 && (
                 <div className="nf-card" style={{ marginBottom: 14, padding: 12 }}>
                   <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center", marginBottom: 8 }}>
                     <h3 className="nf-card-title" style={{ margin: 0 }}>Image Sets</h3>
@@ -23169,7 +23324,7 @@ The FIRST attached image is the master photograph of this exact room. ${WALL_REF
                   </div>
                 </div>
               )}
-              {!NF_DECLUTTER_UI && projectBoardIds.length > 0 && (
+              {projectBoardIds.length > 0 && (
                 <div className="nf-card" style={{ marginBottom: 14, padding: 12 }}>
                   <h3 className="nf-card-title" style={{ marginBottom: 8 }}>Project Visual Board</h3>
                   <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(92px, 1fr))", gap: 8 }}>
@@ -23299,9 +23454,9 @@ The FIRST attached image is the master photograph of this exact room. ${WALL_REF
             </div>
           )}
 
-          {!NF_DECLUTTER_UI && imageToolsOpen && imageMode === "review" && (
+          {imageToolsOpen && imageMode === "review" && (
             <div style={{ display: "grid", gap: 14 }}>
-              <div className="nf-card" style={{ display: NF_DECLUTTER_UI ? "none" : "grid", gridTemplateColumns: "120px minmax(0,1fr)", gap: 14, alignItems: "center" }}>
+              <div className="nf-card" style={{ display: "grid", gridTemplateColumns: "120px minmax(0,1fr)", gap: 14, alignItems: "center" }}>
                 <div style={{ width: 96, height: 96, borderRadius: "50%", border: "8px solid var(--nf-accent)", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--nf-text)", fontSize: 24, fontWeight: 800 }}>{libraryHealth}%</div>
                 <div>
                   <h3 className="nf-card-title" style={{ marginBottom: 6 }}>Library Health</h3>
@@ -23313,7 +23468,7 @@ The FIRST attached image is the master photograph of this exact room. ${WALL_REF
                   </div>
                 </div>
               </div>
-              <div className="nf-card" style={{ display: NF_DECLUTTER_UI ? "none" : "block" }}>
+              <div className="nf-card">
                 <h3 className="nf-card-title">Generation Queue</h3>
                 {imageJobs.length === 0 ? (
                   <p className="nf-hint" style={{ margin: 0 }}>No tracked image jobs yet. Generated or imported images land in Image Inbox.</p>
@@ -23360,7 +23515,7 @@ The FIRST attached image is the master photograph of this exact room. ${WALL_REF
                 )}
               </div>
               {duplicateGroups.length > 0 && (
-                <div className="nf-card" style={{ display: NF_DECLUTTER_UI ? "none" : "block" }}>
+                <div className="nf-card">
                   <h3 className="nf-card-title">Possible duplicates</h3>
                   <div style={{ display: "grid", gap: 10 }}>
                     {duplicateGroups.slice(0, 4).map((group, idx) => (
@@ -23372,7 +23527,7 @@ The FIRST attached image is the master photograph of this exact room. ${WALL_REF
                   </div>
                 </div>
               )}
-              <div className="nf-card" style={{ display: NF_DECLUTTER_UI ? "none" : "block" }}>
+              <div className="nf-card">
                 <h3 className="nf-card-title">Image Rules</h3>
                 <div style={{ display: "grid", gap: 8 }}>
                   {imageRules.map(rule => (
@@ -25173,7 +25328,7 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
           </div>
         </div>
         )}
-        {!NF_DECLUTTER_UI && !focusMode && !viewingDraftId && (
+        {!focusMode && !viewingDraftId && (
           <SceneBriefStrip
             project={project}
             chapterIdx={activeChapterIdx}
@@ -25184,7 +25339,7 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
             onOpenWorld={() => setActiveTab("world")}
           />
         )}
-        {!NF_DECLUTTER_UI && <WritingProgressStrip
+        <WritingProgressStrip
           silent={settings.silentWritingMode}
           chapterWords={currentChapterWords}
           totalWords={totalProjectWords}
@@ -25195,8 +25350,8 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
           onStartTimedSprint={() => setSprint({ mode: "time", target: 20, startWords: totalProjectWords, endsAt: Date.now() + 20 * 60000, startedAt: Date.now() })}
           onStartWordSprint={() => setSprint({ mode: "words", target: 500, startWords: totalProjectWords, startedAt: Date.now() })}
           onSprintEnd={(completed) => { setSprint(null); if (completed) showToast("Sprint complete", "success"); }}
-        />}
-        {!NF_DECLUTTER_UI && !focusMode && !viewingDraftId && (
+        />
+        {!focusMode && !viewingDraftId && (
           <CharacterPresenceStrip
             characters={project?.characters}
             chapterContent={activeChapter?.content}
@@ -25211,7 +25366,7 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
           />
         )}
         <RichTextToolbar editorRef={editorRef} onContentChange={syncEditorContent} />
-        {!NF_DECLUTTER_UI && <ColorModeBar colorMode={colorMode} setColorMode={setColorMode} characters={project?.characters} />}
+        <ColorModeBar colorMode={colorMode} setColorMode={setColorMode} characters={project?.characters} />
         <div className="nf-editor-split">
           {!focusMode && (
             <GlyphRail
@@ -25876,12 +26031,12 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                   setCharViewMode("preview");
                 }}
                 className="nf-btn-icon-sm" aria-label="Add character" title="Add character from selected template"><Icons.Plus /></button>
-              {!NF_DECLUTTER_UI && <button onClick={() => setShowGroupForm(prev => !prev)}
-                className="nf-btn-icon-sm" aria-label="Add bulk group" title="Add bulk character group" style={{ color: "var(--nf-accent-2)", borderColor: "var(--nf-accent-2)" }}><Icons.Users /></button>}
-              {!NF_DECLUTTER_UI && <button onClick={() => setShowLineup(true)} className="nf-btn-icon-sm" aria-label="Height lineup" title="Compare character heights">↕</button>}
+              <button onClick={() => setShowGroupForm(prev => !prev)}
+                className="nf-btn-icon-sm" aria-label="Add bulk group" title="Add bulk character group" style={{ color: "var(--nf-accent-2)", borderColor: "var(--nf-accent-2)" }}><Icons.Users /></button>
+              <button onClick={() => setShowLineup(true)} className="nf-btn-icon-sm" aria-label="Height lineup" title="Compare character heights">↕</button>
             </div>
           </div>
-          {!NF_DECLUTTER_UI && characterTemplates.length > 0 && (
+          {characterTemplates.length > 0 && (
             <div style={{ padding: "8px 10px", borderBottom: "1px solid var(--nf-border)", display: "grid", gap: 4 }}>
               <label style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--nf-text-muted)", fontWeight: 700 }}>New character template</label>
               <select value={charNewTemplateId} onChange={e => setCharNewTemplateId(e.target.value)} className="nf-input nf-input-compact" style={{ fontSize: 11 }}>
@@ -26126,7 +26281,7 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                       <Icons.Target /> {nextBestAction.label}
                     </button>
                   )}
-                  <div style={{ display: NF_DECLUTTER_UI ? "none" : "inline-flex", border: "1px solid var(--nf-border)", borderRadius: 999, overflow: "hidden" }}>
+                  <div style={{ display: "inline-flex", border: "1px solid var(--nf-border)", borderRadius: 999, overflow: "hidden" }}>
                     {[{ v: "preview", l: "View" }, { v: "edit", l: "Edit" }].map(o => (
                       <button key={o.v} onClick={() => setCharViewMode(o.v)}
                         style={{ fontSize: 10, padding: "4px 9px", border: "none", cursor: "pointer", background: charViewMode === o.v ? "var(--nf-accent)" : "transparent", color: charViewMode === o.v ? "#fff" : "var(--nf-text-muted)", fontWeight: 700 }}>
@@ -26140,7 +26295,7 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                 </div>
               </div>
 
-              {!NF_DECLUTTER_UI && !editingChar.isBulk && selectedHealth.length > 0 && (
+              {!editingChar.isBulk && selectedHealth.length > 0 && (
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginTop: 10, alignItems: "center" }} title="Character readiness: tap to jump">
                   <span style={{ fontSize: 10, color: "var(--nf-text-muted)", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>Readiness</span>
                   {selectedHealth.map(seg => {
@@ -26155,7 +26310,7 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                 </div>
               )}
 
-              {!NF_DECLUTTER_UI && selectedStoryLens.length > 0 && (
+              {selectedStoryLens.length > 0 && (
                 <div style={{ marginTop: 12 }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, marginBottom: 6 }}>
                     <div style={{ fontSize: 10, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--nf-text-muted)" }}>Story lens</div>
@@ -26256,7 +26411,7 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                 </div>
               )}
 
-              {!NF_DECLUTTER_UI && !editingChar.isBulk && (
+              {!editingChar.isBulk && (
                 <div style={{ marginTop: 12, padding: "10px 12px", background: "var(--nf-bg-deep)", border: "1px solid var(--nf-border)", borderRadius: 6 }}>
                   <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start", flexWrap: "wrap" }}>
                     <div style={{ minWidth: 240, flex: 1 }}>
@@ -26293,7 +26448,7 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                 </div>
               )}
 
-              <div style={{ display: NF_DECLUTTER_UI ? "none" : "grid", gridTemplateColumns: selectedNeeds.length ? "minmax(0, 1fr) minmax(220px, 0.8fr)" : "1fr", gap: 12, marginTop: 12 }}>
+              <div style={{ display: "grid", gridTemplateColumns: selectedNeeds.length ? "minmax(0, 1fr) minmax(220px, 0.8fr)" : "1fr", gap: 12, marginTop: 12 }}>
                 <div style={{ padding: "10px 12px", background: "var(--nf-bg-deep)", border: "1px solid var(--nf-border)", borderRadius: 4 }}>
                   <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--nf-text-muted)", marginBottom: 6 }}>At a glance</div>
                   {charViewMode === "preview" && (
@@ -26366,7 +26521,7 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
 
             </div>
 
-            {!NF_DECLUTTER_UI && charViewMode === "preview" && (
+            {charViewMode === "preview" && (
               <div className="nf-char-section" id="character-dossier" style={{ scrollMarginTop: 110, padding: 16 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, marginBottom: 12 }}>
                   <div>
@@ -26395,9 +26550,9 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
               </div>
             )}
 
-            <div style={{ display: NF_DECLUTTER_UI ? "contents" : (charViewMode === "preview" ? "none" : "contents") }}>
+            <div style={{ display: charViewMode === "preview" ? "none" : "contents" }}>
 
-            <div className="nf-char-section" id="character-edit-map" style={{ display: NF_DECLUTTER_UI ? "none" : "block", scrollMarginTop: 110, padding: 14 }}>
+            <div className="nf-char-section" id="character-edit-map" style={{ scrollMarginTop: 110, padding: 14 }}>
               <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, marginBottom: 10 }}>
                 <div>
                   <div style={{ fontSize: 11, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--nf-text-muted)" }}>Edit map</div>
@@ -27688,11 +27843,11 @@ ${lookAlikeLock}` : ""}`;
                 {cfgOptions("world.category", WORLD_UI_CATEGORIES).map(cat => <option key={cat.value} value={cat.value}>{cat.label}</option>)}
               </select>
               <button onClick={() => createWorldEntry(worldTemplateCategory)} className="nf-btn nf-btn-primary" style={{ fontSize: 12 }}><Icons.Plus /> Add</button>
-              {!NF_DECLUTTER_UI && <button onClick={() => setShowWorldTools(v => !v)} className="nf-btn nf-btn-ghost" style={{ fontSize: 12 }}>{showWorldTools ? "Hide Tools" : "World Tools"}</button>}
+              <button onClick={() => setShowWorldTools(v => !v)} className="nf-btn nf-btn-ghost" style={{ fontSize: 12 }}>{showWorldTools ? "Hide Tools" : "World Tools"}</button>
             </div>
           </div>
 
-          <div className="nf-card" style={{ display: NF_DECLUTTER_UI ? "none" : "block", marginBottom: 12, padding: 12 }}>
+          <div className="nf-card" style={{ marginBottom: 12, padding: 12 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
               <div>
                 <div style={{ fontSize: 20, fontWeight: 700, color: "var(--nf-text)" }}>{items.length} entr{items.length === 1 ? "y" : "ies"}</div>
@@ -27742,7 +27897,7 @@ ${lookAlikeLock}` : ""}`;
             })}
           </div>
 
-          {!NF_DECLUTTER_UI && showWorldTools && (
+          {showWorldTools && (
             <div className="nf-card" style={{ marginBottom: 14, padding: 12 }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
                 <div>
@@ -29069,10 +29224,10 @@ Formal group portrait, higher ranks center/front, appropriate setting.`;
               </div>
               <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                 <button onClick={addPlotChapter} className="nf-btn-icon-sm"><Icons.Plus /> Add Chapter</button>
-                {!NF_DECLUTTER_UI && <button onClick={() => setShowPlotTools(v => !v)} className="nf-btn-micro">{showPlotTools ? "Hide Tools" : "Tools"}</button>}
+                <button onClick={() => setShowPlotTools(v => !v)} className="nf-btn-micro">{showPlotTools ? "Hide Tools" : "Tools"}</button>
               </div>
             </div>
-            <div style={{ display: NF_DECLUTTER_UI ? "none" : "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 8, marginTop: 12 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 8, marginTop: 12 }}>
               <button type="button" onClick={() => setPlotFocusFilter("all")} className="nf-card" style={{ padding: 10, textAlign: "left", borderColor: plotFocusFilter === "all" ? "var(--nf-accent)" : "var(--nf-border)", background: plotFocusFilter === "all" ? "var(--nf-accent-glow)" : "var(--nf-bg-raised)", cursor: "pointer" }}>
                 <div style={{ fontSize: 18, fontWeight: 700 }}>{plotStats.total}</div><div style={{ fontSize: 11, color: "var(--nf-text-muted)" }}>Chapters</div>
               </button>
@@ -29089,7 +29244,7 @@ Formal group portrait, higher ranks center/front, appropriate setting.`;
             </div>
           </div>
 
-          {!NF_DECLUTTER_UI && plotFlowRows.length > 0 && (
+          {plotFlowRows.length > 0 && (
             <div className="nf-card" style={{ marginBottom: 14, padding: "12px 14px" }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap", marginBottom: 10 }}>
                 <div>
@@ -29145,14 +29300,14 @@ Formal group portrait, higher ranks center/front, appropriate setting.`;
 
           <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 10 }}>
             <input value={plotSearch} onChange={e => setPlotSearch(e.target.value)} placeholder="Search plot…" className="nf-input" style={{ flex: 1, minWidth: 180, fontSize: 12, padding: "7px 10px" }} />
-            {!NF_DECLUTTER_UI && focusChips.map(chip => (
+            {focusChips.map(chip => (
               <button key={chip.key} type="button" onClick={() => setPlotFocusFilter(chip.key)} className="nf-btn-micro" style={{ borderColor: plotFocusFilter === chip.key ? "var(--nf-accent)" : "var(--nf-border)", color: plotFocusFilter === chip.key ? "var(--nf-accent)" : "var(--nf-text-muted)", background: plotFocusFilter === chip.key ? "var(--nf-accent-glow)" : "transparent" }}>
                 {chip.label}{chip.count != null ? ` ${chip.count}` : ""}
               </button>
             ))}
           </div>
 
-          {!NF_DECLUTTER_UI && showPlotTools && (
+          {showPlotTools && (
             <div className="nf-card" style={{ marginBottom: 14, padding: 12 }}>
               <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center", marginBottom: 10 }}>
                 <div>
@@ -29732,11 +29887,11 @@ Formal group portrait, higher ranks center/front, appropriate setting.`;
             <div style={{ display: "flex", gap: 6, flexShrink: 0, flexWrap: "wrap", justifyContent: "flex-end" }}>
               {settings.apiKey && <button onClick={handleSyncRelationshipsFromStory} disabled={relDraftBusy} className="nf-btn nf-btn-primary"><Icons.Wand /> {relDraftBusy === "storySync" ? "Syncing…" : "Sync Story"}</button>}
               <button onClick={addRelationship} className="nf-btn nf-btn-primary"><Icons.Plus /> Add</button>
-              {!NF_DECLUTTER_UI && <button onClick={() => setShowRelTools(v => !v)} className="nf-btn nf-btn-ghost"><Icons.Settings /> Tools</button>}
+              <button onClick={() => setShowRelTools(v => !v)} className="nf-btn nf-btn-ghost"><Icons.Settings /> Tools</button>
             </div>
           </div>
 
-          <div className="nf-card" style={{ display: NF_DECLUTTER_UI ? "none" : "block", marginBottom: 12, padding: 14 }}>
+          <div className="nf-card" style={{ marginBottom: 12, padding: 14 }}>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 8 }}>
               {[
                 { label: "Connections", value: relStats.total, hint: `${relStats.complete} ready` },
@@ -29760,7 +29915,7 @@ Formal group portrait, higher ranks center/front, appropriate setting.`;
             </div>
           </div>
 
-          <div className="nf-card" style={{ display: NF_DECLUTTER_UI ? "none" : "block", marginBottom: 12, padding: 14 }}>
+          <div className="nf-card" style={{ marginBottom: 12, padding: 14 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, marginBottom: 12, flexWrap: "wrap" }}>
               <div>
                 <div style={{ fontSize: 12, fontWeight: 800, color: "var(--nf-text)", letterSpacing: "0.04em", textTransform: "uppercase" }}>Relationship Pulse</div>
@@ -29827,14 +29982,14 @@ Formal group portrait, higher ranks center/front, appropriate setting.`;
               <Icons.Search />
               <input value={relSearch} onChange={e => setRelSearch(e.target.value)} placeholder="Search people, status, tension, notes…" className="nf-input" style={{ width: "100%", paddingLeft: 32 }} />
             </div>
-            <div style={{ display: NF_DECLUTTER_UI ? "none" : "flex", gap: 6, overflowX: "auto", paddingBottom: 2 }}>
+            <div style={{ display: "flex", gap: 6, overflowX: "auto", paddingBottom: 2 }}>
               {relFilterChips.map(chip => (
                 <button key={chip.key} onClick={() => setRelFilter(chip.key)} className={`nf-btn-micro ${relFilter === chip.key ? "nf-btn-primary" : ""}`} style={{ whiteSpace: "nowrap" }}>{chip.label}</button>
               ))}
             </div>
           </div>
 
-          {!NF_DECLUTTER_UI && showRelTools && (
+          {showRelTools && (
             <div className="nf-card" style={{ marginBottom: 14, padding: 14 }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, marginBottom: 10 }}>
                 <div>
@@ -30662,7 +30817,7 @@ Speech pattern: ${char.speechPattern || ""}` },
         <p className="nf-hint" style={{ marginBottom: 24 }}>Smart context payload — only relevant characters, world entries, and relationships are sent to the AI based on what appears in your current chapter.</p>
 
         {/* Phase 21: Review Desk — first-glance memory health before raw diagnostics */}
-        <div className="nf-card" style={{ display: NF_DECLUTTER_UI ? "none" : "block", marginBottom: 24, padding: 18, background: "linear-gradient(135deg, var(--nf-bg-raised), var(--nf-bg-deep))" }}>
+        <div className="nf-card" style={{ marginBottom: 24, padding: 18, background: "linear-gradient(135deg, var(--nf-bg-raised), var(--nf-bg-deep))" }}>
           <div style={{ display: "flex", justifyContent: "space-between", gap: 18, alignItems: "flex-start", marginBottom: 14, flexWrap: "wrap" }}>
             <div style={{ minWidth: 220, flex: "1 1 280px" }}>
               <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase", color: "var(--nf-accent-2)", marginBottom: 5 }}>Review Desk</div>
@@ -31154,7 +31309,7 @@ Speech pattern: ${char.speechPattern || ""}` },
           },
         ];
         return (
-          <div className="nf-card nf-settings-desk" style={{ display: NF_DECLUTTER_UI ? "none" : undefined }}>
+          <div className="nf-card nf-settings-desk">
             <div className="nf-settings-desk-head">
               <div>
                 <div className="nf-section-eyebrow">Setup desk</div>
@@ -31223,7 +31378,7 @@ Speech pattern: ${char.speechPattern || ""}` },
       </div>
 
       {/* ─── Mental Health & Ambient Environment ─── */}
-      <div id="nf-settings-comfort" className="nf-card" style={{ display: NF_DECLUTTER_UI ? "none" : "block", marginTop: 16 }}>
+      <div id="nf-settings-comfort" className="nf-card" style={{ marginTop: 16 }}>
         <h3 className="nf-card-title">🌿 Writing Environment</h3>
         <p className="nf-hint" style={{ marginTop: -4, marginBottom: 12 }}>Designed for mental rest. No gamification, no streaks, no pressure.</p>
 
@@ -31470,7 +31625,7 @@ Speech pattern: ${char.speechPattern || ""}` },
       </div>
 
       {/* Multi-Agent System Settings */}
-      <div id="nf-settings-agents" className="nf-card" style={{ display: NF_DECLUTTER_UI ? "none" : "block", marginTop: 16 }}>
+      <div id="nf-settings-agents" className="nf-card" style={{ marginTop: 16 }}>
         <h3 className="nf-card-title">🎭 Multi-Agent System</h3>
         <p style={{ fontSize: 11, color: "var(--nf-text-muted)", marginBottom: 14, lineHeight: 1.6 }}>
           Delegate memory retrieval and context assembly to specialized agents running in parallel.
@@ -31756,7 +31911,7 @@ Speech pattern: ${char.speechPattern || ""}` },
         )}
       </div>
 
-      <div id="nf-settings-config" className="nf-card" style={{ display: NF_DECLUTTER_UI ? "none" : "block" }}>
+      <div id="nf-settings-config" className="nf-card">
         <h3 className="nf-card-title">⚙ App Config Sheet</h3>
         <p style={{ fontSize: 12, color: "var(--nf-text-muted)", marginBottom: 14, lineHeight: 1.6 }}>
           Customize dropdowns, prompts, character templates, image templates, image rules, and world templates from one Google Sheet. The app keeps working from local defaults if the sheet is disconnected.
@@ -34531,9 +34686,17 @@ Speech pattern: ${char.speechPattern || ""}` },
                     if (linksCreated > 0) showToast(`Applied ${Object.keys(accepted).length} field(s) • auto-linked to ${linksCreated} org${linksCreated !== 1 ? "s" : ""}`, "success");
                     else showToast(`Applied ${Object.keys(accepted).length} field(s)`, "success");
                   } else if (fillReview.type === "world") {
-                    const worlds = project.worldBuilding.map(w => w.id === fillReview.entityId ? { ...w, ...accepted } : w);
+                    const currentWorld = project.worldBuilding || [];
+                    const normalizedAccepted = normalizeWorldAiData ? normalizeWorldAiData(accepted, currentWorld) : accepted;
+                    const safeAccepted = Object.fromEntries(Object.entries(normalizedAccepted || {}).filter(([k, v]) => {
+                      if (["id","createdAt","updatedAt"].includes(k)) return false;
+                      if (v == null) return false;
+                      if (Array.isArray(v)) return v.length > 0;
+                      return String(v).trim() !== "";
+                    }));
+                    const worlds = currentWorld.map(w => w.id === fillReview.entityId ? { ...w, ...safeAccepted } : w);
                     updateProject({ worldBuilding: worlds });
-                    showToast(`Applied ${Object.keys(accepted).length} field(s)`, "success");
+                    showToast(`Applied ${Object.keys(safeAccepted).length} field(s)`, "success");
                   } else if (fillReview.type === "relationship") {
                     const rels = project.relationships.map(r => r.id === fillReview.entityId ? { ...r, ...accepted } : r);
                     updateProject({ relationships: rels });
