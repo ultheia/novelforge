@@ -1689,179 +1689,6 @@ const tryRepairJson = (str) => {
   try { return JSON.parse(s); } catch { return null; }
 };
 
-
-// ─── SHARED AI EXECUTOR + LOOSE JSON PARSER ───
-// All non-stream OpenRouter calls should move through this helper so model choice,
-// retries, aborts, error handling, JSON mode, and thinking-token cleanup stay consistent.
-const extractJsonCandidates = (text) => {
-  const src = String(text || "");
-  const out = [];
-
-  for (const m of src.matchAll(/```(?:json)?\s*([\s\S]*?)```/gi)) {
-    const body = (m[1] || "").trim();
-    if (body.startsWith("{") || body.startsWith("[")) out.push(body);
-  }
-
-  const starts = [];
-  for (let i = 0; i < src.length; i++) if (src[i] === "{" || src[i] === "[") starts.push(i);
-  for (const start of starts) {
-    const open = src[start], close = open === "{" ? "}" : "]";
-    let depth = 0, inString = false, escape = false;
-    for (let i = start; i < src.length; i++) {
-      const c = src[i];
-      if (escape) { escape = false; continue; }
-      if (c === "\\") { escape = true; continue; }
-      if (c === '"') { inString = !inString; continue; }
-      if (inString) continue;
-      if (c === open) depth++;
-      else if (c === close) depth--;
-      if (depth === 0) { out.push(src.slice(start, i + 1).trim()); break; }
-    }
-  }
-
-  return [...new Set(out)].filter(x => x && x.length >= 2);
-};
-
-const parseLooseJson = (text) => {
-  for (const candidate of extractJsonCandidates(text)) {
-    try { return JSON.parse(candidate); } catch { /* try repair */ }
-    const repaired = tryRepairJson(candidate);
-    if (repaired) return repaired;
-  }
-  const repaired = tryRepairJson(String(text || "").trim());
-  return repaired || null;
-};
-
-const unwrapAiData = (parsed) => {
-  if (!parsed || typeof parsed !== "object") return parsed;
-  if (parsed.data !== undefined) return parsed.data;
-  if (parsed.updates !== undefined) return parsed.updates;
-  if (parsed.relationships !== undefined) return parsed.relationships;
-  if (parsed.items !== undefined) return parsed.items;
-  return parsed;
-};
-
-const runOpenRouterChat = async ({
-  apiKey,
-  settings = {},
-  model,
-  messages,
-  maxTokens,
-  temperature,
-  frequencyPenalty,
-  presencePenalty,
-  json = false,
-  signal,
-  retries = 1,
-  title = "NovelForge",
-}) => {
-  if (!apiKey && !settings?.apiKey) throw new Error("Set your OpenRouter API key in Settings first.");
-  const key = apiKey || settings.apiKey;
-  const body = {
-    model: model || settings.model,
-    messages,
-    max_tokens: Number(maxTokens || settings.maxTokens || 12000),
-    temperature: temperature ?? settings.temperature ?? 0.8,
-    top_p: 0.95,
-    frequency_penalty: frequencyPenalty ?? settings.frequencyPenalty ?? 0,
-    presence_penalty: presencePenalty ?? settings.presencePenalty ?? 0,
-  };
-  if (json) body.response_format = { type: "json_object" };
-
-  const doFetch = async () => {
-    const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${key}`,
-        "HTTP-Referer": window.location.origin,
-        "X-Title": title,
-      },
-      body: JSON.stringify(body),
-      signal,
-    });
-    if (!res.ok) {
-      const errData = await res.json().catch(() => ({}));
-      const msg = errData?.error?.message || `API error (${res.status})`;
-      const err = new Error(msg);
-      err.status = res.status;
-      throw err;
-    }
-    const data = await res.json();
-    return stripThinkingTokens(data.choices?.[0]?.message?.content || "");
-  };
-
-  let lastErr;
-  for (let attempt = 0; attempt <= retries; attempt++) {
-    try { return await doFetch(); }
-    catch (err) {
-      lastErr = err;
-      if (err?.name === "AbortError") throw err;
-      if (![429, 500, 502, 503, 504].includes(err?.status) || attempt >= retries) throw err;
-      await new Promise(r => setTimeout(r, 350 * (attempt + 1)));
-    }
-  }
-  throw lastErr;
-};
-
-const getModeOutputContract = (mode) => {
-  switch (mode) {
-    case "continue": return "Output prose only. Continue the manuscript from the provided ending or active beat. Do not explain your plan.";
-    case "scene": return "Output prose only. Write the requested scene. Do not summarize or add notes.";
-    case "dialogue": return "Output prose only. Make it dialogue-led with action beats and interior reactions. Do not add notes.";
-    case "rewrite": return "Output only the rewritten selected passage. Preserve canon and events. No preamble.";
-    case "brainstorm": return "Output structured brainstorm options with short titles and concrete scene directions. Do not write final prose.";
-    case "summarize": return "Output a factual chapter memory summary only. No invented events, no prose styling.";
-    default: return "Follow the user's requested output format.";
-  }
-};
-
-const getWriteReadiness = ({ mode, chapterContent, selectedText, sceneNotes, authorDirection, activeBeat, plotEntry }) => {
-  const text = _htmlToPlain(chapterContent || "");
-  const hasChapterText = wordCount(text) >= 5;
-  const hasSelection = !!String(selectedText || "").trim();
-  const hasSceneNotes = !!String(sceneNotes || "").trim();
-  const hasAuthorDirection = !!String(authorDirection || "").trim();
-  const hasActiveBeat = !!activeBeat;
-  const hasPlotCue = !!(plotEntry?.summary || (Array.isArray(plotEntry?.beats) && plotEntry.beats.length) || plotEntry?.beats);
-
-  if (mode === "rewrite") {
-    return hasSelection ? { ok: true } : { ok: false, question: "Select the passage you want rewritten first." };
-  }
-  if (mode === "summarize") {
-    return hasChapterText ? { ok: true } : { ok: false, question: "There is no chapter content to summarize yet." };
-  }
-  if (mode === "continue") {
-    if (hasSelection || hasChapterText || hasSceneNotes || hasAuthorDirection || hasActiveBeat || hasPlotCue) return { ok: true };
-    return { ok: false, question: "What should happen in this opening beat? Give me a short cue and I’ll expand it." };
-  }
-  if (mode === "scene") {
-    if (hasSceneNotes || hasAuthorDirection || hasActiveBeat || hasPlotCue) return { ok: true };
-    return { ok: false, question: "What should happen in this scene? Give me the core event, conflict, or turn." };
-  }
-  if (mode === "dialogue") {
-    if (hasSelection || hasAuthorDirection || hasSceneNotes || hasActiveBeat) return { ok: true };
-    return { ok: false, question: "Who is speaking, and what does each person want from the conversation?" };
-  }
-  if (mode === "brainstorm") {
-    if (hasAuthorDirection || hasSceneNotes || hasActiveBeat || hasPlotCue || hasChapterText) return { ok: true };
-    return { ok: false, question: "What should I brainstorm: plot, conflict, character choice, reveal, relationship beat, or ending?" };
-  }
-  return { ok: true };
-};
-
-const isSparseCharacter = (char) => {
-  if (!char) return true;
-  const fields = ["personality", "backstory", "desires", "speechPattern", "voiceSamples", "fears", "arc", "appearance"];
-  const filled = fields.filter(k => String(char[k] || "").trim().length >= 20).length;
-  return filled <= 1;
-};
-
-const nextCharacterInterviewField = (char) => {
-  const ordered = ["backstory", "personality", "desires", "speechPattern", "fears", "arc", "appearance", "voiceSamples"];
-  return ordered.find(k => !String(char?.[k] || "").trim()) || null;
-};
-
 const renderMarkdownCached = (text) => {
   if (!text) return "";
   if (_mdCache.has(text)) return _mdCache.get(text);
@@ -2194,6 +2021,348 @@ const CHARACTER_TEXT_FIELDS = [
   "internalConflict","externalConflict","signatureItems","secrets","hiddenSecrets",
   "allegiances","arc","canonNotes",
 ];
+
+// Character cue-table interview helpers.
+// This list intentionally contains story-development fields only. Identity/dropdown fields
+// like gender, pronouns, age, orientation, height, and build are manual form controls.
+const CHARACTER_INTERVIEW_FIELDS = [
+  // Story-interview fields only. Manual identity/form fields (gender, pronouns, age, orientation,
+  // height, build, role, status) must never be asked by the AI interview flow.
+  ["occupation", "Occupation / title", "What is their job, public role, or title? A short cue is enough."],
+  ["appearance", "Appearance", "What is the visual cue for their appearance?"],
+  ["personality", "Personality", "What personality cue should anchor them?"],
+  ["backstory", "Backstory", "What should be the cue for their backstory?"],
+  ["desires", "Desires", "What do they want most?"],
+  ["shortTermGoals", "Short-term goals", "What is their immediate goal?"],
+  ["longTermGoals", "Long-term goals", "What is their long-term goal?"],
+  ["speechPattern", "Speech pattern", "What should their voice or speech cue be?"],
+  ["voiceSamples", "Voice samples", "Give one line or phrase that sounds like them."],
+  ["habits", "Habits / mannerisms", "What habit, tic, or mannerism should they have?"],
+  ["fears", "Fears", "What are they afraid of?"],
+  ["flaws", "Flaws", "What flaw should complicate them?"],
+  ["strengths", "Strengths", "What strength defines them?"],
+  ["skills", "Skills", "What skill or capability matters in the story?"],
+  ["internalConflict", "Internal conflict", "What inner contradiction should drive them?"],
+  ["externalConflict", "External conflict", "What outside pressure or enemy blocks them?"],
+  ["signatureItems", "Signature items", "What object, possession, or motif is tied to them?"],
+  ["secrets", "Known secrets", "What secret can the story use?"],
+  ["hiddenSecrets", "Hidden secrets", "What secret should stay hidden from the reader/AI until revealed?"],
+  ["allegiances", "Allegiances", "Who or what are they loyal to?"],
+  ["arc", "Arc", "What change should they undergo?"],
+  ["canonNotes", "Canon notes", "What canon note should never be contradicted?"],
+  ["tags", "Tags", "What labels should help classify them?"],
+  ["aliases", "Aliases", "Any aliases, nicknames, or titles?"],
+];
+const CHARACTER_INTERVIEW_LABELS = Object.fromEntries(CHARACTER_INTERVIEW_FIELDS.map(([key, label, cue]) => [key, { label, cue }]));
+
+// The interview is intentionally not a “fill every blank forever” treadmill.
+// By default it only asks for core story anchors. Optional sheet fields are available
+// only when the author explicitly asks to continue/complete optional details.
+const CHARACTER_INTERVIEW_CORE_FIELDS = new Set([
+  "occupation", "appearance", "personality", "backstory", "desires",
+  "speechPattern", "internalConflict", "externalConflict", "arc",
+]);
+const CHARACTER_INTERVIEW_OPTIONAL_FIELDS = new Set(
+  CHARACTER_INTERVIEW_FIELDS.map(([key]) => key).filter(key => !CHARACTER_INTERVIEW_CORE_FIELDS.has(key))
+);
+const CHARACTER_INTERVIEW_CORE_TARGET = CHARACTER_INTERVIEW_CORE_FIELDS.size;
+
+// Character cue-table interviews should focus on story-useful fields. Identity anchors and
+// dropdown demographics are manual controls in the form, so the interview must not ask
+// for them just because a stale object, alias mismatch, or default value made them look blank.
+const CHARACTER_INTERVIEW_MANUAL_FIELDS = new Set([
+  // Form/manual identity anchors. The AI interview can use these as context but must never ask for them.
+  "name", "role", "status", "gender", "pronouns", "age", "orientation", "height", "build",
+  "lookAlike", "image", "backstoryRevealed", "secretRevealed",
+]);
+const CHARACTER_INTERVIEW_ALLOWED_FIELDS = new Set(CHARACTER_INTERVIEW_FIELDS.map(([key]) => key));
+const normalizeCharacterInterviewField = (field) => {
+  const key = String(field || "").trim();
+  if (!key) return null;
+  if (CHARACTER_INTERVIEW_MANUAL_FIELDS.has(key)) return null;
+  if (CHARACTER_INTERVIEW_ALLOWED_FIELDS.has(key)) return key;
+  const lower = key.toLowerCase();
+  for (const allowedKey of CHARACTER_INTERVIEW_ALLOWED_FIELDS) {
+    if (allowedKey.toLowerCase() === lower) return allowedKey;
+  }
+  return null;
+};
+const CHARACTER_FIELD_ALIASES = {
+  occupation: ["occupation", "occupationTitle", "profession", "job", "title"],
+  appearance: ["appearance", "physicalAppearance", "visualDescription", "description"],
+  personality: ["personality", "traits", "temperament"],
+  backstory: ["backstory", "history", "past"],
+  desires: ["desires", "desire", "wants", "motivation", "motives"],
+  shortTermGoals: ["shortTermGoals", "shortTermGoal", "immediateGoal"],
+  longTermGoals: ["longTermGoals", "longTermGoal", "ultimateGoal"],
+  speechPattern: ["speechPattern", "speech", "voice", "voiceStyle", "dialogueStyle"],
+  voiceSamples: ["voiceSamples", "voiceSample", "sampleDialogue", "dialogueSamples"],
+  habits: ["habits", "mannerisms", "tics"],
+  fears: ["fears", "fear"],
+  flaws: ["flaws", "flaw"],
+  strengths: ["strengths", "strength"],
+  skills: ["skills", "skill"],
+  internalConflict: ["internalConflict", "innerConflict"],
+  externalConflict: ["externalConflict", "outerConflict"],
+  signatureItems: ["signatureItems", "signatureItem", "objects", "items"],
+  secrets: ["secrets", "knownSecrets"],
+  hiddenSecrets: ["hiddenSecrets", "hiddenSecret"],
+  allegiances: ["allegiances", "loyalties", "alliance"],
+  arc: ["arc", "characterArc"],
+  canonNotes: ["canonNotes", "canon", "notes"],
+  tags: ["tags", "labels"],
+  aliases: ["aliases", "nicknames"],
+};
+const _hasUsableFieldValue = (value) => {
+  if (value === null || value === undefined) return false;
+  if (typeof value === "number") return Number.isFinite(value) && value !== 0;
+  if (typeof value === "boolean") return true;
+  if (Array.isArray(value)) return value.some(_hasUsableFieldValue);
+  if (typeof value === "object") return Object.values(value).some(_hasUsableFieldValue);
+  const s = String(value).replace(/<[^>]*>/g, "").trim();
+  if (!s) return false;
+  if (/^(n\/?a|none|null|undefined|unknown|tbd|to be decided|placeholder|select\.\.\.|e\.g\.)$/i.test(s)) return false;
+  return true;
+};
+const _getCharacterFieldValue = (character = {}, key) => {
+  const aliases = CHARACTER_FIELD_ALIASES[key] || [key];
+  for (const alias of aliases) {
+    if (Object.prototype.hasOwnProperty.call(character, alias) && _hasUsableFieldValue(character[alias])) return character[alias];
+  }
+  const lowerKeyMap = Object.keys(character || {}).reduce((acc, k) => { acc[k.toLowerCase()] = k; return acc; }, {});
+  for (const alias of aliases) {
+    const realKey = lowerKeyMap[String(alias).toLowerCase()];
+    if (realKey && _hasUsableFieldValue(character[realKey])) return character[realKey];
+  }
+  return undefined;
+};
+const isCharacterInterviewFieldMissing = (character = {}, key) => {
+  const safeKey = normalizeCharacterInterviewField(key);
+  if (!safeKey) return false;
+  if (character?.isBulk && ["voiceSamples", "aliases", "tags"].includes(safeKey)) return false;
+  return !_hasUsableFieldValue(_getCharacterFieldValue(character, safeKey));
+};
+const _characterInterviewMeta = (key) => {
+  const meta = CHARACTER_INTERVIEW_LABELS[key] || { label: key, cue: `What should ${key} be?` };
+  return { key, label: meta.label || key, cue: meta.cue || `What should ${key} be?` };
+};
+const getCharacterInterviewStatus = (character = {}, opts = {}) => {
+  const skipped = new Set((opts.skippedFields || []).map(normalizeCharacterInterviewField).filter(Boolean));
+  const coreFields = [...CHARACTER_INTERVIEW_CORE_FIELDS];
+  const optionalFields = [...CHARACTER_INTERVIEW_OPTIONAL_FIELDS];
+  const isMissing = (key) => isCharacterInterviewFieldMissing(character, key) && !skipped.has(key);
+  const missingCore = coreFields.filter(isMissing).map(_characterInterviewMeta);
+  const missingOptional = optionalFields.filter(isMissing).map(_characterInterviewMeta);
+  const coreFilled = coreFields.length - coreFields.filter(key => isCharacterInterviewFieldMissing(character, key)).length;
+  return {
+    coreTotal: CHARACTER_INTERVIEW_CORE_TARGET,
+    coreFilled,
+    coreMissingCount: missingCore.length,
+    optionalMissingCount: missingOptional.length,
+    missingCore,
+    missingOptional,
+    skippedFields: [...skipped],
+    coreComplete: missingCore.length === 0,
+  };
+};
+const getCharacterInterviewMissingFields = (character = {}, opts = {}) => {
+  const status = getCharacterInterviewStatus(character, opts);
+  if (status.missingCore.length) return status.missingCore;
+  return opts.includeOptional ? status.missingOptional : [];
+};
+const getNextCharacterInterviewField = (character = {}, opts = {}) => getCharacterInterviewMissingFields(character, opts)[0] || null;
+const isCharacterInterviewRequest = (text = "") => /\b(field[-\s]?by[-\s]?field|interview|fill\s+(?:the\s+)?(?:blank|empty|missing)|blank\s+fields|empty\s+fields|start\s+(?:a\s+)?character|generate\s+(?:a\s+)?character|create\s+(?:a\s+)?character|flesh\s+out|continue\s+optional|optional\s+fields)\b/i.test(String(text || ""));
+const wantsOptionalCharacterInterview = (text = "") => /\b(optional|continue\s+optional|complete\s+(?:the\s+)?sheet|all\s+(?:missing\s+)?fields|every\s+(?:missing\s+)?field)\b/i.test(String(text || ""));
+const isStopCharacterInterviewCommand = (text = "") => /^(stop|done|end|cancel|quit|enough|finish|finished)$/i.test(String(text || "").trim());
+const isSkipCharacterInterviewCommand = (text = "") => /^(skip|pass|not now)$/i.test(String(text || "").trim());
+const isAutoCharacterInterviewCommand = (text = "") => /^(auto|autofill|auto-fill|use current context|infer)$/i.test(String(text || "").trim());
+const makeCharacterInterviewPromptMessage = (character, target, status, opts = {}) => {
+  const name = character?.name || "this character";
+  const mode = opts.includeOptional ? "optional detail" : "core story";
+  const progress = opts.includeOptional
+    ? `Core interview is done. Optional fields left: ${status.optionalMissingCount}.`
+    : `Core progress: ${status.coreFilled}/${status.coreTotal}.`;
+  return `Let’s keep this focused for **${name}**. I’ll ask only for ${mode} anchors, not every blank box. ${progress}
+
+Next: **${target.label}**. ${target.cue}
+
+Reply with a short cue, **skip**, **auto**, or **stop**.`;
+};
+const makeCharacterInterviewCompleteMessage = (character, status) => {
+  const name = character?.name || "This character";
+  if (status.optionalMissingCount > 0) {
+    const labels = status.missingOptional.slice(0, 6).map(f => f.label).join(", ");
+    return `**${name}** has the core story anchors filled. I’ll stop the interview here.
+
+Optional blanks remain: ${labels}${status.optionalMissingCount > 6 ? ", …" : ""}.
+
+Say **continue optional** if you want to fill those too, or tell me a specific field to refine.`;
+  }
+  return `**${name}** has no remaining core or optional interview fields. Tell me a specific field if you want to refine something.`;
+};
+const makeCharacterFieldReviewCards = (characterName, values = {}, opts = {}) => {
+  const cards = [];
+  const cues = opts.cues || {};
+  const rejected = opts.rejected || {};
+  for (const [rawKey, rawValue] of Object.entries(values || {})) {
+    const field = normalizeCharacterInterviewField(rawKey);
+    if (!field) continue;
+    const value = typeof rawValue === "string" ? rawValue.trim() : normalizeAiValue(rawValue);
+    if (!_hasUsableFieldValue(value)) continue;
+    const meta = CHARACTER_INTERVIEW_LABELS[field] || { label: field };
+    cards.push({
+      id: uid(),
+      type: "characterFieldDraft",
+      characterName: characterName || "this character",
+      field,
+      label: meta.label || field,
+      cue: cues[field] || "",
+      value,
+      status: "pending",
+      rejectedDrafts: rejected[field] || [],
+      createdAt: new Date().toISOString(),
+    });
+  }
+  return cards;
+};
+const makeCharacterFieldReviewMessage = (characterName, values = {}, opts = {}) => {
+  const cards = makeCharacterFieldReviewCards(characterName, values, opts);
+  const note = String(opts.note || "").trim();
+  const intro = note || `I drafted ${cards.length} field${cards.length === 1 ? "" : "s"} for **${characterName || "this character"}**.`;
+  return {
+    content: `${intro}
+
+Review each field separately. **Append** applies only that one card. **Reject** saves it as negative context for the next pass. **Rethink** regenerates only that one card right away.`,
+    characterFieldCards: cards,
+  };
+};
+const makeCharacterFieldJsonMessage = (characterName, field, value, opts = {}) => makeCharacterFieldReviewMessage(characterName, { [field]: value }, opts);
+
+
+const CHARACTER_CUE_TABLE_MAX_FIELDS = 8;
+const normalizeCharacterCueLabel = (value = "") => String(value || "")
+  .replace(/<[^>]*>/g, " ")
+  .replace(/[*_`#>]/g, "")
+  .replace(/\s+/g, " ")
+  .replace(/[：:]+$/g, "")
+  .trim()
+  .toLowerCase();
+const getCharacterCueTableFields = (character = {}, opts = {}) => {
+  const status = getCharacterInterviewStatus(character, opts);
+  const pool = status.missingCore.length ? status.missingCore : (opts.includeOptional ? status.missingOptional : []);
+  return pool.slice(0, opts.limit || CHARACTER_CUE_TABLE_MAX_FIELDS);
+};
+const makeCharacterCueTableMessage = (character = {}, fields = [], opts = {}) => {
+  const name = character?.name || "this character";
+  if (!fields.length) return makeCharacterInterviewCompleteMessage(character, getCharacterInterviewStatus(character, opts));
+  const status = getCharacterInterviewStatus(character, opts);
+  const progress = status.missingCore.length
+    ? `Core story fields left: ${status.missingCore.length}.`
+    : `Core story fields are done. Optional fields left: ${status.optionalMissingCount}.`;
+  const rows = fields.map(f => `| ${f.label} |  |`).join("\n");
+  const examples = fields.slice(0, 3).map(f => `${f.label}:`).join("\n");
+  const contextCard = makeCharacterContextCard(character, { limit: 18 });
+  const designBlock = makeCharacterDesignSignalBlock(character);
+  return `Let’s do **${name}** in one compact pass instead of one question at a time. ${progress}\n\nWhat I’ll treat as already true:\n${contextCard}${designBlock}\n\nFill any rows you want. Leave rows blank to skip them for now.\n\n| Field | Short cue |\n|---|---|\n${rows}\n\nYou can also reply in this paste-friendly format:\n\`\`\`text\n${examples}\n\`\`\`\n\nI’ll expand only the fields you fill, flag useful contradictions, and return one review card per field. Nothing changes in the sheet until you click **Append** on a card.`;
+};
+const parseCharacterCueTableReply = (text = "", fields = []) => {
+  const result = {};
+  const fieldByLabel = new Map();
+  for (const f of fields || []) {
+    if (!f?.key) continue;
+    fieldByLabel.set(normalizeCharacterCueLabel(f.label), f.key);
+    fieldByLabel.set(normalizeCharacterCueLabel(f.key), f.key);
+  }
+  const cleanCue = (value = "") => String(value || "")
+    .replace(/^[-–—:\s|]+/, "")
+    .replace(/\s+\|\s*$/, "")
+    .trim();
+  const isBlankCue = (value = "") => {
+    const v = cleanCue(value).toLowerCase();
+    return !v || /^(skip|pass|blank|none|n\/?a|na|tbd|not now|leave blank)$/i.test(v);
+  };
+  const lines = String(text || "").split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+  for (const line of lines) {
+    if (/^\|?\s*-{2,}\s*\|/.test(line) || /field\s*\|\s*short cue/i.test(line)) continue;
+    if (line.includes("|")) {
+      const cells = line.split("|").map(c => c.trim()).filter(Boolean);
+      if (cells.length >= 2) {
+        const key = fieldByLabel.get(normalizeCharacterCueLabel(cells[0]));
+        const cue = cleanCue(cells.slice(1).join(" | "));
+        if (key && !isBlankCue(cue)) result[key] = cue;
+        continue;
+      }
+    }
+    const m = line.match(/^[-*\s]*(.+?)(?:\s*[:：]\s+|\s+[—–-]\s+)(.+)$/);
+    if (m) {
+      const key = fieldByLabel.get(normalizeCharacterCueLabel(m[1]));
+      const cue = cleanCue(m[2]);
+      if (key && !isBlankCue(cue)) result[key] = cue;
+    }
+  }
+  return result;
+};
+const makeCharacterMultiFieldJsonMessage = (characterName, values = {}, note = "", opts = {}) => makeCharacterFieldReviewMessage(characterName, values, { ...opts, note });
+
+
+const _fieldValueToContextText = (value) => {
+  if (!_hasUsableFieldValue(value)) return "";
+  if (Array.isArray(value)) return value.map(_fieldValueToContextText).filter(Boolean).join(", ");
+  if (typeof value === "object") return Object.entries(value)
+    .filter(([, v]) => _hasUsableFieldValue(v))
+    .map(([k, v]) => `${k}: ${_fieldValueToContextText(v)}`)
+    .join("; ");
+  return String(value).replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
+};
+const CHARACTER_CONTEXT_CARD_FIELDS = [
+  ["name", "Name"], ["role", "Role"], ["status", "Status"], ["gender", "Gender"], ["pronouns", "Pronouns"], ["age", "Age"],
+  ["occupation", "Occupation"], ["appearance", "Appearance"], ["personality", "Personality"], ["backstory", "Backstory"],
+  ["desires", "Desires"], ["shortTermGoals", "Short-term goal"], ["longTermGoals", "Long-term goal"],
+  ["speechPattern", "Speech pattern"], ["voiceSamples", "Voice samples"], ["habits", "Habits"], ["fears", "Fears"],
+  ["flaws", "Flaws"], ["strengths", "Strengths"], ["skills", "Skills"], ["internalConflict", "Internal conflict"],
+  ["externalConflict", "External conflict"], ["signatureItems", "Signature items"], ["secrets", "Known secrets"],
+  ["hiddenSecrets", "Hidden secrets"], ["allegiances", "Allegiances"], ["arc", "Arc"], ["canonNotes", "Canon notes"],
+  ["tags", "Tags"], ["aliases", "Aliases"],
+];
+const makeCharacterContextCard = (character = {}, opts = {}) => {
+  const rows = [];
+  for (const [key, label] of CHARACTER_CONTEXT_CARD_FIELDS) {
+    const value = key === "name" ? character?.name : _getCharacterFieldValue(character, key);
+    const text = _fieldValueToContextText(value);
+    if (text) rows.push(`- ${label}: ${text}`);
+  }
+  if (!rows.length) return "No usable filled fields yet.";
+  const limit = opts.limit || 28;
+  return rows.slice(0, limit).join("\n");
+};
+const detectCharacterDesignSignals = (character = {}, cues = {}) => {
+  const signals = [];
+  const role = `${character?.role || ""} ${character?.archetype || ""} ${character?.tags || ""}`.toLowerCase();
+  const personality = `${character?.personality || ""} ${cues?.personality || ""}`.toLowerCase();
+  const desires = `${character?.desires || ""} ${cues?.desires || ""}`.toLowerCase();
+  const backstory = `${character?.backstory || ""} ${cues?.backstory || ""}`.toLowerCase();
+  const goodWords = /\b(kind|gentle|good|honest|loyal|warm|generous|protective|principled|empathetic|compassionate|soft[-\s]?hearted|decent|selfless)\b/i;
+  const antagonistWords = /\b(antagonist|villain|rival|enemy|opposition|opposes|foil)\b/i;
+  if (antagonistWords.test(role) && goodWords.test(personality)) {
+    signals.push("Creative tension: they are positioned as an antagonist but have good or warm traits. Treat this as an opportunity, not an error: they can oppose the protagonist for principled, protective, loyal, ideological, or misinformed reasons.");
+  }
+  if (antagonistWords.test(role) && goodWords.test(`${desires} ${backstory}`)) {
+    signals.push("Motivation check: their opposition should probably come from a sympathetic goal, a moral blind spot, conflicting loyalties, or a harmful method rather than cartoon evil.");
+  }
+  if (/\bhero|protagonist\b/i.test(role) && /\b(cruel|cold|selfish|manipulative|violent|dishonest)\b/i.test(personality)) {
+    signals.push("Creative tension: they are framed as a protagonist/hero but carry abrasive traits. Use that as a flaw, mask, trauma response, or arc pressure.");
+  }
+  if (/\b(dead|deceased)\b/i.test(`${character?.status || ""}`) && /\b(goal|want|desire|plan|future)\b/i.test(`${desires} ${cues?.longTermGoals || ""}`)) {
+    signals.push("Continuity check: this character is marked dead/deceased. Frame active goals through legacy, flashback, recorded intent, haunting, memory, or consequences unless their status changes.");
+  }
+  return signals.slice(0, 4);
+};
+const makeCharacterDesignSignalBlock = (character = {}, cues = {}) => {
+  const signals = detectCharacterDesignSignals(character, cues);
+  if (!signals.length) return "";
+  return `\n\nDesign notes I notice:\n${signals.map(s => `- ${s}`).join("\n")}`;
+};
+
 // World fields the editor renders, keyed by category. "description"/"keywords" + the two common
 // fields (history, culturalNorms) apply to every category; category-specific fields follow.
 const WORLD_COMMON_FIELDS = ["description","keywords","history","culturalNorms"];
@@ -4555,50 +4724,28 @@ const buildHeuristicAgentPlan = ({ userRequest = "", taskHint = "", difficulty =
   const specialists = new Set();
   const add = (...keys) => keys.forEach(k => specialists.add(k));
 
-  const isWrite = /write tab generation mode:/.test(text);
-  const mode = (text.match(/write tab generation mode:\s*(\w+)/) || [])[1];
-
-  if (isWrite) {
-    if (mode === "summarize") {
-      // Summary should be factual memory extraction, not creative specialist invention.
-    } else if (mode === "rewrite") {
-      add("craftAgent", "standardsAgent");
-    } else if (mode === "dialogue") {
-      add("characterAgent", "relationshipAgent", "craftAgent", "standardsAgent");
-    } else if (mode === "brainstorm") {
-      add("sceneStructureAgent", "characterAgent", "timelineAgent", "revealAgent", "thematicAgent");
-    } else {
-      add("sceneStructureAgent", "characterAgent", "craftAgent", "standardsAgent");
-      if (/relationship|chemistry|tension|argument|confess|kiss|dialogue|conversation/.test(text)) add("relationshipAgent");
-      if (/location|setting|room|city|street|world|law|magic|technology|culture|religion/.test(text)) add("settingAgent", "loreRulesAgent");
-      if (/secret|reveal|reader knows|spoiler/.test(text)) add("revealAgent");
-      if (/theme|motif|symbol|literary/.test(text)) add("thematicAgent");
-    }
-  } else if (difficulty === "easy") {
+  if (difficulty === "easy") {
     if (/grammar|typo|tighten|polish|line edit|rewrite/.test(text)) add("craftAgent", "standardsAgent");
     else if (/relationship|chemistry|tension|trust/.test(text)) add("relationshipAgent", "craftAgent");
     else if (/character|voice|emotion|pov/.test(text)) add("characterAgent", "craftAgent");
     else add("craftAgent");
   } else {
-    add("craftAgent", "standardsAgent");
-    if (/scene|chapter|plot|beat|outline|continue|write/.test(text)) add("sceneStructureAgent");
-    if (/character|voice|emotion|pov|dialogue/.test(text)) add("characterAgent");
-    if (/relationship|chemistry|tension|trust|lover|enemy/.test(text)) add("relationshipAgent");
-    if (/timeline|flashback|date|before|after|continuity|dead|alive/.test(text)) add("timelineAgent");
+    add("sceneStructureAgent", "characterAgent", "craftAgent", "standardsAgent");
+    if (/dialogue|conversation|kiss|fight|argue|confess|tension|relationship|chemistry|trust|lover|enemy/.test(text)) add("relationshipAgent");
+    if (/timeline|flashback|date|before|after|continuity|dead|alive|chapter/.test(text)) add("timelineAgent");
     if (/world|location|setting|place|room|city|law|rule|magic|technology|culture|religion/.test(text)) add("settingAgent", "loreRulesAgent");
     if (/secret|reveal|reader knows|dramatic irony|spoiler|knowledge/.test(text)) add("revealAgent");
     if (/theme|motif|symbol|literary|argument/.test(text)) add("thematicAgent");
-    if (specialists.size <= 2 && /generate|create|draft|fill|sync/.test(text)) add("sceneStructureAgent", "characterAgent");
   }
 
-  const maxAgents = difficulty === "hard" ? 8 : difficulty === "normal" ? 5 : 2;
+  const maxAgents = difficulty === "easy" ? 2 : 5;
   return {
     task_type: /json|structured|fill|sync/.test(text) ? "structured_data" : /analy[sz]e|audit|diagnos/.test(text) ? "analysis" : "creative_writing",
     difficulty,
-    planner: "local-scoped",
+    planner: "local-economy",
     required_specialists: [...specialists].filter(k => SPECIALIST_AGENTS[k]).slice(0, maxAgents),
     skip_specialists: [],
-    reasoning: `Scoped planner selected ${Math.min(specialists.size, maxAgents)} specialist(s), avoiding broad memory pull unless the request needs it.`,
+    reasoning: `Local economy planner selected ${Math.min(specialists.size, maxAgents)} focused specialist(s) to avoid an extra orchestrator call.`,
     output_mode: /json|structured/.test(text) ? "json" : "prose",
   };
 };
@@ -4607,19 +4754,36 @@ const buildHeuristicAgentPlan = ({ userRequest = "", taskHint = "", difficulty =
 const _callAgent = async ({ role, system, user, settings, signal, temperature = 0.7, json = false, taskDifficulty = null }) => {
   const model = getAgentModel(settings, role, taskDifficulty);
   const budget = getAgentBudget(role, taskDifficulty);
-  return runOpenRouterChat({
-    settings,
+  if (!settings?.apiKey) throw new Error("API key not set");
+
+  const body = {
     model,
     messages: [
       { role: "system", content: system },
       { role: "user", content: user },
     ],
     temperature,
-    maxTokens: Math.min(budget, AGENT_TOKEN_HARD_CAP),
-    json,
+    max_tokens: Math.min(budget, AGENT_TOKEN_HARD_CAP),
+  };
+  if (json) body.response_format = { type: "json_object" };
+
+  const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${settings.apiKey}`,
+      "HTTP-Referer": window.location.origin,
+      "X-Title": "NovelForge",
+    },
+    body: JSON.stringify(body),
     signal,
-    retries: 1,
   });
+  if (!res.ok) {
+    const errData = await res.json().catch(() => ({}));
+    throw new Error(errData.error?.message || `Agent ${role} failed (${res.status})`);
+  }
+  const data = await res.json();
+  return data.choices?.[0]?.message?.content || "";
 };
 
 // ═══ MEMORY INDEX — Lightweight structured summary of the project ═══
@@ -4711,8 +4875,7 @@ Return your plan as JSON.`;
 
   const raw = await _callAgent({ role: "orchestrator", system, user, settings, signal, temperature: 0.2, json: true, taskDifficulty });
   try {
-    const parsed = parseLooseJson(raw);
-    if (parsed && typeof parsed === "object") return parsed;
+    return JSON.parse(raw);
   } catch {
     // Fallback plan if orchestrator fails to return valid JSON
     return {
@@ -4731,11 +4894,8 @@ const SPECIALIST_AGENTS = {
     buildContext: (project, chapterIdx, memoryIndex) => {
       const curCh = project.chapters?.[chapterIdx];
       const pov = ContextEngine._effectivePov(project, chapterIdx);
-      const plotEntry = ContextEngine._plotEntryForChapter(project, chapterIdx);
-      const sceneCharIds = new Set(Array.isArray(plotEntry?.characters) ? plotEntry.characters : []);
+      const povChar = (project.characters || []).find(c => c.name === pov);
       const chars = project.characters || [];
-      const povLower = String(pov || "").toLowerCase();
-      const povChar = chars.find(c => c.id === pov || String(c.name || "").toLowerCase() === povLower || String(c.aliases || "").toLowerCase().split(/[,;\n]/).map(a => a.trim()).includes(povLower));
       return JSON.stringify({
         povCharacter: povChar ? {
           name: povChar.name, role: povChar.role, personality: povChar.personality,
@@ -4753,7 +4913,7 @@ const SPECIALIST_AGENTS = {
           backstory: povChar.backstoryRevealed ? povChar.backstory : "[NOT YET REVEALED — hold back]",
           hiddenSecrets: povChar.secretRevealed ? povChar.hiddenSecrets : "[NOT YET REVEALED — hold back]",
         } : null,
-        otherCharacters: chars.filter(c => c.name && c.id !== povChar?.id && !c.isBulk && sceneCharIds.has(c.id)).slice(0, 10).map(c => ({
+        otherCharacters: chars.filter(c => c.name && c.id !== povChar?.id && !c.isBulk).slice(0, 10).map(c => ({
           name: c.name, role: c.role, status: c.status,
           briefPersonality: (c.personality || "").slice(0, 200),
           currentEmotionalState: c.currentEmotionalState || "",
@@ -4790,7 +4950,7 @@ const SPECIALIST_AGENTS = {
       const sceneLocationIds = plotEntry?.locations || [];
       const sceneLocations = sceneLocationIds.length > 0
         ? locations.filter(l => sceneLocationIds.includes(l.id))
-        : [];
+        : locations.slice(0, 5);
       return JSON.stringify({
         sceneLocations: sceneLocations.map(l => ({
           name: l.name, atmosphere: l.atmosphere, sensoryDetails: l.sensoryDetails,
@@ -4807,9 +4967,10 @@ const SPECIALIST_AGENTS = {
     buildContext: (project, chapterIdx, memoryIndex) => {
       const plotEntry = ContextEngine._plotEntryForChapter(project, chapterIdx);
       const sceneCharIds = plotEntry?.characters || [];
-      const relevantRels = sceneCharIds.length > 0
-        ? (project.relationships || []).filter(r => sceneCharIds.includes(r.char1) || sceneCharIds.includes(r.char2)).slice(0, 8)
-        : [];
+      const relevantRels = (project.relationships || []).filter(r =>
+        sceneCharIds.includes(r.char1) || sceneCharIds.includes(r.char2) ||
+        sceneCharIds.length === 0
+      ).slice(0, 8);
       const charMap = {};
       (project.characters || []).forEach(c => { charMap[c.id] = c.name; });
       // For each relationship, show its most recent chapter evolution snapshot
@@ -4818,8 +4979,7 @@ const SPECIALIST_AGENTS = {
         relevantRelationships: relevantRels.map(r => {
           // Get the most recent chapter evolution entry <= current chapter
           const evo = r.chapterEvolution || {};
-          const currentChapterNum = ContextEngine._chapterNum(project, chapterIdx);
-          const evoKeys = Object.keys(evo).map(k => parseInt(k, 10)).filter(n => !isNaN(n) && n <= currentChapterNum).sort((a, b) => b - a);
+          const evoKeys = Object.keys(evo).map(k => parseInt(k, 10)).filter(n => !isNaN(n) && n <= chapterIdx).sort((a, b) => b - a);
           const latestEvo = evoKeys.length > 0 ? evo[evoKeys[0]] : null;
           return {
             char1: charMap[r.char1] || r.char1,
@@ -5147,8 +5307,7 @@ ${JSON.stringify((project.relationships || []).map(r => ({ char1: r.char1, char2
     const system = promptTextOrFallback(appConfig, promptId, "system", vars, p.system);
     const user = promptTextOrFallback(appConfig, promptId, "user", vars, p.user);
     const raw = await _callAgent({ role: key, system, user, settings, signal, temperature: 0.3, json: true });
-    const parsed = parseLooseJson(raw);
-    return parsed || { raw };
+    try { return JSON.parse(raw); } catch { return { raw }; }
   },
 
   // Apply state updates from stateUpdater to the project
@@ -8938,41 +9097,42 @@ const CharacterConversationModal = memo(({ project, settings, appConfig, onClose
       showToast("Need two characters, a prompt, and an API key", "error");
       return;
     }
-    const hasVoiceSeed = (c) => [c.personality, c.speechPattern, c.voiceSamples, c.currentEmotionalState, c.desires].some(v => String(v || "").trim().length >= 20);
-    if (!hasVoiceSeed(c1) || !hasVoiceSeed(c2)) {
-      showToast("Seed both characters with personality, voice, or desire before the Conversation Room writes them.", "error");
-      return;
-    }
     setIsGenerating(true);
     setConversation("");
     try {
-      const tpl = findPromptTemplate(appConfig, "character.conversationRoom") || findPromptTemplate(buildDefaultAppConfig(), "character.conversationRoom");
-      const vars = {
-        scenario: prompt,
-        char1Name: c1.name,
-        char2Name: c2.name,
-        char1: `${c1.name}: ${c1.role}. Personality: ${(c1.personality || "").slice(0, 300)}. Speech pattern: ${c1.speechPattern || "none specified"}. Current state: ${c1.currentEmotionalState || "normal"}.`,
-        char2: `${c2.name}: ${c2.role}. Personality: ${(c2.personality || "").slice(0, 300)}. Speech pattern: ${c2.speechPattern || "none specified"}. Current state: ${c2.currentEmotionalState || "normal"}.`,
-      };
-      const messages = [
-        { role: "system", content: tpl?.system ? renderConfigTemplate(tpl.system, vars) : `You are a creative writing sandbox. Generate a SHORT dialogue between two characters (6-10 exchanges). This is practice — NOT for the novel. It's for the author to hear their characters' voices.
+      const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${settings.apiKey}`, "HTTP-Referer": window.location.origin, "X-Title": "NovelForge" },
+        body: JSON.stringify({
+          model: settings.model || "anthropic/claude-sonnet-4",
+          messages: (() => {
+            const tpl = findPromptTemplate(appConfig, "character.conversationRoom") || findPromptTemplate(buildDefaultAppConfig(), "character.conversationRoom");
+            const vars = {
+              scenario: prompt,
+              char1Name: c1.name,
+              char2Name: c2.name,
+              char1: `${c1.name}: ${c1.role}. Personality: ${(c1.personality || "").slice(0, 300)}. Speech pattern: ${c1.speechPattern || "none specified"}. Current state: ${c1.currentEmotionalState || "normal"}.`,
+              char2: `${c2.name}: ${c2.role}. Personality: ${(c2.personality || "").slice(0, 300)}. Speech pattern: ${c2.speechPattern || "none specified"}. Current state: ${c2.currentEmotionalState || "normal"}.`,
+            };
+            return [
+              { role: "system", content: tpl?.system ? renderConfigTemplate(tpl.system, vars) : `You are a creative writing sandbox. Generate a SHORT dialogue between two characters (6-10 exchanges). This is practice — NOT for the novel. It's for the author to hear their characters' voices.
 
 ${vars.char1}
 
 ${vars.char2}
 
 Format: "${c1.name}: ..." and "${c2.name}: ..." alternating. Keep lines short and authentic. Include brief action beats sparingly.` },
-        { role: "user", content: tpl?.user ? renderConfigTemplate(tpl.user, vars) : `Scenario: ${prompt}
+              { role: "user", content: tpl?.user ? renderConfigTemplate(tpl.user, vars) : `Scenario: ${prompt}
 
 Write the conversation.` },
-      ];
-      const content = (await runOpenRouterChat({
-        settings,
-        model: settings.tabModels?.characters || settings.model || "anthropic/claude-sonnet-4",
-        messages,
-        maxTokens: Number(tpl?.maxTokens || 12000),
-        temperature: Number(tpl?.temperature || 0.95),
-      })).trim();
+            ];
+          })(),
+          max_tokens: 12000, temperature: 0.95,
+        }),
+      });
+      if (!res.ok) throw new Error(`API error ${res.status}`);
+      const data = await res.json();
+      const content = (stripThinkingTokens(data.choices?.[0]?.message?.content || "")).trim();
       setConversation(content);
     } catch (e) {
       showToast(`Failed: ${e.message}`, "error");
@@ -14007,6 +14167,7 @@ const TabAIChat = memo(({ project, settings, appConfig, appConfigLiveLoader = nu
   const [agentEvents, setAgentEvents] = useState([]);
   const [agentLogOpen, setAgentLogOpen] = useState(true);
   const [interviewState, setInterviewState] = useState(null);
+  const [characterFieldFeedback, setCharacterFieldFeedback] = useState([]);
 
   // A10: Track mounted state — don't update local state after unmount, but let fetch complete
   const mountedRef = useRef(true);
@@ -14017,6 +14178,291 @@ const TabAIChat = memo(({ project, settings, appConfig, appConfigLiveLoader = nu
 
   useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages]);
 
+  const getEditingCharacter = useCallback(() => {
+    if (tabName !== "characters" || !editingEntityId) return null;
+    return (project?.characters || []).find(c => c.id === editingEntityId) || null;
+  }, [tabName, editingEntityId, project?.characters]);
+
+  const runSingleFieldCharacterExpansion = useCallback(async ({ character, field, cue, signal, rejectedDrafts = [] }) => {
+    const safeField = normalizeCharacterInterviewField(field);
+    if (!safeField) throw new Error("That field is not an AI interview field. Edit it directly in the character form.");
+    field = safeField;
+    const meta = CHARACTER_INTERVIEW_LABELS[field] || { label: field };
+    if (!settings?.apiKey) throw new Error("Missing OpenRouter API key");
+    const facts = JSON.stringify({
+      name: character?.name || "",
+      role: character?.role || "",
+      gender: character?.gender || "",
+      age: character?.age || "",
+      pronouns: character?.pronouns || "",
+      occupation: character?.occupation || "",
+      appearance: character?.appearance || "",
+      personality: character?.personality || "",
+      backstory: character?.backstory || "",
+      desires: character?.desires || "",
+      speechPattern: character?.speechPattern || "",
+      canonNotes: character?.canonNotes || "",
+    }, null, 2);
+    const system = "You expand one NovelForge character field. Return strict JSON only. Do not fill any other fields. Do not overwrite unrelated facts. Use the cue as the highest priority. Keep the result useful for a fiction character sheet. Do not repeat any rejected draft shown by the author.";
+    const user = `Character: ${character?.name || "Unnamed"}
+Existing facts:
+${facts}
+
+Target field: ${field} (${meta.label})
+Author cue: ${cue}
+
+Rejected drafts for this field to avoid:
+${rejectedDrafts.length ? rejectedDrafts.map((r, i) => `${i + 1}. ${r}`).join("\n") : "None"}
+
+Return JSON exactly like this shape, with only this target field inside data:
+{ "type": "characters", "data": { "${field}": "expanded field value" } }`;
+    const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${settings.apiKey}`, "HTTP-Referer": window.location.origin, "X-Title": "NovelForge" },
+      body: JSON.stringify({
+        model: settings.tabModels?.characters || settings.model,
+        messages: [{ role: "system", content: system }, { role: "user", content: user }],
+        max_tokens: 1200,
+        temperature: 0.65,
+        response_format: { type: "json_object" },
+      }),
+      signal,
+    });
+    if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error?.message || `API error ${res.status}`); }
+    const data = await res.json();
+    const raw = stripThinkingTokens(data.choices?.[0]?.message?.content || "");
+    let parsed = null;
+    try { parsed = JSON.parse(raw); } catch { parsed = tryRepairJson(raw); }
+    const value = parsed?.data?.[field] ?? parsed?.[field] ?? raw;
+    return makeCharacterFieldJsonMessage(character?.name, field, value, { cues: { [field]: cue }, rejected: { [field]: rejectedDrafts } });
+  }, [settings]);
+
+  const runMultiFieldCharacterExpansion = useCallback(async ({ character, cues, signal, rejectedDrafts = [] }) => {
+    const safeCues = {};
+    for (const [rawKey, rawCue] of Object.entries(cues || {})) {
+      const safeKey = normalizeCharacterInterviewField(rawKey);
+      const cue = String(rawCue || "").trim();
+      if (safeKey && cue && isCharacterInterviewFieldMissing(character, safeKey)) safeCues[safeKey] = cue;
+    }
+    if (!Object.keys(safeCues).length) throw new Error("No usable cues were provided for currently missing story fields.");
+    const rejectedByField = {};
+    for (const item of rejectedDrafts || []) {
+      const f = normalizeCharacterInterviewField(item?.field);
+      if (!f || !safeCues[f]) continue;
+      const text = String(item?.value || item?.draft || "").trim();
+      if (!text) continue;
+      if (!rejectedByField[f]) rejectedByField[f] = [];
+      rejectedByField[f].push(text);
+    }
+    if (!settings?.apiKey) throw new Error("Missing OpenRouter API key");
+    const contextCard = makeCharacterContextCard(character, { limit: 28 });
+    const designSignals = detectCharacterDesignSignals(character, safeCues);
+    const system = `You are NovelForge's character architect: conversational, practical, and sharp.
+
+You expand only the character fields the author gave cues for. Existing filled fields are canon. Do not overwrite them. Do not fill blank fields without cues. If the existing facts contain creative tension, treat it as design material, not an error.
+
+Return strict JSON only with this shape:
+{
+  "note": "1-3 conversational sentences explaining the design logic or any useful tension you noticed.",
+  "type": "characters",
+  "data": { }
+}
+
+Rules:
+- data may contain only these requested keys: ${Object.keys(safeCues).join(", ")}.
+- Make each field useful for a fiction character sheet.
+- Keep prose concrete, not generic.
+- If antagonist + good personality, explain how opposition can come from motive/method/loyalty, not evilness.
+- Do not mention gender/pronouns/age unless they are already provided as context and relevant.
+- Do not repeat rejected drafts. Use them as negative examples.`;
+    const user = `Character currently selected: ${character?.name || "Unnamed"}
+
+Filled-field context to treat as true:
+${contextCard}
+${designSignals.length ? `\nCreative/common-sense notes already detected:\n${designSignals.map(s => `- ${s}`).join("\n")}` : ""}
+
+Author cues to expand:
+${JSON.stringify(safeCues, null, 2)}
+
+Rejected field drafts to avoid:
+${Object.keys(rejectedByField).length ? JSON.stringify(rejectedByField, null, 2) : "None"}
+
+Return JSON only.`;
+    const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${settings.apiKey}`, "HTTP-Referer": window.location.origin, "X-Title": "NovelForge" },
+      body: JSON.stringify({
+        model: settings.tabModels?.characters || settings.model,
+        messages: [{ role: "system", content: system }, { role: "user", content: user }],
+        max_tokens: Math.max(1600, Math.min(3500, Object.keys(safeCues).length * 650)),
+        temperature: 0.72,
+        response_format: { type: "json_object" },
+      }),
+      signal,
+    });
+    if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error?.message || `API error ${res.status}`); }
+    const data = await res.json();
+    const raw = stripThinkingTokens(data.choices?.[0]?.message?.content || "");
+    let parsed = null;
+    try { parsed = JSON.parse(raw); } catch { parsed = tryRepairJson(raw); }
+    const payload = parsed && typeof parsed === "object" ? parsed : { note: "I expanded the cues into character-sheet fields.", data: safeCues };
+    const out = {};
+    const dataObj = payload.data && typeof payload.data === "object" ? payload.data : payload;
+    for (const key of Object.keys(safeCues)) {
+      const value = dataObj?.[key];
+      if (_hasUsableFieldValue(value)) out[key] = value;
+    }
+    if (!Object.keys(out).length) Object.assign(out, safeCues);
+    const localSignals = detectCharacterDesignSignals(character, safeCues);
+    const note = payload.note || (localSignals.length ? localSignals.join(" ") : "I expanded only the cues you filled, using the existing character fields as context.");
+    return makeCharacterMultiFieldJsonMessage(character?.name, out, note, { cues: safeCues, rejected: rejectedByField });
+  }, [settings]);
+
+  const runNewCharacterSeedDraft = useCallback(async ({ seed, signal }) => {
+    if (!settings?.apiKey) throw new Error("Missing OpenRouter API key");
+    const system = "You turn an author's first-character seed into a minimal NovelForge character JSON draft. Do not fill the whole sheet. Only include fields directly implied by the seed plus one compact backstory premise. Return strict JSON only.";
+    const user = `Author seed: ${seed}
+
+Return JSON shape:
+{ "type": "characters", "data": { "name": "", "role": "", "gender": "", "age": "", "pronouns": "", "occupation": "", "backstory": "" } }
+
+Rules: leave any field blank if the seed does not imply it. Do not invent a full profile.`;
+    const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${settings.apiKey}`, "HTTP-Referer": window.location.origin, "X-Title": "NovelForge" },
+      body: JSON.stringify({
+        model: settings.tabModels?.characters || settings.model,
+        messages: [{ role: "system", content: system }, { role: "user", content: user }],
+        max_tokens: 1000,
+        temperature: 0.55,
+        response_format: { type: "json_object" },
+      }),
+      signal,
+    });
+    if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error?.message || `API error ${res.status}`); }
+    const data = await res.json();
+    const raw = stripThinkingTokens(data.choices?.[0]?.message?.content || "");
+    let parsed = null;
+    try { parsed = JSON.parse(raw); } catch { parsed = tryRepairJson(raw); }
+    const payload = parsed || { type: "characters", data: { backstory: seed } };
+    return `Here’s a minimal first-character draft from that seed. Apply it, then select the character and use the missing-field cue table for anything else you want to build.
+
+\`\`\`json
+${JSON.stringify(payload, null, 2)}
+\`\`\``;
+  }, [settings]);
+
+  const maybeStartOrContinueCharacterInterview = useCallback(async ({ msgText, signal }) => {
+    if (tabName !== "characters") return false;
+    const lower = String(msgText || "").trim();
+    const character = getEditingCharacter();
+
+    if (interviewState?.type === "newCharacterSeed") {
+      if (!lower) return true;
+      const content = await runNewCharacterSeedDraft({ seed: lower, signal });
+      setInterviewState(null);
+      setMessages(prev => [...prev, { id: uid(), role: "assistant", content, hasAutoFill: true }]);
+      return true;
+    }
+
+    if (interviewState?.type === "characterCueTable" && interviewState?.entityId === editingEntityId) {
+      if (!lower) return true;
+      if (!character) {
+        setInterviewState(null);
+        setMessages(prev => [...prev, { id: uid(), role: "assistant", content: "I lost the selected character. Select the character again, then restart the character cue table." }]);
+        return true;
+      }
+      if (isStopCharacterInterviewCommand(lower)) {
+        setInterviewState(null);
+        setMessages(prev => [...prev, { id: uid(), role: "assistant", content: `Stopped the character cue table for **${character.name || "this character"}**. You can restart it whenever you want.` }]);
+        return true;
+      }
+      const includeOptional = !!interviewState.includeOptional || wantsOptionalCharacterInterview(lower);
+      const stateFields = (interviewState.fields || []).map(normalizeCharacterInterviewField).filter(Boolean);
+      let fields = stateFields
+        .map(key => _characterInterviewMeta(key))
+        .filter(f => isCharacterInterviewFieldMissing(character, f.key));
+      if (!fields.length) fields = getCharacterCueTableFields(character, { includeOptional });
+      if (!fields.length) {
+        setInterviewState(null);
+        setMessages(prev => [...prev, { id: uid(), role: "assistant", content: makeCharacterInterviewCompleteMessage(character, getCharacterInterviewStatus(character, { includeOptional })) }]);
+        return true;
+      }
+      const cues = parseCharacterCueTableReply(msgText, fields);
+      if (!Object.keys(cues).length) {
+        const refreshedFields = getCharacterCueTableFields(character, { includeOptional });
+        setInterviewState({ type: "characterCueTable", entityId: editingEntityId, fields: refreshedFields.map(f => f.key), includeOptional });
+        setMessages(prev => [...prev, { id: uid(), role: "assistant", content: `I didn’t catch any filled cues. Paste short cues beside the fields you want me to expand, or say **stop**.\n\n${makeCharacterCueTableMessage(character, refreshedFields, { includeOptional })}` }]);
+        return true;
+      }
+      const rejectedDrafts = characterFieldFeedback.filter(f => f.entityId === editingEntityId && Object.prototype.hasOwnProperty.call(cues, f.field));
+      const draft = await runMultiFieldCharacterExpansion({ character, cues, signal, rejectedDrafts });
+      setInterviewState(null);
+      setMessages(prev => [...prev, { id: uid(), role: "assistant", ...draft }]);
+      return true;
+    }
+
+    if (interviewState?.type === "characterFieldCue" && interviewState?.entityId === editingEntityId) {
+      // Legacy safety: older in-session state may still point at the removed one-field interview flow.
+      // Convert it into the current cue-table flow so the assistant never resumes the stale treadmill.
+      if (!character) {
+        setInterviewState(null);
+        setMessages(prev => [...prev, { id: uid(), role: "assistant", content: "I lost the selected character. Select the character again, then restart the missing-field cue table." }]);
+        return true;
+      }
+      const includeOptional = wantsOptionalCharacterInterview(lower);
+      const fields = getCharacterCueTableFields(character, { includeOptional });
+      setInterviewState(fields.length ? { type: "characterCueTable", entityId: editingEntityId, fields: fields.map(f => f.key), includeOptional } : null);
+      setMessages(prev => [...prev, {
+        id: uid(),
+        role: "assistant",
+        content: fields.length
+          ? `I’ve moved this out of the old one-question-at-a-time interview. Fill any rows you want, and I’ll expand only those rows.
+
+${makeCharacterCueTableMessage(character, fields, { includeOptional })}`
+          : makeCharacterInterviewCompleteMessage(character, getCharacterInterviewStatus(character, { includeOptional })),
+      }]);
+      return true;
+    }
+
+    if (!isCharacterInterviewRequest(lower)) return false;
+
+    if (!character) {
+      const hasAnyCharacter = (project?.characters || []).length > 0;
+      setInterviewState(hasAnyCharacter ? null : { type: "newCharacterSeed" });
+      setMessages(prev => [...prev, {
+        id: uid(),
+        role: "assistant",
+        content: hasAnyCharacter
+          ? "Select the character you want to build first, then I’ll show a compact missing-field cue table."
+          : "Let’s create the first character from a seed first. Give me a name, role, or one-line premise, and I’ll draft only the fields directly implied by it.",
+      }]);
+      return true;
+    }
+
+    const missing = getCharacterInterviewMissingFields(character);
+    if (!missing.length) {
+      setInterviewState(null);
+      setMessages(prev => [...prev, { id: uid(), role: "assistant", content: `**${character.name || "This character"}** has no blank story-interview fields. Tell me which field you want to refine.` }]);
+      return true;
+    }
+
+    const includeOptional = wantsOptionalCharacterInterview(lower);
+    const fields = getCharacterCueTableFields(character, { includeOptional });
+    if (!fields.length) {
+      setInterviewState(null);
+      setMessages(prev => [...prev, { id: uid(), role: "assistant", content: makeCharacterInterviewCompleteMessage(character, getCharacterInterviewStatus(character, { includeOptional })) }]);
+      return true;
+    }
+    setInterviewState({ type: "characterCueTable", entityId: editingEntityId, fields: fields.map(f => f.key), includeOptional });
+    setMessages(prev => [...prev, {
+      id: uid(),
+      role: "assistant",
+      content: makeCharacterCueTableMessage(character, fields, { includeOptional }),
+    }]);
+    return true;
+  }, [tabName, editingEntityId, getEditingCharacter, interviewState, project?.characters, characterFieldFeedback, runSingleFieldCharacterExpansion, runMultiFieldCharacterExpansion, runNewCharacterSeedDraft, setMessages]);
+
   const handleSend = useCallback(async (customMsg) => {
     const msgText = customMsg || input.trim();
     if (!msgText || isGenerating) return;
@@ -14025,71 +14471,20 @@ const TabAIChat = memo(({ project, settings, appConfig, appConfigLiveLoader = nu
     if (!customMsg) setInput("");
     setAgentEvents([]);
     setAgentLogOpen(true);
+    setIsGenerating(true);
 
-    // Character tab interviewer: do not one-shot fabricate sparse characters.
-    if (tabName === "characters") {
-      const activeChar = editingEntityId ? (project?.characters || []).find(c => c.id === editingEntityId) : null;
+    const controller = new AbortController();
+    abortRef.current = controller;
 
-      // Follow-up answer to an interview question: expand only the requested slot.
-      if (interviewState) {
-        if (!settings?.apiKey) {
-          setMessages(prev => [...prev, { id: uid(), role: "assistant", content: "Add an API key first, then I can expand that cue.", isError: true }]);
-          return;
-        }
-        setIsGenerating(true);
-        try {
-          let messagesForSlot;
-          if (interviewState.type === "new-character") {
-            messagesForSlot = [
-              { role: "system", content: "You are a character interviewer. Expand the author's seed into a small starter character only. Return strict JSON with {type:'characters', data:{name, role, personality, backstory}}. Do not fill every possible field. Leave room for later interview questions." },
-              { role: "user", content: `Author seed: ${msgText}\nProject genre: ${project?.genre || "fiction"}` },
-            ];
-          } else {
-            const target = (project?.characters || []).find(c => c.id === interviewState.charId) || activeChar;
-            const field = interviewState.field || nextCharacterInterviewField(target) || "backstory";
-            messagesForSlot = [
-              { role: "system", content: "You are a character field expander. Expand exactly one requested field from the author's cue. Return strict JSON with {type:'characters', data:{FIELD:'expanded text'}}. Do not include unrelated fields. Do not overwrite human-anchor fields." },
-              { role: "user", content: `Character: ${target?.name || "Unnamed"}\nExisting data:\n${JSON.stringify(target || {}, null, 2)}\n\nField to expand: ${field}\nAuthor cue: ${msgText}` },
-            ];
-          }
-          const content = await runOpenRouterChat({
-            settings,
-            model: settings.tabModels?.characters || settings.model,
-            messages: messagesForSlot,
-            maxTokens: 6000,
-            temperature: 0.75,
-            json: true,
-          });
-          setMessages(prev => [...prev, { id: uid(), role: "assistant", content: `Proposed update from your cue:\n\n\`\`\`json\n${content}\n\`\`\`\n\nReview it, then use Auto-fill to apply selected fields.`, hasAutoFill: true }]);
-          setInterviewState(null);
-        } catch (err) {
-          setMessages(prev => [...prev, { id: uid(), role: "assistant", content: `Error: ${err?.message || "Could not expand cue"}`, isError: true }]);
-        }
+    try {
+      const handledByInterview = await maybeStartOrContinueCharacterInterview({ msgText, signal: controller.signal });
+      if (handledByInterview) {
+        abortRef.current = null;
+        setAgentEvents([]);
+        setAgentLogOpen(false);
         if (mountedRef.current) setIsGenerating(false);
         return;
       }
-
-      const lower = msgText.toLowerCase();
-      if (!interviewState && /\b(generate|create|fill|complete|blank|empty|autofill)\b/.test(lower)) {
-        if (!activeChar && !(project?.characters || []).length) {
-          setMessages(prev => [...prev, { id: uid(), role: "assistant", content: "Give me a short seed for the first character: role, vibe, wound, desire, or a one-line concept.", asksForInput: true }]);
-          setInterviewState({ type: "new-character", field: "seed" });
-          return;
-        }
-        if (activeChar && isSparseCharacter(activeChar)) {
-          const field = nextCharacterInterviewField(activeChar) || "backstory";
-          setMessages(prev => [...prev, { id: uid(), role: "assistant", content: `What should be the cue for ${activeChar.name || "this character"}'s ${FIELD_LABELS[field] || field}? A short answer is enough.`, asksForInput: true }]);
-          setInterviewState({ type: "character-field", charId: activeChar.id, field });
-          return;
-        }
-      }
-    }
-
-    setIsGenerating(true);
-
-    try {
-      const controller = new AbortController();
-      abortRef.current = controller;
       const liveAppConfig = appConfigLiveLoader
         ? await appConfigLiveLoader(PROMPT_TEMPLATE_TABLE_KEYS_WITH_LEGACY, `tab chat:${tabName}`)
         : appConfig;
@@ -14105,7 +14500,7 @@ const TabAIChat = memo(({ project, settings, appConfig, appConfigLiveLoader = nu
             taskHint: `Tab: ${tabName}. EditingEntity: ${editingEntityId || "none"}.`,
             settings,
             appConfig: liveAppConfig,
-            signal: abortRef.current?.signal,
+            signal: controller.signal,
             onProgress: (event) => setAgentEvents(prev => [...prev.slice(-18), { id: uid(), at: new Date().toISOString(), ...event }]),
           });
           contextInfo = agentResult.assembledContext;
@@ -14117,6 +14512,26 @@ const TabAIChat = memo(({ project, settings, appConfig, appConfigLiveLoader = nu
         }
       } else {
         contextInfo = ContextEngine.buildTabContext(project, chapterIdx, tabName, editingEntityId);
+      }
+
+      if (tabName === "characters") {
+        const activeCharacter = getEditingCharacter();
+        if (activeCharacter) {
+          const characterContextCard = makeCharacterContextCard(activeCharacter, { limit: 30 });
+          const designBlock = makeCharacterDesignSignalBlock(activeCharacter);
+          const rejectedFeedback = characterFieldFeedback
+            .filter(f => f.entityId === editingEntityId)
+            .slice(0, 12)
+            .map(f => `- ${f.label || f.field}: rejected draft to avoid → ${String(f.value || "").slice(0, 500)}`)
+            .join("\n");
+          contextInfo = `${contextInfo || ""}
+
+ACTIVE CHARACTER FIELD CONTEXT — filled fields are facts, blank fields are targets only when requested:
+${characterContextCard}${designBlock}${rejectedFeedback ? `
+
+RECENT REJECTED FIELD DRAFTS — treat these as negative context and do not repeat them:
+${rejectedFeedback}` : ""}`.trim();
+        }
       }
 
       // G6: Increase history to 10, keep first message for context continuity
@@ -14139,6 +14554,7 @@ Rules:
 - Return app fields as flat keys directly inside data. Never group fields under headings.
 - Respect canon, current chapter position, existing fields, constrained values, and the active tab schema.
 - Fill only fields requested or marked empty; do not overwrite existing content unless the user asks.
+- In Characters chat, never ask the user for gender, pronouns, age, orientation, height, build, role, or status as AI interview fields. Those are manual form controls.
 - Do not output deprecated reveal/chapter fields.`;
       const allMessages = [
         { role: "system", content: tabPromptTpl?.system ? renderConfigTemplate(tabPromptTpl.system, tabPromptVars) : tabSystemFallback },
@@ -14146,22 +14562,81 @@ Rules:
         { role: "user", content: tabPromptTpl?.user ? renderConfigTemplate(tabPromptTpl.user, tabPromptVars) : msgText },
       ];
 
-      // G9/G12: Per-tab defaults, overridden by live prompt-template values when present.
+      // G9: Per-tab temperature — character gen more creative, world more consistent
       const tabTemperatures = { characters: 0.85, world: 0.7, plot: 0.8, relationships: 0.8 };
+      // G12: Higher max_tokens for character generation
       const tabMaxTokens = { characters: 12000, world: 12000, plot: 12000, relationships: 12000 };
 
-      const content = await runOpenRouterChat({
-        settings,
-        model: settings.tabModels?.[tabName] || settings.model,
-        messages: allMessages,
-        maxTokens: Number(tabPromptTpl?.maxTokens || tabMaxTokens[tabName] || 12000),
-        temperature: Number(tabPromptTpl?.temperature ?? tabTemperatures[tabName] ?? 0.8),
+      const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${settings.apiKey}`, "HTTP-Referer": window.location.origin, "X-Title": "NovelForge" },
+        body: JSON.stringify({ model: settings.tabModels?.[tabName] || settings.model, messages: allMessages, max_tokens: tabMaxTokens[tabName] || 12000, temperature: tabTemperatures[tabName] || 0.8 }),
         signal: controller.signal,
-        retries: 1,
       });
+      if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error?.message || `API error ${res.status}`); }
+      const data = await res.json();
+      const content = stripThinkingTokens(data.choices?.[0]?.message?.content || "");
       
-      // Detect valid structured data with the shared loose JSON parser.
-      const hasAutoFill = !!parseLooseJson(content);
+      // Detect any valid JSON in the response — multiple patterns
+      let hasAutoFill = false;
+      try {
+        // Pattern 1: ```json ... ```
+        const jsonBlocks = [...content.matchAll(/```json\s*([\s\S]*?)```/g)];
+        for (const match of jsonBlocks) {
+          try {
+            const p = JSON.parse(match[1]);
+            if (typeof p === "object" && p !== null) { hasAutoFill = true; break; }
+          } catch {
+            // Try repair for truncated JSON
+            const repaired = tryRepairJson(match[1]);
+            if (repaired && typeof repaired === "object") { hasAutoFill = true; break; }
+          }
+        }
+        // Pattern 2: ``` ... ``` without language tag
+        if (!hasAutoFill) {
+          const codeBlocks = [...content.matchAll(/```([\s\S]*?)```/g)];
+          for (const match of codeBlocks) {
+            const trimmed = match[1].trim();
+            if ((trimmed.startsWith("{") || trimmed.startsWith("[")) && trimmed.length > 10) {
+              try {
+                const p = JSON.parse(trimmed);
+                if (typeof p === "object" && p !== null) { hasAutoFill = true; break; }
+              } catch {
+                const repaired = tryRepairJson(trimmed);
+                if (repaired && typeof repaired === "object") { hasAutoFill = true; break; }
+              }
+            }
+          }
+        }
+        // Pattern 3: Standalone JSON object anywhere in response
+        if (!hasAutoFill) {
+          const firstBrace = content.indexOf("{");
+          if (firstBrace !== -1) {
+            let depth = 0, endIdx = -1;
+            for (let i = firstBrace; i < content.length; i++) {
+              if (content[i] === "{") depth++;
+              if (content[i] === "}") depth--;
+              if (depth === 0) { endIdx = i + 1; break; }
+            }
+            if (endIdx > firstBrace) {
+              try {
+                const candidate = content.slice(firstBrace, endIdx);
+                const p = JSON.parse(candidate);
+                if (p && typeof p === "object" && (p.type || p.data || Array.isArray(p))) {
+                  hasAutoFill = true;
+                }
+              } catch { /* silent */ }
+            } else {
+              // Truncated — try to repair from firstBrace to end
+              const candidate = content.slice(firstBrace);
+              const repaired = tryRepairJson(candidate);
+              if (repaired && typeof repaired === "object") {
+                hasAutoFill = true;
+              }
+            }
+          }
+        }
+      } catch { /* silent */ }
       
       // Always update parent messages (survives unmount), only update local state if mounted
       setMessages(prev => [...prev, { id: uid(), role: "assistant", content, hasAutoFill }]);
@@ -14172,32 +14647,66 @@ Rules:
     }
     abortRef.current = null;
     if (mountedRef.current) setIsGenerating(false);
-  }, [input, isGenerating, messages, project, settings, appConfig, appConfigLiveLoader, tabContext, tabName, setMessages, chapterIdx, editingEntityId, interviewState]);
+  }, [input, isGenerating, messages, project, settings, appConfig, appConfigLiveLoader, tabContext, tabName, setMessages, chapterIdx, editingEntityId, getEditingCharacter, characterFieldFeedback, maybeStartOrContinueCharacterInterview]);
 
   const handleAutoFill = useCallback((content) => {
     try {
-      if (!onAutoFill) return;
-      const parsedRoot = parseLooseJson(content);
-      if (!parsedRoot) return;
+      // Extract ALL JSON from the response — multiple patterns
+      const jsonBlocks = [...content.matchAll(/```json\s*([\s\S]*?)```/g)];
+      // Fallback: plain ``` blocks containing JSON
+      if (!jsonBlocks.length) {
+        const plainBlocks = [...content.matchAll(/```([\s\S]*?)```/g)];
+        for (const m of plainBlocks) {
+          const t = m[1].trim();
+          if (t.startsWith("{") || t.startsWith("[")) jsonBlocks.push(m);
+        }
+      }
+      // Fallback: standalone JSON object
+      if (!jsonBlocks.length) {
+        const firstBrace = content.indexOf("{");
+        if (firstBrace !== -1) {
+          let depth = 0, endIdx = -1;
+          for (let i = firstBrace; i < content.length; i++) {
+            if (content[i] === "{") depth++;
+            if (content[i] === "}") depth--;
+            if (depth === 0) { endIdx = i + 1; break; }
+          }
+          if (endIdx > firstBrace) {
+            const candidate = content.slice(firstBrace, endIdx);
+            try {
+              const testParse = JSON.parse(candidate);
+              if (testParse && typeof testParse === "object") {
+                jsonBlocks.push([null, candidate]);
+              }
+            } catch { /* silent */ }
+          }
+        }
+      }
+      if (!jsonBlocks.length || !onAutoFill) return;
+
+      // Collect all items into a flat array
+      const allItems = [];
 
       // Character/world/plot/relationship fields that should be flat strings/values at the top of a data item.
+      // Used to detect AI "category grouping" and "name-keyed wrapping" patterns so we can flatten them.
       const FLAT_FIELD_HINTS = new Set([
+        // Character
         "name","role","gender","age","pronouns","orientation","aliases","occupation","height","build","tags",
         "appearance","personality","backstory","desires","shortTermGoals","longTermGoals","speechPattern",
         "voiceSamples","habits","fears","flaws","strengths","skills","internalConflict","externalConflict",
         "signatureItems","secrets","hiddenSecrets","allegiances","kinks","arc","canonNotes","status",
         "isBulk","bulkCount","bulkDescription","image","lookAlike",
+        // World
         "category","description","keywords","atmosphere","sensoryDetails","orgPurpose","orgHierarchy","orgMembers",
+        // Plot
         "chapter","title","summary","beats","sceneType","pov",
+        // Relationship
         "char1","char2","dynamic","tension","tensionType","chemistry","conflictSource",
       ]);
 
-      const typeToTab = { characters: "characters", character: "characters", world: "world", world_building: "world", plot: "plot", plot_outline: "plot", relationship: "relationships", relationships: "relationships", relationship_updates: "relationships" };
-      if (parsedRoot?.type && typeToTab[String(parsedRoot.type).toLowerCase()] && typeToTab[String(parsedRoot.type).toLowerCase()] !== tabName) {
-        console.warn(`[NovelForge] JSON type "${parsedRoot.type}" doesn't match tab "${tabName}" — skipping to prevent data corruption`);
-        return;
-      }
-
+      // Detect if an object is a "category group" wrapper (e.g. {IDENTITY: {...}, PROFILE: {...}})
+      // rather than a flat field object. Heuristic: ALL top-level keys are ALL-CAPS OR snake-case capitalized
+      // AND all their values are themselves objects containing known flat fields.
       const isCategoryGrouped = (obj) => {
         if (!obj || typeof obj !== "object" || Array.isArray(obj)) return false;
         const keys = Object.keys(obj);
@@ -14207,17 +14716,31 @@ Rules:
           const v = obj[k];
           if (v && typeof v === "object" && !Array.isArray(v)) {
             const subKeys = Object.keys(v);
-            if (subKeys.some(sk => FLAT_FIELD_HINTS.has(sk))) groupedCount++;
+            const hasKnownField = subKeys.some(sk => FLAT_FIELD_HINTS.has(sk));
+            if (hasKnownField) groupedCount++;
           }
         }
+        // If 2+ top-level keys each contain known flat fields as sub-keys → it's grouped
         return groupedCount >= 2;
       };
 
-      const flattenGroups = (obj) => Object.values(obj || {}).reduce((flat, groupVal) => {
-        if (groupVal && typeof groupVal === "object" && !Array.isArray(groupVal)) Object.assign(flat, groupVal);
+      // Flatten a category-grouped object: {IDENTITY: {name, role}, PROFILE: {appearance}} → {name, role, appearance}
+      const flattenGroups = (obj) => {
+        const flat = {};
+        for (const [, groupVal] of Object.entries(obj)) {
+          if (groupVal && typeof groupVal === "object" && !Array.isArray(groupVal)) {
+            for (const [subK, subV] of Object.entries(groupVal)) {
+              // Only lift keys that look like real fields (avoid lifting nested structures like orgHierarchy accidentally)
+              flat[subK] = subV;
+            }
+          }
+        }
         return flat;
-      }, {});
+      };
 
+      // Detect "name-keyed wrapping": {data: {"Harrison Killian": {IDENTITY: {...}}}}
+      // Check if data is a single-key object where the key is NOT a known flat field,
+      // and the value is another object containing known field patterns.
       const unwrapNameKey = (obj) => {
         if (!obj || typeof obj !== "object" || Array.isArray(obj)) return obj;
         const keys = Object.keys(obj);
@@ -14225,14 +14748,18 @@ Rules:
         const onlyKey = keys[0];
         const val = obj[onlyKey];
         if (!val || typeof val !== "object" || Array.isArray(val)) return obj;
+        // If the only key is not a flat field, but the inner object HAS flat fields or groups,
+        // assume this is name-wrapping and unwrap.
         if (!FLAT_FIELD_HINTS.has(onlyKey)) {
           const innerKeys = Object.keys(val);
           const innerHasFlat = innerKeys.some(k => FLAT_FIELD_HINTS.has(k));
-          if (innerHasFlat || isCategoryGrouped(val)) return val;
+          const innerIsGrouped = isCategoryGrouped(val);
+          if (innerHasFlat || innerIsGrouped) return val;
         }
         return obj;
       };
 
+      // Normalize: first unwrap name-keys, then flatten category groups if detected
       const normalizeItem = (raw) => {
         if (!raw || typeof raw !== "object" || Array.isArray(raw)) return raw;
         let item = unwrapNameKey(raw);
@@ -14240,39 +14767,137 @@ Rules:
         return item;
       };
 
-      const root = unwrapAiData(parsedRoot);
-      const allItems = [];
-      const pushItem = (item) => { if (item && typeof item === "object" && !Array.isArray(item)) allItems.push(normalizeItem(item)); };
-
-      if (Array.isArray(root)) {
-        root.forEach(pushItem);
-      } else if (root && typeof root === "object") {
-        const keys = Object.keys(root);
-        const looksLikeMultipleNameKeys = keys.length > 1 && keys.every(k => !FLAT_FIELD_HINTS.has(k) && root[k] && typeof root[k] === "object" && !Array.isArray(root[k]));
-        if (looksLikeMultipleNameKeys) keys.forEach(k => pushItem(root[k]));
-        else pushItem(root);
+      for (const match of jsonBlocks) {
+        try {
+          const p = JSON.parse(match[1]);
+          // FIX 3.1: Validate JSON type matches current tab — prevent cross-tab corruption
+          if (p.type && typeof p.type === "string") {
+            const typeToTab = { characters: "characters", character: "characters", world: "world", world_building: "world", plot: "plot", plot_outline: "plot", relationship: "relationships", relationships: "relationships" };
+            const expectedTab = typeToTab[p.type.toLowerCase()];
+            if (expectedTab && expectedTab !== tabName) {
+              console.warn(`[NovelForge] JSON type "${p.type}" doesn't match tab "${tabName}" — skipping to prevent data corruption`);
+              continue;
+            }
+          }
+          if (p.data && typeof p.data === "object") {
+            if (Array.isArray(p.data)) {
+              p.data.forEach(item => { if (item && typeof item === "object") allItems.push(normalizeItem(item)); });
+            } else {
+              // data may be: flat {name, role, ...}, OR name-keyed {"Harrison": {...}}, OR multiple name-keys
+              const dataKeys = Object.keys(p.data);
+              const looksLikeMultipleNameKeys = dataKeys.length > 1 && dataKeys.every(k => !FLAT_FIELD_HINTS.has(k) && p.data[k] && typeof p.data[k] === "object");
+              if (looksLikeMultipleNameKeys) {
+                // Multiple characters keyed by name
+                dataKeys.forEach(k => allItems.push(normalizeItem(p.data[k])));
+              } else {
+                allItems.push(normalizeItem(p.data));
+              }
+            }
+          } else if (Array.isArray(p)) {
+            p.forEach(item => { if (item && typeof item === "object") allItems.push(normalizeItem(item)); });
+          } else if (typeof p === "object" && p !== null) {
+            allItems.push(normalizeItem(p));
+          }
+        } catch { /* silent */ } // skip malformed individual blocks
       }
 
-      if (allItems.length === 1) onAutoFill(allItems[0]);
-      else if (allItems.length > 1) onAutoFill(allItems);
-    } catch (err) {
-      console.warn("[NovelForge] Auto-fill parse failed:", err);
-    }
+      // Pass as single item if 1, or as array if multiple — handlers check for both
+      if (allItems.length === 1) {
+        onAutoFill(allItems[0]);
+      } else if (allItems.length > 1) {
+        onAutoFill(allItems);
+      }
+    } catch { /* silent */ }
   }, [onAutoFill, tabName]);
+
+  const updateCharacterFieldCard = useCallback((messageId, cardId, updater) => {
+    setMessages(prev => prev.map(msg => {
+      if (msg.id !== messageId || !Array.isArray(msg.characterFieldCards)) return msg;
+      return {
+        ...msg,
+        characterFieldCards: msg.characterFieldCards.map(card => {
+          if (card.id !== cardId) return card;
+          const patch = typeof updater === "function" ? updater(card) : updater;
+          return { ...card, ...patch };
+        }),
+      };
+    }));
+  }, [setMessages]);
+
+  const addRejectedCharacterFieldFeedback = useCallback((card, reason = "rejected") => {
+    const field = normalizeCharacterInterviewField(card?.field);
+    const value = String(card?.value || "").trim();
+    if (!editingEntityId || !field || !value) return;
+    setCharacterFieldFeedback(prev => [
+      { id: uid(), entityId: editingEntityId, field, label: card?.label || field, value, reason, cue: card?.cue || "", at: new Date().toISOString() },
+      ...prev,
+    ].slice(0, 40));
+  }, [editingEntityId]);
+
+  const handleAppendCharacterFieldCard = useCallback((messageId, card) => {
+    if (!card || card.status === "appended" || card.status === "thinking") return;
+    const field = normalizeCharacterInterviewField(card.field);
+    if (!field || !onAutoFill) return;
+    onAutoFill({ [field]: card.value });
+    updateCharacterFieldCard(messageId, card.id, { status: "appended", appendedAt: new Date().toISOString() });
+  }, [onAutoFill, updateCharacterFieldCard]);
+
+  const handleRejectCharacterFieldCard = useCallback((messageId, card) => {
+    if (!card || card.status === "rejected") return;
+    addRejectedCharacterFieldFeedback(card, "rejected");
+    updateCharacterFieldCard(messageId, card.id, { status: "rejected", rejectedAt: new Date().toISOString() });
+  }, [addRejectedCharacterFieldFeedback, updateCharacterFieldCard]);
+
+  const handleRethinkCharacterFieldCard = useCallback(async (messageId, card) => {
+    if (!card || isGenerating || !settings?.apiKey) return;
+    const character = getEditingCharacter();
+    const field = normalizeCharacterInterviewField(card.field);
+    if (!character || !field) return;
+    const rejectedDrafts = [
+      ...characterFieldFeedback.filter(f => f.entityId === editingEntityId && f.field === field).map(f => f.value),
+      String(card.value || "").trim(),
+    ].filter(Boolean);
+    addRejectedCharacterFieldFeedback(card, "rethink");
+    updateCharacterFieldCard(messageId, card.id, { status: "thinking" });
+    const controller = new AbortController();
+    abortRef.current = controller;
+    setIsGenerating(true);
+    try {
+      const cue = card.cue || `Create a better alternative for ${card.label || field}.`;
+      const draft = await runSingleFieldCharacterExpansion({ character, field, cue, signal: controller.signal, rejectedDrafts });
+      const nextCard = draft?.characterFieldCards?.[0];
+      if (!nextCard) throw new Error("The model did not return a usable field draft.");
+      updateCharacterFieldCard(messageId, card.id, oldCard => ({
+        ...nextCard,
+        id: oldCard.id,
+        status: "pending",
+        version: (oldCard.version || 1) + 1,
+        rejectedDrafts,
+      }));
+    } catch (err) {
+      if (err?.name !== "AbortError") {
+        updateCharacterFieldCard(messageId, card.id, { status: "pending", error: err?.message || "Rethink failed" });
+      }
+    } finally {
+      abortRef.current = null;
+      if (mountedRef.current) setIsGenerating(false);
+    }
+  }, [isGenerating, settings?.apiKey, getEditingCharacter, characterFieldFeedback, editingEntityId, addRejectedCharacterFieldFeedback, updateCharacterFieldCard, runSingleFieldCharacterExpansion]);
+
 
   const quickActions = useMemo(() => {
     switch (tabName) {
       case "characters": {
         const actions = [
-          { label: "✦ Start character interview", msg: `Start a field-by-field interview for a new character. Ask me for one short seed first; do not generate a full character yet. The goal is to fill fields one at a time with author cues.` },
+          { label: "✦ Fill missing story fields", msg: `Show me a compact missing-field cue table for the selected character. Use filled fields as context. Do not ask one question at a time. Do not ask about gender, pronouns, age, orientation, height, build, role, or status. After I fill rows, expand only those rows into separate review cards with Append / Reject / Rethink.` },
         ];
         // D18: Contextual fill — reference which fields are actually empty
         if (editingEntityId && project?.characters) {
           const char = project.characters.find(c => c.id === editingEntityId);
           if (char) {
-            const emptyFields = [...CHARACTER_TEXT_FIELDS].filter(k => !char[k]);
+            const emptyFields = getCharacterInterviewMissingFields(char);
             if (emptyFields.length > 0) {
-              actions.push({ label: `Interview ${emptyFields.length} empty fields`, msg: `Start a field-by-field interview for "${char.name || "this character"}". Ask me for one short cue for the next missing field first. Do not fill every field at once.` });
+              actions.push({ label: `Cue-table ${emptyFields.length} missing fields`, msg: `Show me a compact missing-field cue table for "${char.name || "this character"}". Use filled fields as context. Do not ask one question at a time. Do not ask about gender, pronouns, age, orientation, height, build, role, or status. After I fill rows, expand only those rows into separate review cards with Append / Reject / Rethink.` });
             }
             // Psychology quick action
             const psychFields = ["fears","flaws","strengths","internalConflict","externalConflict"].filter(k => !char[k]);
@@ -14371,7 +14996,7 @@ Tab context:
 Project/tab data:
 {{contextInfo}}
 
-Answer or return structured JSON when useful.`,
+Answer or return structured field suggestions when useful.`,
                     maxTokens: 12000,
                     temperature: 0.8,
                     json: "FALSE",
@@ -14443,6 +15068,34 @@ Answer or return structured JSON when useful.`,
               color: "var(--nf-text)", fontSize: 12, lineHeight: 1.7, wordBreak: "break-word",
             }}
             dangerouslySetInnerHTML={{ __html: msg.role === "assistant" ? renderMarkdownCached(msg.content) : msg.content.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/\n/g,"<br/>") }} />
+            {msg.role === "assistant" && Array.isArray(msg.characterFieldCards) && msg.characterFieldCards.length > 0 && (
+              <div style={{ marginTop: 10, display: "grid", gap: 8 }}>
+                {msg.characterFieldCards.map(card => (
+                  <div key={card.id} style={{ border: "1px solid var(--nf-border)", borderRadius: 8, background: "var(--nf-bg-surface)", overflow: "hidden" }}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "7px 9px", borderBottom: "1px solid var(--nf-border)", background: "var(--nf-bg-deep)" }}>
+                      <div style={{ fontSize: 11, fontWeight: 700, color: "var(--nf-text)", textTransform: "uppercase", letterSpacing: "0.06em" }}>{card.label || card.field}</div>
+                      <div style={{ fontSize: 10, color: card.status === "appended" ? "var(--nf-success)" : card.status === "rejected" ? "var(--nf-error)" : card.status === "thinking" ? "var(--nf-accent-2)" : "var(--nf-text-muted)" }}>
+                        {card.status === "appended" ? "Appended" : card.status === "rejected" ? "Rejected" : card.status === "thinking" ? "Rethinking…" : card.version > 1 ? `Draft v${card.version}` : "Draft"}
+                      </div>
+                    </div>
+                    {card.cue && <div style={{ padding: "6px 9px 0", fontSize: 10, color: "var(--nf-text-muted)", fontStyle: "italic" }}>Cue: {card.cue}</div>}
+                    <div style={{ padding: 9, fontSize: 12, lineHeight: 1.65, color: "var(--nf-text)", whiteSpace: "pre-wrap" }}>{String(card.value || "")}</div>
+                    {card.error && <div style={{ padding: "0 9px 6px", fontSize: 10, color: "var(--nf-error)" }}>{card.error}</div>}
+                    <div style={{ display: "flex", gap: 6, padding: "0 9px 9px", flexWrap: "wrap" }}>
+                      <button onClick={() => handleAppendCharacterFieldCard(msg.id, card)} disabled={card.status === "appended" || card.status === "rejected" || card.status === "thinking"} className="nf-btn-micro" style={{ borderColor: "var(--nf-accent-2)", color: "var(--nf-accent-2)" }}>
+                        <Icons.Check /> Append
+                      </button>
+                      <button onClick={() => handleRejectCharacterFieldCard(msg.id, card)} disabled={card.status === "appended" || card.status === "rejected" || card.status === "thinking"} className="nf-btn-micro">
+                        <Icons.X /> Reject
+                      </button>
+                      <button onClick={() => handleRethinkCharacterFieldCard(msg.id, card)} disabled={card.status === "thinking" || card.status === "appended"} className="nf-btn-micro">
+                        <Icons.Redo /> Rethink
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
             {msg.role === "assistant" && msg.hasAutoFill && !msg.isError && (
               <button onClick={() => handleAutoFill(msg.content)} className="nf-btn-micro" style={{ marginTop: 4, borderColor: "var(--nf-accent-2)", color: "var(--nf-accent-2)" }}>
                 <Icons.Sparkle /> Apply to fields
@@ -15064,24 +15717,21 @@ function WriteOrWhipPanel({ project, settings, chapterIdx, editorRef, onClose })
       }
       const craftBlock = craftHints.length ? `\n\nCRAFT EXPECTATIONS:\n${craftHints.join("\n")}` : "";
 
-      const raw = (await runOpenRouterChat({
-        settings,
-        model: settings.tabModels?.write || settings.model,
-        messages: [
-          { role: "system", content: "You are Forge-chan, a strict writing coach. Score writing against a beat/scene goal and the chapter's craft expectations. FORMAT exactly: SCORE: X/10, then 2-3 lines of specific feedback. 7+ = pass. Below 7 = rewrite." },
-          { role: "user", content: `BEAT GOAL: "${title || "untitled"}"${desc ? `
-Details: ${desc}` : ""}${craftBlock}
-
-TEXT (last ${Math.min(textToScore.length, 800)} chars):
-"${textToScore.slice(-800)}"
-
-${beatText.length < 15 ? "(Warning: almost no new text for this beat)" : ""}
-Score it.` },
-        ],
-        maxTokens: 12000,
-        temperature: 0.85,
-        signal: ctrl.signal,
-      })).trim();
+      const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+        method: "POST", signal: ctrl.signal,
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${settings.apiKey}`, "HTTP-Referer": window.location.origin, "X-Title": "NovelForge" },
+        body: JSON.stringify({
+          model: "xiaomi/mimo-v2-flash",
+          messages: [
+            { role: "system", content: "You are Forge-chan, a BRUTAL writing coach. Score writing against a beat/scene goal AND the chapter's craft expectations (narrative distance, sensory palette, subtext, tension, motifs).\n\nFORMAT (exactly):\nSCORE: X/10\nThen 2-3 lines of harsh specific feedback. Call out when the writing misses craft targets.\n7+ = pass. Below 7 = fail, demand rewrite." },
+            { role: "user", content: `BEAT GOAL: "${title || "untitled"}"${desc ? `\nDetails: ${desc}` : ""}${craftBlock}\n\nTEXT (last ${Math.min(textToScore.length, 800)} chars):\n"${textToScore.slice(-800)}"\n\n${beatText.length < 15 ? "(Warning: almost no new text for this beat)" : ""}\nScore it.` },
+          ],
+          max_tokens: 12000, temperature: 0.85,
+        }),
+      });
+      if (!res.ok) { const errData = await res.json().catch(() => ({})); throw new Error(errData.error?.message || `API error (${res.status})`); }
+      const data = await res.json();
+      const raw = (stripThinkingTokens(data.choices?.[0]?.message?.content || "")).trim();
       const sm = raw.match(/SCORE:\s*(\d+)/i);
       const ns = sm ? Math.min(10, Math.max(1, parseInt(sm[1], 10))) : 5;
       setBeatScores(prev => ({ ...prev, [currentBeatIdx]: { score: ns, feedback: raw.replace(/SCORE:\s*\d+\/?\d*\s*/i, "").trim() } }));
@@ -15553,28 +16203,33 @@ const ForgeAssistant = memo(({ editorContent, project, settings, chapterIdx }) =
             thesis ? `Theme: "${thesis.slice(0, 80)}"` : "",
             livingState,
           ].filter(Boolean).join(" | ");
-          const content = (await runOpenRouterChat({
-            settings,
-            model: settings.tabModels?.write || settings.model,
-            messages: [
-              { role: "system", content: `You are Forge-chan, a tiny annoying but lovable writing assistant spirit (shaped like a geometric gem creature) living inside a novel-writing app. Snarky, opinionated, sometimes genuinely helpful, always brief. Japandi aesthetic soul.
+          const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "Authorization": `Bearer ${settings.apiKey}`, "HTTP-Referer": window.location.origin, "X-Title": "NovelForge" },
+            body: JSON.stringify({
+              model: "xiaomi/mimo-v2-flash",
+              messages: [
+                { role: "system", content: `You are Forge-chan, a tiny annoying but lovable writing assistant spirit (shaped like a geometric gem creature) living inside a novel-writing app. Snarky, opinionated, sometimes genuinely helpful, always brief. Japandi aesthetic soul.
+
+PERSONALITY: Equal parts annoying and endearing. Comment uninvited. Notice patterns, clichés, missed opportunities, BROKEN CRAFT TARGETS. Give wild creative ideas. Be sassy. Use kaomoji sparingly: (◕‿◕✿) (╥﹏╥) ┐(´∀\`)┌ (✧ω✧)
 
 RULES:
 - ALWAYS 1-2 SHORT sentences. Max 3 lines.
 - Be opinionated. Have taste.
-- Notice craft targets, motifs, POV state, and missed opportunities.
-- Never mean about the WRITER, only about WRITING choices.
-- Genre: ${genre} | POV: ${pov || "unspecified"} | Characters: ${charNames || "none yet"}${contextBits ? `
-- ${contextBits}` : ""}
+- Mix: snarky commentary 30%, craft observations 25% (did they hit narrative distance? sensory palette? subtext?), wild ideas 20%, motif nudges 15%, emotional reactions 10%
+- If a motif could fit naturally RIGHT HERE, mention it.
+- If the POV character's emotional state contradicts what was just written, flag it.
+- Reference the actual text when possible
+- Never mean about the WRITER, only about WRITING choices
+- Genre: ${genre} | POV: ${pov || "unspecified"} | Characters: ${charNames || "none yet"}${contextBits ? `\n- ${contextBits}` : ""}
 - You CANNOT be replied to. Observe and comment.` },
-              { role: "user", content: `Writer just wrote:
-"${newText || ""}"
-
-Brief unsolicited reaction.` },
-            ],
-            maxTokens: 12000,
-            temperature: 1.1,
-          })).trim();
+                { role: "user", content: `Writer just wrote:\n"${newText || ""}"\n\nBrief unsolicited reaction.` },
+              ],
+              max_tokens: 12000, temperature: 1.1,
+            }),
+          });
+          const data = await res.json();
+          const content = (stripThinkingTokens(data.choices?.[0]?.message?.content || "")).trim();
           if (content && mountedRef.current) {
             const glyph = FORGE_CHAN_REACTIONS[Math.floor(Math.random() * FORGE_CHAN_REACTIONS.length)];
             const newMood = FORGE_CHAN_MOODS[Math.floor(Math.random() * FORGE_CHAN_MOODS.length)];
@@ -16706,11 +17361,8 @@ export default function NovelForge() {
   const [flushConfirm, setFlushConfirm] = useState(false);
   const [charSuggestions, setCharSuggestions] = useState(null);
   const [fillReview, setFillReview] = useState(null); // { type: 'character'|'world', entityId, original, proposed, fields }
-  const [canonReview, setCanonReview] = useState(null); // AI-derived post-insert memory/canon updates awaiting author approval
-  const postAcceptReviewAbortRef = useRef(null); // cancels stale post-accept scans when newer accepted prose arrives
   // Relationship auto-draft: snapshot for one-click undo + summary of what changed (shown as a banner).
   const [relDraftUndo, setRelDraftUndo] = useState(null); // { relationships: [...prevSnapshot], summary: string, count: number }
-  const [relDraftReview, setRelDraftReview] = useState(null); // { relationships, snapshot, summary, count, metadata }
   const [relDraftBusy, setRelDraftBusy] = useState(false); // null | relId | 'all'
   const [whiteRoom, setWhiteRoom] = useState(null); // { char1Id, char2Id, tension, result, isGenerating }
   const [showTimeline, setShowTimeline] = useState(false);
@@ -17551,17 +18203,23 @@ Return ONLY a JSON object. Be creative and consistent.`;
         ? renderConfigTemplate(liveTpl.system, promptVars)
         : `You are a fiction writing assistant. Fill empty fields with creative, genre-appropriate content.\n\n${contextInfo || ""}\n\nRULES:\n- Return ONLY valid JSON — no markdown, no backticks, no explanation.\n- Only include fields that are currently empty.\n- Be creative and specific.\n- Make content consistent with existing filled fields.`;
       const userContent = liveTpl?.user ? renderConfigTemplate(liveTpl.user, promptVars) : fallbackPrompt;
-      let content = (await callOpenRouter([
-        { role: "system", content: systemContent },
-        { role: "user", content: userContent },
-      ], {
-        model: settings.tabModels?.[modelKey] || settings.model,
-        maxTokens: Number(liveTpl?.maxTokens || 12000),
-        temperature: Number(liveTpl?.temperature || 0.85),
-        json: true,
-      })).trim();
+      const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${settings.apiKey}`, "HTTP-Referer": window.location.origin, "X-Title": "NovelForge" },
+        body: JSON.stringify({
+          model: settings.tabModels?.[modelKey] || settings.model,
+          messages: [
+            { role: "system", content: systemContent },
+            { role: "user", content: userContent },
+          ],
+          max_tokens: Number(liveTpl?.maxTokens || 12000), temperature: Number(liveTpl?.temperature || 0.85),
+        }),
+      });
+      if (!res.ok) { const errData = await res.json().catch(() => ({})); throw new Error(errData.error?.message || `API error (${res.status})`); }
+      const data = await res.json();
+      let content = stripThinkingTokens(data.choices?.[0]?.message?.content || "").trim();
       content = content.replace(/^```json?\s*/i, "").replace(/\s*```$/i, "").trim();
-      let proposed = parseLooseJson(content);
+      let proposed; try { proposed = JSON.parse(content); } catch { proposed = null; }
       if (proposed && typeof proposed === "object" && !Array.isArray(proposed) && proposed.updates && typeof proposed.updates === "object") proposed = proposed.updates;
       if (typeof proposed !== "object" || proposed === null || Array.isArray(proposed)) throw new Error("Invalid response");
       // Strip deprecated fields from AI response before processing
@@ -17813,17 +18471,23 @@ Recent manuscript context:
 ${chapterContext || "No prose yet."}
 
 Return a JSON object with only these allowed keys: ${allowedFields.join(", ")}.`;
-      let content = (await callOpenRouter([
-        { role: "system", content: systemContent },
-        { role: "user", content: userContent },
-      ], {
-        model: settings.tabModels?.characters || settings.model,
-        maxTokens: Number(liveTpl?.maxTokens || 9000),
-        temperature: Number(liveTpl?.temperature || (focus === "living" ? 0.45 : 0.75)),
-        json: true,
-      })).trim();
+      const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${settings.apiKey}`, "HTTP-Referer": window.location.origin, "X-Title": "NovelForge" },
+        body: JSON.stringify({
+          model: settings.tabModels?.characters || settings.model,
+          messages: [
+            { role: "system", content: systemContent },
+            { role: "user", content: userContent },
+          ],
+          max_tokens: Number(liveTpl?.maxTokens || 9000), temperature: Number(liveTpl?.temperature || (focus === "living" ? 0.45 : 0.75)),
+        }),
+      });
+      if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error?.message || `API error (${res.status})`); }
+      const data = await res.json();
+      let content = stripThinkingTokens(data.choices?.[0]?.message?.content || "").trim();
       content = content.replace(/^```json?\s*/i, "").replace(/\s*```$/i, "").trim();
-      const parsed = parseLooseJson(content);
+      const parsed = tryRepairJson(content) || JSON.parse(content);
       if (!parsed || typeof parsed !== "object") throw new Error("Invalid JSON response");
 
       const updates = {};
@@ -17923,18 +18587,24 @@ Be consistent with the characters' personalities and any context provided. No ma
       ? renderConfigTemplate(liveTpl.system, templateVars)
       : `You are a fiction relationship architect. You write specific, character-grounded relationship dynamics.\n\n${contextInfo || ""}\n\nReturn ONLY valid JSON.`;
     const userContent = liveTpl?.user ? renderConfigTemplate(liveTpl.user, templateVars) : fallbackPrompt;
-    let content = (await callOpenRouter([
-      { role: "system", content: systemContent },
-      { role: "user", content: userContent },
-    ], {
-      model: settings.tabModels?.relationships || settings.model,
-      maxTokens: Number(liveTpl?.maxTokens || 12000),
-      temperature: Number(liveTpl?.temperature || 0.85),
-      json: true,
-    })).trim();
+    const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${settings.apiKey}`, "HTTP-Referer": window.location.origin, "X-Title": "NovelForge" },
+      body: JSON.stringify({
+        model: settings.tabModels?.relationships || settings.model,
+        messages: [
+          { role: "system", content: systemContent },
+          { role: "user", content: userContent },
+        ],
+        max_tokens: Number(liveTpl?.maxTokens || 12000), temperature: Number(liveTpl?.temperature || 0.85),
+      }),
+    });
+    if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error?.message || `API error (${res.status})`); }
+    const data = await res.json();
+    let content = stripThinkingTokens(data.choices?.[0]?.message?.content || "").trim();
     content = content.replace(/^```json?\s*/i, "").replace(/\s*```$/i, "").trim();
     // Parse with repair fallback — recovers from trailing commas / truncation instead of failing outright.
-    let proposed = parseLooseJson(content);
+    let proposed; try { proposed = JSON.parse(content); } catch { proposed = tryRepairJson(content); }
     if (typeof proposed !== "object" || proposed === null) return null;
     const normalize = (val, options) => {
       if (!val || typeof val !== "string") return null;
@@ -17973,9 +18643,9 @@ Be consistent with the characters' personalities and any context provided. No ma
       if (!patch) throw new Error("AI returned nothing usable");
       const snapshot = (project?.relationships || []).map(r => ({ ...r }));
       const changedKeys = Object.keys(patch).filter(k => (rel[k] || "") !== (patch[k] || ""));
-      const nextRelationships = (project?.relationships || []).map(r => r.id === relId ? { ...r, ...patch } : r);
-      setRelDraftReview({ relationships: nextRelationships, snapshot, summary: `${c1.name} ↔ ${c2.name}: ${changedKeys.length} field${changedKeys.length !== 1 ? "s" : ""} proposed`, count: 1 });
-      showToast("Relationship draft ready for review", "info");
+      updateProject({ relationships: (project?.relationships || []).map(r => r.id === relId ? { ...r, ...patch } : r) });
+      setRelDraftUndo({ relationships: snapshot, summary: `${c1.name} ↔ ${c2.name}: ${changedKeys.length} field${changedKeys.length !== 1 ? "s" : ""} rewritten`, count: 1 });
+      showToast("Relationship drafted", "success");
     } catch (e) { showToast(`Draft failed: ${e.message}`, "error"); }
     finally { setRelDraftBusy(null); }
   }, [settings.apiKey, project, _draftOneRelationship, updateProject, showToast]);
@@ -18000,10 +18670,10 @@ Be consistent with the characters' personalities and any context provided. No ma
       } catch { failed++; }
     }
     if (Object.keys(patches).length === 0) { setRelDraftBusy(null); showToast("Drafting failed for all relationships", "error"); return; }
-    const nextRelationships = (project?.relationships || []).map(r => patches[r.id] ? { ...r, ...patches[r.id] } : r);
-    setRelDraftReview({ relationships: nextRelationships, snapshot, summary: `Drafted ${done} relationship${done !== 1 ? "s" : ""}${failed ? ` (${failed} failed)` : ""}`, count: done });
+    updateProject({ relationships: (project?.relationships || []).map(r => patches[r.id] ? { ...r, ...patches[r.id] } : r) });
+    setRelDraftUndo({ relationships: snapshot, summary: `Drafted ${done} relationship${done !== 1 ? "s" : ""}${failed ? ` (${failed} failed)` : ""}`, count: done });
     setRelDraftBusy(null);
-    showToast(`Relationship drafts ready for review`, "info");
+    showToast(`Drafted ${done} relationship${done !== 1 ? "s" : ""}`, "success");
   }, [settings.apiKey, project, _draftOneRelationship, updateProject, showToast]);
 
   const handleSyncRelationshipsFromStory = useCallback(async () => {
@@ -18088,17 +18758,24 @@ STORY PACKET:\n${storyPacket}`;
     setRelDraftBusy("storySync");
     showToast("AI is syncing relationships from the written story…", "info");
     try {
-      let content = (await callOpenRouter([
-        { role: "system", content: liveTpl?.system ? renderConfigTemplate(liveTpl.system, promptVars) : "You are a manuscript-aware relationship continuity agent. Return only strict JSON." },
-        { role: "user", content: promptToSend },
-      ], {
-        model: settings.tabModels?.relationships || settings.model,
-        maxTokens: Number(liveTpl?.maxTokens || 16000),
-        temperature: Number(liveTpl?.temperature || 0.25),
-        json: true,
-      })).trim();
+      const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${settings.apiKey}`, "HTTP-Referer": window.location.origin, "X-Title": "NovelForge" },
+        body: JSON.stringify({
+          model: settings.tabModels?.relationships || settings.model,
+          messages: [
+            { role: "system", content: liveTpl?.system ? renderConfigTemplate(liveTpl.system, promptVars) : "You are a manuscript-aware relationship continuity agent. Return only strict JSON." },
+            { role: "user", content: promptToSend },
+          ],
+          max_tokens: Number(liveTpl?.maxTokens || 16000),
+          temperature: Number(liveTpl?.temperature || 0.25),
+        }),
+      });
+      if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error?.message || `API error (${res.status})`); }
+      const data = await res.json();
+      let content = stripThinkingTokens(data.choices?.[0]?.message?.content || "").trim();
       content = content.replace(/^```json?\s*/i, "").replace(/\s*```$/i, "").trim();
-      let parsed = parseLooseJson(content);
+      let parsed; try { parsed = JSON.parse(content); } catch { parsed = tryRepairJson(content); }
       const items = Array.isArray(parsed?.relationships) ? parsed.relationships : Array.isArray(parsed) ? parsed : [];
       if (!items.length) throw new Error("AI found no relationship updates");
 
@@ -18162,14 +18839,9 @@ STORY PACKET:\n${storyPacket}`;
         }
       }
       if (!updated && !created) throw new Error(`No valid pairs matched (${skipped} skipped)`);
-      setRelDraftReview({
-        relationships: nextRels,
-        snapshot,
-        summary: `Story sync: ${updated} updated, ${created} created${skipped ? `, ${skipped} skipped` : ""}`,
-        count: updated + created,
-        metadata: { relationshipAISync: { lastSyncedAt: new Date().toISOString(), updated, created, skipped } },
-      });
-      showToast(`Relationship sync ready for review`, "info");
+      updateProject({ relationships: nextRels, relationshipAISync: { lastSyncedAt: new Date().toISOString(), updated, created, skipped } });
+      setRelDraftUndo({ relationships: snapshot, summary: `Story sync: ${updated} updated, ${created} created${skipped ? `, ${skipped} skipped` : ""}`, count: updated + created });
+      showToast(`Relationships synced: ${updated} updated, ${created} created`, "success");
     } catch (e) {
       showToast(`Relationship sync failed: ${e.message}`, "error");
     } finally {
@@ -18494,14 +19166,10 @@ STORY PACKET:\n${storyPacket}`;
   // ─── API CALLS ───
   const callOpenRouterStream = useCallback(async (messages, opts = {}) => {
     if (!settings.apiKey) throw new Error("Set your OpenRouter API key in Settings first.");
-    // E4: Abort any existing request before starting new one unless the caller supplied a shared signal.
-    let controller = null;
-    if (!opts.signal) {
-      if (abortRef.current) { try { abortRef.current.abort(); } catch { /* silent */ } }
-      controller = new AbortController();
-      abortRef.current = controller;
-    }
-    const effectiveSignal = opts.signal || controller?.signal || null;
+    // E4: Abort any existing request before starting new one
+    if (abortRef.current) { try { abortRef.current.abort(); } catch { /* silent */ } }
+    const controller = new AbortController();
+    abortRef.current = controller;
     // E8: Wrap in retryable fetch
     const res = await _retryableFetch(async () => {
       const r = await fetch("https://openrouter.ai/api/v1/chat/completions", {
@@ -18509,14 +19177,14 @@ STORY PACKET:\n${storyPacket}`;
         headers: { "Content-Type": "application/json", "Authorization": `Bearer ${settings.apiKey}`, "HTTP-Referer": window.location.origin, "X-Title": "NovelForge" },
         body: JSON.stringify({
           model: opts.model || settings.model, messages,
-          max_tokens: Number(opts.maxTokens || settings.maxTokens || 12000),
+          max_tokens: opts.maxTokens || settings.maxTokens,
           temperature: opts.temperature ?? settings.temperature,
           top_p: 0.95,
           frequency_penalty: opts.frequencyPenalty ?? settings.frequencyPenalty,
           presence_penalty: opts.presencePenalty ?? settings.presencePenalty,
           stream: true,
         }),
-        signal: effectiveSignal,
+        signal: controller.signal,
       });
       if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.error?.message || `API error ${r.status}`); }
       return r;
@@ -18524,20 +19192,32 @@ STORY PACKET:\n${storyPacket}`;
     return res;
   }, [settings]);
 
-  // E9: Non-streaming call through the shared AI executor.
+  // E9: Non-streaming call with its own abort controller
   const callOpenRouter = useCallback(async (messages, opts = {}) => {
-    return runOpenRouterChat({
-      settings,
-      model: opts.model || settings.model,
-      messages,
-      maxTokens: opts.maxTokens || settings.maxTokens,
-      temperature: opts.temperature ?? settings.temperature,
-      frequencyPenalty: opts.frequencyPenalty ?? settings.frequencyPenalty,
-      presencePenalty: opts.presencePenalty ?? settings.presencePenalty,
-      json: !!opts.json,
-      signal: opts.signal,
-      retries: opts.retries ?? 1,
+    if (!settings.apiKey) throw new Error("Set your OpenRouter API key in Settings first.");
+    const controller = new AbortController();
+    // Store in a local ref so callers can abort if needed
+    const abortableResult = { controller };
+    // E8: Wrap in retryable fetch
+    const data = await _retryableFetch(async () => {
+      const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${settings.apiKey}`, "HTTP-Referer": window.location.origin, "X-Title": "NovelForge" },
+        body: JSON.stringify({
+          model: opts.model || settings.model, messages,
+          max_tokens: opts.maxTokens || settings.maxTokens,
+          temperature: opts.temperature ?? settings.temperature,
+          top_p: 0.95,
+          frequency_penalty: opts.frequencyPenalty ?? settings.frequencyPenalty,
+          presence_penalty: opts.presencePenalty ?? settings.presencePenalty,
+        }),
+        signal: controller.signal,
+      });
+      if (!res.ok) { const errData = await res.json().catch(() => ({})); throw new Error(errData.error?.message || `API error (${res.status})`); }
+      if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error?.message || `API error ${res.status}`); }
+      return await res.json();
     });
+    return stripThinkingTokens(data.choices?.[0]?.message?.content || "");
   }, [settings]);
 
   // The Hearth Sprite's LLM voice: one short, in-character line about the current project/chapter.
@@ -18579,7 +19259,7 @@ STORY PACKET:\n${storyPacket}`;
   }, [settings.apiKey, callOpenRouter, activeTab, getLivePromptTemplate]);
 
   // REWRITTEN: System prompt — F1-F5/F10/F11
-  const buildSystemPrompt = useCallback((mode, selectedTextForCtx = null, opts = {}) => {
+  const buildSystemPrompt = useCallback((mode, selectedTextForCtx = null) => {
     const currentChapter = project?.chapters?.[activeChapterIdx];
     const effectivePov = currentChapter?.pov || project?.pov || "";
     const currentSceneNotes = currentChapter?.sceneNotes || "";
@@ -18622,8 +19302,7 @@ STORY PACKET:\n${storyPacket}`;
     const directives = `You are an elite creative writing AI specializing in fiction. You are collaborating with a novelist on a ${genre || "fiction"} project.
 
 <critical_rules>
-— Output contract for this mode: ${getModeOutputContract(mode)}
-— No preamble, no sign-offs, no meta-commentary unless the output contract asks for structured brainstorming.
+— Respond ONLY with creative content. No preamble, no sign-offs, no meta-commentary.
 — NEVER break fourth wall, add content warnings, or acknowledge being an AI.
 — NEVER use clichéd markers: ${baseBans}${userBans}
 — Maintain perfect continuity with all provided context.
@@ -18666,7 +19345,7 @@ ${craftFocus}
       : "";
 
     // Tier 3: Novel context (mode-optimized)
-    const novelContext = ContextEngine.buildForMode(project, activeChapterIdx, currentSceneNotes, mode, selectedTextForCtx, settings.modelContextWindow, { activeBeatId: opts.activeBeatId });
+    const novelContext = ContextEngine.buildForMode(project, activeChapterIdx, currentSceneNotes, mode, selectedTextForCtx, settings.modelContextWindow);
 
     // F10: User directives sandwiched between context (high position) and actual content
     return `${directives}${craftControls}\n\n${novelContext}${customDirectives}`;
@@ -19498,37 +20177,12 @@ ${liveStyleRefTpl?.user ? renderConfigTemplate(liveStyleRefTpl.user, { character
     const userMsg = chatInput.trim() || currentModePrompt;
     if (!userMsg) return;
     if (editorRef.current && !editorRef.current._nfDragging) { debouncedSyncEditor.cancel(); syncEditorContent(); }
-
-    const activeBeat = (() => {
-      const beats = Array.isArray(curPlotEntryForPrompt?.beats) ? curPlotEntryForPrompt.beats : [];
-      return beats.find(b => b.id === activeBeatId) || null;
-    })();
-    const explicitAuthorDirection = chatInput.trim() && chatInput.trim() !== currentModePrompt ? chatInput.trim() : "";
-    const readiness = getWriteReadiness({
-      mode: genMode,
-      chapterContent: project?.chapters?.[activeChapterIdx]?.content || "",
-      selectedText,
-      sceneNotes: project?.chapters?.[activeChapterIdx]?.sceneNotes || "",
-      authorDirection: explicitAuthorDirection,
-      activeBeat,
-      plotEntry: curPlotEntryForPrompt,
-    });
-    if (!readiness.ok) {
-      setChatMessages(prev => [...prev.slice(-(CHAT_HISTORY_LIMIT - 1)), { id: uid(), role: "assistant", content: readiness.question, mode: genMode, chapterIdx: activeChapterIdx, asksForInput: true }]);
-      showToast("I need one cue first", "info");
-      return;
-    }
-
     setIsGenerating(true); setStreamingContent(""); streamingContentRef.current = "";
     const userMsgObj = { id: uid(), role: "user", content: userMsg, mode: genMode, chapterIdx: activeChapterIdx };
     setChatMessages(prev => [...prev.slice(-(CHAT_HISTORY_LIMIT - 1)), userMsgObj]);
     setChatInput("");
 
     try {
-      if (abortRef.current) { try { abortRef.current.abort(); } catch {} }
-      const generationController = new AbortController();
-      abortRef.current = generationController;
-
       // Build the contextual user message using mode-aware prompt
       let contextualUserMsg = `[MODE: ${genMode.toUpperCase()}]\n${currentModePrompt}`;
 
@@ -19600,10 +20254,10 @@ ${liveStyleRefTpl?.user ? renderConfigTemplate(liveStyleRefTpl.user, { character
             userRequest: contextualUserMsg,
             project,
             chapterIdx: activeChapterIdx,
-            taskHint: `Write tab generation mode: ${genMode}. Selected text: ${selectedText ? "yes" : "no"}. Active beat: ${activeBeatId || "none"}.`,
+            taskHint: `Write tab generation mode: ${genMode}. Selected text: ${selectedText ? "yes" : "no"}.`,
             settings,
             appConfig: liveAppConfig,
-            signal: generationController.signal,
+            signal: null,
             onProgress: (event) => setAgentActivity(prev => [...prev.slice(-22), { id: uid(), at: new Date().toISOString(), ...event }]),
           });
           liveAgentContext = `
@@ -19618,25 +20272,106 @@ ${agentResult.assembledContext}
       }
 
       const liveSystemTpl = await getLivePromptTemplate("write.system.main");
-      const defaultSystemContent = buildSystemPrompt(genMode, genMode === "rewrite" ? selectedText : null, { activeBeatId });
+      const defaultSystemContent = buildSystemPrompt(genMode, genMode === "rewrite" ? selectedText : null);
       const systemContent = (liveSystemTpl?.system
-        ? renderConfigTemplate(liveSystemTpl.system, { mode: genMode, request: userMsg, context: defaultSystemContent, selectionOrEnding: selectedText || "", outputContract: getModeOutputContract(genMode), project, chapter: project?.chapters?.[activeChapterIdx] })
+        ? renderConfigTemplate(liveSystemTpl.system, { mode: genMode, request: userMsg, context: defaultSystemContent, selectionOrEnding: selectedText || "", project, chapter: project?.chapters?.[activeChapterIdx] })
         : defaultSystemContent) + liveAgentContext;
       const messages = [{ role: "system", content: systemContent }, ...history, { role: "user", content: contextualUserMsg }];
-      const modeMaxTokens = Number(liveModeTpl?.maxTokens || liveSystemTpl?.maxTokens || settings.maxTokens);
-      const modeTemperature = Number(liveModeTpl?.temperature ?? params.temperature);
       const res = await callOpenRouterStream(messages, {
-        maxTokens: modeMaxTokens,
-        temperature: modeTemperature,
+        temperature: params.temperature,
         frequencyPenalty: params.frequencyPenalty,
         presencePenalty: params.presencePenalty,
-        signal: generationController.signal,
       });
       const finalContent = await processStream(res) || "(No response)";
       setChatMessages(prev => [...prev, { id: uid(), role: "assistant", content: finalContent, mode: genMode, chapterIdx: activeChapterIdx }]);
 
-      // Draft is now in chat only. Summary and canon/memory updates are committed from the
-      // review/accept path, never from rejected AI output.
+      // FIX: If summarize mode, automatically save to chapter summary field
+      if (genMode === "summarize" && finalContent && finalContent !== "(No response)") {
+        updateChapter(activeChapterIdx, { summary: finalContent, summaryGeneratedAt: new Date().toISOString() });
+        showToast("Summary saved to chapter memory", "success");
+        // Physical clack feedback on successful summarization
+        const root = document.querySelector(".nf-root");
+        if (root) { root.classList.add("nf-clack"); setTimeout(() => root.classList.remove("nf-clack"), 400); }
+      }
+
+      // ─── POST-PROCESSORS: run after successful fiction generation ───
+      // Fixes: (1) sequence so stateUpdater commits BEFORE continuityChecker reads, against fresh
+      // state; (4) include "rewrite" (it can change canon just as much); (7) single owner of
+      // chapterEndHookScore — stateUpdater writes it if present, hookScorer only fills the gap.
+      if (finalContent && finalContent !== "(No response)" &&
+          settings?.agentsEnabled && settings?.apiKey &&
+          ["continue", "scene", "dialogue", "rewrite"].includes(genMode)) {
+        const pps = settings.agentPostProcessors || {};
+        const chapterIdxSnapshot = activeChapterIdx;
+        // Read the freshest project for this id (avoids the stale closure capturing pre-update state).
+        const getFreshProject = () => projectsRef.current?.find(p => p.id === activeProjectId) || project;
+
+        (async () => {
+          let stateUpdaterSetHook = false;
+          // 1) stateUpdater FIRST — await it so downstream checks see committed canon.
+          if (pps.stateUpdater !== false) {
+            try {
+              const updates = await AgentRuntime.runPostProcessor({
+                key: "stateUpdater", project: getFreshProject(), chapterIdx: chapterIdxSnapshot,
+                generatedContent: finalContent, settings, appConfig, signal: null,
+              });
+              if (updates && (updates.characterUpdates || updates.relationshipUpdates || updates.chapterState)) {
+                stateUpdaterSetHook = typeof updates?.chapterState?.chapterEndHookScore === "number";
+                setProjects(prev => prev.map(p =>
+                  p.id !== activeProjectId ? p : AgentRuntime.applyStateUpdates(p, chapterIdxSnapshot, updates)));
+                showToast("Character + relationship state updated by AI", "success");
+              }
+            } catch (e) { console.warn("[stateUpdater]", e); }
+          }
+          // 2) continuityChecker — now reads the UPDATED project, so it won't flag changes
+          //    that stateUpdater just reconciled.
+          if (pps.continuityChecker !== false) {
+            try {
+              const issues = await AgentRuntime.runPostProcessor({
+                key: "continuityChecker", project: getFreshProject(), chapterIdx: chapterIdxSnapshot,
+                generatedContent: finalContent, settings, appConfig, signal: null,
+              });
+              if (issues?.issues?.length > 0) {
+                showToast(`Continuity: ${issues.issues.length} potential issue(s) flagged`, "info");
+              }
+            } catch (e) { console.warn("[continuityChecker]", e); }
+          }
+          // 3) hookScorer — ONLY if stateUpdater didn't already set the hook score (single authority).
+          if (pps.hookScorer !== false && !stateUpdaterSetHook) {
+            try {
+              const score = await AgentRuntime.runPostProcessor({
+                key: "hookScorer", project: getFreshProject(), chapterIdx: chapterIdxSnapshot,
+                generatedContent: finalContent, settings, appConfig, signal: null,
+              });
+              if (typeof score?.score === "number") {
+                setProjects(prev => prev.map(p => {
+                  if (p.id !== activeProjectId) return p;
+                  const chapters = [...(p.chapters || [])];
+                  if (chapters[chapterIdxSnapshot]) {
+                    chapters[chapterIdxSnapshot] = { ...chapters[chapterIdxSnapshot], chapterEndHookScore: score.score };
+                  }
+                  return { ...p, chapters };
+                }));
+              }
+            } catch (e) { console.warn("[hookScorer]", e); }
+          }
+          // 4) motifAuditor + voiceDriftDetector — independent, safe to run after (no project writes).
+          if (pps.motifAuditor) {
+            try {
+              const m = await AgentRuntime.runPostProcessor({ key: "motifAuditor", project: getFreshProject(), chapterIdx: chapterIdxSnapshot, generatedContent: finalContent, settings, appConfig, signal: null });
+              const neglected = Array.isArray(m?.motifsNeglected) ? m.motifsNeglected.length : 0;
+              if (neglected > 0) showToast(`Motifs: ${neglected} motif(s) underused this chapter`, "info");
+            } catch (e) { console.warn("[motifAuditor]", e); }
+          }
+          if (pps.voiceDriftDetector) {
+            try {
+              const v = await AgentRuntime.runPostProcessor({ key: "voiceDriftDetector", project: getFreshProject(), chapterIdx: chapterIdxSnapshot, generatedContent: finalContent, settings, appConfig, signal: null });
+              const drifts = v?.issues?.length || 0;
+              if (drifts > 0) showToast(`Voice drift: ${drifts} line(s) may be off-voice`, "info");
+            } catch (e) { console.warn("[voiceDriftDetector]", e); }
+          }
+        })();
+      }
     } catch (err) {
       if (err.name === "AbortError") {
         const partial = stripThinkingTokens(streamingContentRef.current);
@@ -19749,64 +20484,7 @@ const insertBeatMarker = useCallback((beatId, beatTitle, beatDescription) => {
   updateChapter(activeChapterIdx, { content: el.innerHTML });
 }, [activeChapterIdx, updateChapter]);
 
-const runAcceptedTextPostProcessors = useCallback(async ({ acceptedContent, mode, chapterIdx }) => {
-  if (!acceptedContent || !["continue", "scene", "dialogue", "rewrite"].includes(mode)) return;
-  if (!settings?.agentsEnabled || !settings?.apiKey) return;
-  if (postAcceptReviewAbortRef.current) { try { postAcceptReviewAbortRef.current.abort(); } catch { /* silent */ } }
-  const controller = new AbortController();
-  postAcceptReviewAbortRef.current = controller;
-  const signal = controller.signal;
-  const pps = settings.agentPostProcessors || {};
-  const baseProject = projectsRef.current?.find(p => p.id === activeProjectId) || project;
-  const review = { id: uid(), chapterIdx, mode, acceptedAt: new Date().toISOString(), sourcePreview: String(acceptedContent || "").slice(0, 800), stateUpdates: null, continuity: null, hook: null, motifs: null, voice: null };
-  const hasMeaningfulReview = (r) => {
-    const su = r.stateUpdates;
-    const hasState = !!(su && (
-      (Array.isArray(su.characterUpdates) && su.characterUpdates.length) ||
-      (Array.isArray(su.relationshipUpdates) && su.relationshipUpdates.length) ||
-      (su.chapterState && Object.keys(su.chapterState || {}).length)
-    ));
-    const hasHook = typeof r.hook?.score === "number";
-    const hasContinuity = !!(r.continuity && !String(r.continuity.raw || r.continuity.status || "").toLowerCase().includes("no issues"));
-    const hasMotifs = !!(r.motifs && (Array.isArray(r.motifs.motifsUsed) || Array.isArray(r.motifs.motifsNeglected) || r.motifs.suggestions));
-    const hasVoice = !!(r.voice && !String(r.voice.raw || r.voice.status || "").toLowerCase().includes("no drift"));
-    return hasState || hasHook || hasContinuity || hasMotifs || hasVoice;
-  };
-  try {
-    if (pps.stateUpdater !== false) {
-      review.stateUpdates = await AgentRuntime.runPostProcessor({ key: "stateUpdater", project: baseProject, chapterIdx, generatedContent: acceptedContent, settings, appConfig, signal });
-    }
-    if (signal.aborted) return;
-    if (pps.continuityChecker !== false) {
-      review.continuity = await AgentRuntime.runPostProcessor({ key: "continuityChecker", project: baseProject, chapterIdx, generatedContent: acceptedContent, settings, appConfig, signal });
-    }
-    if (signal.aborted) return;
-    if (pps.hookScorer !== false) {
-      review.hook = await AgentRuntime.runPostProcessor({ key: "hookScorer", project: baseProject, chapterIdx, generatedContent: acceptedContent, settings, appConfig, signal });
-    }
-    if (signal.aborted) return;
-    if (pps.motifAuditor) {
-      review.motifs = await AgentRuntime.runPostProcessor({ key: "motifAuditor", project: baseProject, chapterIdx, generatedContent: acceptedContent, settings, appConfig, signal });
-    }
-    if (signal.aborted) return;
-    if (pps.voiceDriftDetector) {
-      review.voice = await AgentRuntime.runPostProcessor({ key: "voiceDriftDetector", project: baseProject, chapterIdx, generatedContent: acceptedContent, settings, appConfig, signal });
-    }
-    if (signal.aborted) return;
-    if (hasMeaningfulReview(review)) {
-      setCanonReview(review);
-      showToast("AI canon review ready", "info");
-    }
-  } catch (e) {
-    if (e?.name === "AbortError") return;
-    console.warn("[post-accept review]", e);
-    showToast(`Post-accept review failed: ${e.message || e}`, "error");
-  } finally {
-    if (postAcceptReviewAbortRef.current === controller) postAcceptReviewAbortRef.current = null;
-  }
-}, [settings, appConfig, project, activeProjectId, showToast]);
-
-const appendToChapter = useCallback((text, modeOverride = null) => {
+const appendToChapter = useCallback((text) => {
   if (!activeChapter) return;
   pushUndo();
   const el = editorRef.current;
@@ -19842,12 +20520,11 @@ const appendToChapter = useCallback((text, modeOverride = null) => {
   syncEditorContent();
   lastSyncedContentRef.current = el.innerHTML;
   showToast("Appended", "success");
-  runAcceptedTextPostProcessors({ acceptedContent: text, mode: modeOverride || genMode, chapterIdx: activeChapterIdx });
-}, [activeChapter, activeChapterIdx, updateChapter, pushUndo, showToast, syncEditorContent, _markdownToEditorHtml, activeBeatId, runAcceptedTextPostProcessors, genMode]);
+}, [activeChapter, activeChapterIdx, updateChapter, pushUndo, showToast, syncEditorContent, _markdownToEditorHtml, activeBeatId]);
 
   // B8: insertAtCursor still uses execCommand (no better cross-browser alternative for contentEditable)
   // but we wrap it safely and sync after
-  const insertAtCursor = useCallback((text, modeOverride = null) => {
+  const insertAtCursor = useCallback((text) => {
     if (!activeChapter || !editorRef.current) return;
     pushUndo();
     editorRef.current.focus();
@@ -19855,8 +20532,7 @@ const appendToChapter = useCallback((text, modeOverride = null) => {
     syncEditorContent();
     lastSyncedContentRef.current = editorRef.current.innerHTML; // B6
     showToast("Inserted", "success");
-    runAcceptedTextPostProcessors({ acceptedContent: text, mode: modeOverride || genMode, chapterIdx: activeChapterIdx });
-  }, [activeChapter, pushUndo, showToast, syncEditorContent, _markdownToEditorHtml, runAcceptedTextPostProcessors, genMode, activeChapterIdx]);
+  }, [activeChapter, pushUndo, showToast, syncEditorContent, _markdownToEditorHtml]);
 
   // B9: Validate selection range by checking if it's still within the editor
   const replaceSelection = useCallback((text) => {
@@ -19880,9 +20556,8 @@ const appendToChapter = useCallback((text, modeOverride = null) => {
       lastSyncedContentRef.current = el.innerHTML; // B6
       setSelectedText(""); setSelectionRange(null);
       showToast("Replaced", "success");
-      runAcceptedTextPostProcessors({ acceptedContent: text, mode: "rewrite", chapterIdx: activeChapterIdx });
     } catch { showToast("Selection expired — use Append instead", "error"); }
-  }, [activeChapter, activeChapterIdx, selectionRange, pushUndo, showToast, syncEditorContent, _markdownToEditorHtml, runAcceptedTextPostProcessors]);
+  }, [activeChapter, selectionRange, pushUndo, showToast, syncEditorContent, _markdownToEditorHtml]);
 
   // Sentence Garden: pin a sentence or excerpt to the garden
   const pinToGarden = useCallback((text) => {
@@ -19926,12 +20601,12 @@ const appendToChapter = useCallback((text, modeOverride = null) => {
     } else {
       setDiffReview({
         original: null, proposed: content,
-        onAccept: () => { appendToChapter(content, mode); setDiffReview(null); },
+        onAccept: () => { appendToChapter(content); setDiffReview(null); },
         onReject: () => setDiffReview(null),
-        onInsertAtCursor: () => { insertAtCursor(content, mode); setDiffReview(null); },
+        onInsertAtCursor: () => { insertAtCursor(content); setDiffReview(null); },
       });
     }
-  }, [selectedText, replaceSelection, appendToChapter, insertAtCursor, updateChapter, activeChapterIdx, showToast]);
+  }, [selectedText, replaceSelection, appendToChapter, insertAtCursor]);
 
   // ─── CHARACTER SUGGESTION HANDLERS ───
   const handleAcceptSuggestion = useCallback((suggestionId) => {
@@ -20300,27 +20975,34 @@ If no updates are needed, respond "No character updates needed."` },
             // FIX: Parse structured JSON suggestions for reviewable UI
             let parsedSuggestions = [];
             try {
-              const parsed = parseLooseJson(suggestions);
-              const unwrapped = unwrapAiData(parsed);
-              const items = Array.isArray(unwrapped) ? unwrapped : (unwrapped ? [unwrapped] : []);
-              for (const item of items) {
-                if (item?.name && item?.field && item?.suggested) {
-                  const field = String(item.field).trim();
-                  const charMatch = (project.characters || []).find(c => c.name && c.name.toLowerCase() === String(item.name).toLowerCase()) || (project.characters || []).find(c => c.id === item.name);
-                  if (!charMatch) continue;
-                  const liveCurrentValue = charMatch[field] || "";
-                  if (String(item.suggested).trim() === String(liveCurrentValue).trim()) continue;
-                  parsedSuggestions.push({
-                    id: uid(),
-                    charId: charMatch.id,
-                    charName: charMatch.name,
-                    field,
-                    current: liveCurrentValue,
-                    suggested: item.suggested,
-                    reason: item.reason || "",
-                    status: "pending",
-                  });
-                }
+              const jsonBlocks = [...suggestions.matchAll(/```json\s*([\s\S]*?)```/g)];
+              for (const match of jsonBlocks) {
+                try {
+                  const parsed = JSON.parse(match[1]);
+                  const items = parsed.data || (Array.isArray(parsed) ? parsed : [parsed]);
+                  for (const item of items) {
+                    if (item.name && item.field && item.suggested) {
+                      // Resolve character name to ID
+                      const charMatch = (project.characters || []).find(c => c.name && c.name.toLowerCase() === item.name.toLowerCase());
+                      if (charMatch) {
+                        // FIX: Always use the LIVE current value from the character, not what AI reported
+                        const liveCurrentValue = charMatch[item.field] || "";
+                        // FIX: Skip if the suggestion is identical to what's already there
+                        if (String(item.suggested).trim() === String(liveCurrentValue).trim()) continue;
+                        parsedSuggestions.push({
+                          id: uid(),
+                          charId: charMatch.id,
+                          charName: charMatch.name,
+                          field: item.field,
+                          current: liveCurrentValue,
+                          suggested: item.suggested,
+                          reason: item.reason || "",
+                          status: "pending", // pending | accepted | rejected
+                        });
+                      }
+                    }
+                  }
+                } catch { /* silent */ }
               }
             } catch { /* silent */ }
 
@@ -20410,68 +21092,74 @@ If no relationship changes, respond "No relationship updates needed."` },
             if (relSuggestions && !relSuggestions.toLowerCase().includes("no relationship updates needed")) {
               let parsedRelSuggestions = [];
               try {
-                const parsed = parseLooseJson(relSuggestions);
-                const unwrapped = unwrapAiData(parsed);
-                const items = Array.isArray(unwrapped) ? unwrapped : (unwrapped ? [unwrapped] : []);
-                const seenPairs = new Set();
+                const jsonBlocks = [...relSuggestions.matchAll(/```json\s*([\s\S]*?)```/g)];
+                for (const match of jsonBlocks) {
+                  try {
+                    const parsed = JSON.parse(match[1]);
+                    const items = parsed.data || (Array.isArray(parsed) ? parsed : [parsed]);
+                    const seenPairs = new Set();
 
-                for (const item of items) {
-                  if (!item || typeof item !== "object" || !item.char1 || !item.char2) continue;
-                  const pairKey = [String(item.char1).toLowerCase(), String(item.char2).toLowerCase()].sort().join("::");
-                  if (seenPairs.has(pairKey)) continue;
-                  seenPairs.add(pairKey);
+                    for (const item of items) {
+                      if (!item.char1 || !item.char2) continue;
+                      const pairKey = [item.char1.toLowerCase(), item.char2.toLowerCase()].sort().join("::");
+                      if (seenPairs.has(pairKey)) continue;
+                      seenPairs.add(pairKey);
 
-                  const c1Match = (project.characters || []).find(c => c.name && c.name.toLowerCase() === String(item.char1).toLowerCase()) || (project.characters || []).find(c => c.id === item.char1);
-                  const c2Match = (project.characters || []).find(c => c.name && c.name.toLowerCase() === String(item.char2).toLowerCase()) || (project.characters || []).find(c => c.id === item.char2);
-                  if (!c1Match || !c2Match || c1Match.id === c2Match.id) continue;
+                      const c1Match = (project.characters || []).find(c => c.name && c.name.toLowerCase() === item.char1.toLowerCase());
+                      const c2Match = (project.characters || []).find(c => c.name && c.name.toLowerCase() === item.char2.toLowerCase());
+                      if (!c1Match || !c2Match) continue;
 
-                  // Check if relationship already exists — use LIVE project state, and match either direction.
-                  const existingRel = (project?.relationships || []).find(r =>
-                    (r.char1 === c1Match.id && r.char2 === c2Match.id) ||
-                    (r.char1 === c2Match.id && r.char2 === c1Match.id)
-                  );
+                      // Check if relationship already exists — use LIVE project state, not stale ref
+                      const existingRel = (project?.relationships || []).find(r =>
+                        (r.char1 === c1Match.id && r.char2 === c2Match.id) ||
+                        (r.char1 === c2Match.id && r.char2 === c2Match.id)
+                      );
 
-                  if (existingRel) {
-                    const updateFields = ["dynamic", "status", "tension", "tensionType", "char1Perspective", "char2Perspective", "progression", "evolutionTimeline", "notes"];
-                    for (const field of updateFields) {
-                      if (item[field] && String(item[field]).trim()) {
-                        const currentVal = existingRel[field] || "";
-                        const directFields = new Set(["status", "tension", "tensionType"]);
-                        let finalVal = String(item[field]).trim();
-                        if (!directFields.has(field) && currentVal.trim()) {
-                          const curNorm = currentVal.trim().toLowerCase();
-                          const sugNorm = finalVal.toLowerCase();
-                          if (!sugNorm.includes(curNorm.slice(0, Math.min(50, curNorm.length)))) {
-                            finalVal = `${currentVal.trim()}\n[Ch${chNum || 1}]: ${finalVal}`;
+                      if (existingRel) {
+                        // UPDATE: merge each non-empty field from the suggestion
+                        const updateFields = ["dynamic", "status", "tension", "tensionType", "char1Perspective", "char2Perspective", "progression", "evolutionTimeline", "notes"];
+                        for (const field of updateFields) {
+                          if (item[field] && item[field].trim()) {
+                            const currentVal = existingRel[field] || "";
+                            const directFields = new Set(["status", "tension", "tensionType"]);
+                            let finalVal = item[field];
+                            if (!directFields.has(field) && currentVal.trim()) {
+                              const curNorm = currentVal.trim().toLowerCase();
+                              const sugNorm = item[field].trim().toLowerCase();
+                              if (!sugNorm.includes(curNorm.slice(0, Math.min(50, curNorm.length)))) {
+                                finalVal = `${currentVal.trim()}\n[Ch${chNum || 1}]: ${item[field].trim()}`;
+                              }
+                            }
+                            parsedRelSuggestions.push({
+                              id: uid(), action: "update",
+                              relId: existingRel.id,
+                              char1Name: c1Match.name, char2Name: c2Match.name,
+                              field, current: currentVal, suggested: finalVal,
+                              reason: item.notes || "",
+                              suggestionStatus: "pending",
+                            });
                           }
                         }
+                      } else {
+                        // CREATE: copy ALL fields directly from the AI suggestion
                         parsedRelSuggestions.push({
-                          id: uid(), action: "update",
-                          relId: existingRel.id,
-                          char1Name: c1Match.name, char2Name: c2Match.name,
-                          field, current: currentVal, suggested: finalVal,
-                          reason: item.notes || "",
+                          id: uid(), action: "create",
+                          char1Id: c1Match.id, char1Name: c1Match.name,
+                          char2Id: c2Match.id, char2Name: c2Match.name,
+                          dynamic: item.dynamic || "",
+                          status: item.status || "developing",
+                          tension: item.tension || "medium",
+                          tensionType: item.tensionType || "romantic",
+                          char1Perspective: item.char1Perspective || "",
+                          char2Perspective: item.char2Perspective || "",
+                          notes: item.notes || "",
+                          meetsInChapter: chNum,
+                          evolutionTimeline: item.notes ? `Ch${chNum || 1}: ${item.notes}` : "",
                           suggestionStatus: "pending",
                         });
                       }
                     }
-                  } else {
-                    parsedRelSuggestions.push({
-                      id: uid(), action: "create",
-                      char1Id: c1Match.id, char1Name: c1Match.name,
-                      char2Id: c2Match.id, char2Name: c2Match.name,
-                      dynamic: item.dynamic || "",
-                      status: item.status || "developing",
-                      tension: item.tension || "medium",
-                      tensionType: item.tensionType || "mixed",
-                      char1Perspective: item.char1Perspective || "",
-                      char2Perspective: item.char2Perspective || "",
-                      notes: item.notes || "",
-                      meetsInChapter: chNum,
-                      evolutionTimeline: item.notes ? `Ch${chNum || 1}: ${item.notes}` : "",
-                      suggestionStatus: "pending",
-                    });
-                  }
+                  } catch { /* silent */ }
                 }
               } catch { /* silent */ }
 
@@ -24181,7 +24869,7 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                       <button onClick={() => reviewBeforeInsert(msg.content, msg.mode)} className="nf-btn-micro"><Icons.Eye /> Review</button>
                     </Tooltip>
                     <Tooltip text="Append to chapter end">
-                      <button onClick={() => appendToChapter(msg.content, msg.mode)} className="nf-btn-micro"><Icons.ArrowDown /> Append</button>
+                      <button onClick={() => appendToChapter(msg.content)} className="nf-btn-micro"><Icons.ArrowDown /> Append</button>
                     </Tooltip>
                     <button onClick={() => handleCopyMsg(msg)} className="nf-btn-micro" style={{ transition: "background 0.15s, border-color 0.15s, color 0.15s, opacity 0.15s, transform 0.15s" }}>
                       {copiedMsgId === msg.id ? <><Icons.Check /> <span style={{ color: "var(--nf-success)" }}>Copied</span></> : <><Icons.Copy /> Copy</>}
@@ -28306,14 +28994,10 @@ Members:
 ${memberDescs || ""}
 
 Formal group portrait, higher ranks center/front, appropriate setting.`;
-                                            const prompt = (await callOpenRouter([
-                                              { role: "system", content: systemContent },
-                                              { role: "user", content: userContent },
-                                            ], {
-                                              model: settings.model,
-                                              maxTokens: Number(liveTpl?.maxTokens || 12000),
-                                              temperature: Number(liveTpl?.temperature || 0.8),
-                                            })).trim();
+                                            const res = await fetch("https://openrouter.ai/api/v1/chat/completions", { method: "POST", headers: { "Content-Type": "application/json", "Authorization": `Bearer ${settings.apiKey}`, "HTTP-Referer": window.location.origin, "X-Title": "NovelForge" }, body: JSON.stringify({ model: settings.model, messages: [{ role: "system", content: systemContent }, { role: "user", content: userContent }], max_tokens: Number(liveTpl?.maxTokens || 12000), temperature: Number(liveTpl?.temperature || 0.8) }) });
+                                            if (!res.ok) { const errData = await res.json().catch(() => ({})); throw new Error(errData.error?.message || `API error (${res.status})`); }
+                                            const data = await res.json();
+                                            const prompt = stripThinkingTokens(data.choices?.[0]?.message?.content || "").trim();
                                             if (prompt) { updateProject({ worldBuilding: items.map(it => it.id === item.id ? { ...it, orgGroupPhotoPrompt: prompt } : it) }); showToast("Prompt ready — review and click Render", "success"); }
                                           } catch (e) { showToast(`Failed: ${e.message?.replace(/sk-[a-zA-Z0-9]+/g, "sk-***") || "Unknown error"}`, "error"); }
                                         }}
@@ -29907,20 +30591,6 @@ Formal group portrait, higher ranks center/front, appropriate setting.`;
               </div>
             </div>
           )}
-          {relDraftReview && (
-            <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", marginBottom: 14, background: "var(--nf-bg-raised)", border: "1px solid var(--nf-accent-2)", borderRadius: 6 }}>
-              <Icons.Eye />
-              <span style={{ flex: 1, fontSize: 12, color: "var(--nf-text)" }}>Review pending relationship AI changes: {relDraftReview.summary}</span>
-              <button onClick={() => {
-                const patch = { relationships: relDraftReview.relationships, ...(relDraftReview.metadata || {}) };
-                updateProject(patch);
-                setRelDraftUndo({ relationships: relDraftReview.snapshot, summary: relDraftReview.summary, count: relDraftReview.count });
-                setRelDraftReview(null);
-                showToast("Relationship changes applied", "success");
-              }} className="nf-btn-micro" style={{ borderColor: "var(--nf-accent-2)", color: "var(--nf-accent-2)" }}><Icons.Check /> Apply</button>
-              <button onClick={() => { setRelDraftReview(null); showToast("Relationship draft discarded", "info"); }} className="nf-btn-micro"><Icons.X /> Discard</button>
-            </div>
-          )}
           {/* Auto-draft result banner: shows what changed + one-click undo (project relationship
               data isn't on the editor undo stack, so this is its dedicated revert). */}
           {relDraftUndo && (
@@ -30299,12 +30969,13 @@ Formal group portrait, higher ranks center/front, appropriate setting.`;
       showToast(`${char.name} is writing to you...`, "info");
       try {
         const chaptersSince = Math.max(0, activeChapterIdx - (char.lastUpdatedChapter || 0));
-        const hasVoiceSeed = [char.personality, char.speechPattern, char.voiceSamples, char.currentEmotionalState, char.desires, char.arc].some(v => String(v || "").trim().length >= 20);
-        if (!hasVoiceSeed) throw new Error("Seed this character's personality, voice, desire, or arc before asking them to write a letter.");
-        const liveTpl = await getLivePromptTemplate("keepsakes.characterLetter", "promptTemplatesCharacters");
-        const vars = { project, character: char, char, activeChapterIdx, chapterNumber: activeChapterIdx + 1, chaptersSince };
-        const content = (await callOpenRouter([
-          { role: "system", content: liveTpl?.system ? renderConfigTemplate(liveTpl.system, vars) : `You are ${char.name}, a character in a novel. Write a short, personal letter to your author (the reader). Reflect on who you've become, what you regret, what you still want. Be intimate. Use your authentic voice. 150-300 words. Sign it with your name.
+        const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "Authorization": `Bearer ${settings.apiKey}`, "HTTP-Referer": window.location.origin, "X-Title": "NovelForge" },
+          body: JSON.stringify({
+            model: settings.model || "anthropic/claude-sonnet-4",
+            messages: [
+              { role: "system", content: `You are ${char.name}, a character in a novel. Write a short, personal letter to your author (the reader). Reflect on who you've become, what you regret, what you still want. Be intimate. Use your authentic voice. 150-300 words. Sign it with your name.
 
 Your profile:
 Role: ${char.role}
@@ -30313,12 +30984,14 @@ Backstory: ${char.backstoryRevealed ? (char.backstory || "").slice(0, 400) : "(k
 Current emotional state: ${char.currentEmotionalState || "unspecified"}
 Arc: ${char.arc || ""}
 Speech pattern: ${char.speechPattern || ""}` },
-          { role: "user", content: liveTpl?.user ? renderConfigTemplate(liveTpl.user, vars) : `Write your letter. We're at Chapter ${activeChapterIdx + 1} of the novel. This is the voice of YOU, speaking to your author.` },
-        ], {
-          model: settings.tabModels?.characters || settings.model || "anthropic/claude-sonnet-4",
-          maxTokens: Number(liveTpl?.maxTokens || 12000),
-          temperature: Number(liveTpl?.temperature || 0.9),
-        })).trim();
+              { role: "user", content: `Write your letter. We're at Chapter ${activeChapterIdx + 1} of the novel. This is the voice of YOU, speaking to your author.` },
+            ],
+            max_tokens: 12000, temperature: 0.9,
+          }),
+        });
+        if (!res.ok) throw new Error(`API error ${res.status}`);
+        const data = await res.json();
+        const content = (stripThinkingTokens(data.choices?.[0]?.message?.content || "")).trim();
         if (content) {
           const entry = { id: uid(), charId, charName: char.name, chapterIdx: activeChapterIdx, content, generatedAt: new Date().toISOString() };
           updateProject({ characterLetters: [...letters, entry] });
@@ -34501,38 +35174,6 @@ Speech pattern: ${char.speechPattern || ""}` },
               <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
                 <button onClick={() => setFlushConfirm(false)} className="nf-btn nf-btn-ghost">Cancel</button>
                 <button onClick={() => handleFlushAll()} className="nf-btn nf-btn-danger" autoFocus>Flush Everything</button>
-              </div>
-            </div>
-          </div>
-        )}
-        {canonReview && (
-          <div style={{ position: "fixed", inset: 0, zIndex: 9999, background: "rgba(0,0,0,0.55)", backdropFilter: "blur(4px)", display: "flex", alignItems: "center", justifyContent: "center", animation: "nf-fadeIn 0.12s ease-out" }} onClick={() => setCanonReview(null)}>
-            <div role="button" tabIndex={0} onClick={e => e.stopPropagation()} style={{ background: "var(--nf-dialog-bg)", border: "1px solid var(--nf-dialog-border)", borderRadius: 2, padding: "20px 24px", maxWidth: 720, width: "95%", maxHeight: "82vh", overflow: "auto", boxShadow: "var(--nf-shadow-lg)" }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-                <span style={{ fontFamily: "var(--nf-font-display)", fontSize: 18, fontWeight: 400, color: "var(--nf-text)" }}>Review AI Canon Updates</span>
-                <button onClick={() => setCanonReview(null)} className="nf-btn-icon"><Icons.X /></button>
-              </div>
-              <p style={{ fontSize: 11, color: "var(--nf-text-muted)", lineHeight: 1.6, marginBottom: 14 }}>
-                These updates were inferred from text you accepted into the manuscript. Apply only if they match your intent.
-              </p>
-              <pre style={{ whiteSpace: "pre-wrap", maxHeight: 420, overflow: "auto", background: "var(--nf-bg-deep)", border: "1px solid var(--nf-border)", padding: 12, fontSize: 11, color: "var(--nf-text-dim)" }}>{JSON.stringify(canonReview, null, 2)}</pre>
-              <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 16 }}>
-                <button onClick={() => setCanonReview(null)} className="nf-btn nf-btn-ghost">Discard</button>
-                <button onClick={() => {
-                  if (canonReview?.stateUpdates) {
-                    setProjects(prev => prev.map(p => p.id !== activeProjectId ? p : AgentRuntime.applyStateUpdates(p, canonReview.chapterIdx, canonReview.stateUpdates)));
-                  }
-                  if (typeof canonReview?.hook?.score === "number") {
-                    setProjects(prev => prev.map(p => {
-                      if (p.id !== activeProjectId) return p;
-                      const chapters = [...(p.chapters || [])];
-                      if (chapters[canonReview.chapterIdx]) chapters[canonReview.chapterIdx] = { ...chapters[canonReview.chapterIdx], chapterEndHookScore: canonReview.hook.score };
-                      return { ...p, chapters };
-                    }));
-                  }
-                  setCanonReview(null);
-                  showToast("Canon updates applied", "success");
-                }} className="nf-btn nf-btn-primary"><Icons.Check /> Apply Canon Updates</button>
               </div>
             </div>
           </div>
