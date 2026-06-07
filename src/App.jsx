@@ -1496,43 +1496,7 @@ const estimateTokens = (text) => {
 };
 const stripThinkingTokens = (text) => {
   if (!text) return text;
-
-
-// ─── AI MODEL FALLBACK ───
-const _getModel = (settings) => settings?.model || "anthropic/claude-sonnet-4";
-
-
-// ─── AI RATE LIMIT TRACKER ───
-const _aiRateTracker = {
-  _lastCall: 0,
-  _minInterval: 500, // ms between calls
-  canCall() {
-    const now = Date.now();
-    if (now - this._lastCall < this._minInterval) return false;
-    this._lastCall = now;
-    return true;
-  }
-};
-
-// ─── SAFE AI FETCH — handles HTTP errors, strips thinking tokens ───
-const _safeAIFetch = async (url, options, signal) => {
-  const opts = { ...options };
-  if (signal) opts.signal = signal;
-  const res = await fetch(url, opts);
-  if (!res.ok) {
-    const status = res.status;
-    if (status === 429) throw new Error("Rate limited — wait a moment and try again");
-    if (status === 401 || status === 403) throw new Error("Invalid API key — check your key in Settings");
-    if (status === 402) throw new Error("Insufficient credits — add credits to your OpenRouter account");
-    if (status >= 500) throw new Error("AI service temporarily unavailable — try again");
-    throw new Error(`API error (${status})`);
-  }
-  return res;
-};
-  // I2: First strip complete think blocks, then strip unclosed think tags
-  // Use lazy match for complete blocks, and for unclosed tags only strip to end
-  let result = text.replace(/<think>[\s\S]*?<\/think>/gi, '');
-  // Only strip unclosed <think> if it's the LAST occurrence with no closing tag after it
+  let result = String(text).replace(/<think>[\s\S]*?<\/think>/gi, '');
   const unclosedIdx = result.lastIndexOf('<think>');
   if (unclosedIdx !== -1 && result.indexOf('</think>', unclosedIdx) === -1) {
     result = result.slice(0, unclosedIdx);
@@ -1723,6 +1687,179 @@ const tryRepairJson = (str) => {
   while (brackets-- > 0) s += "]";
   while (braces-- > 0) s += "}";
   try { return JSON.parse(s); } catch { return null; }
+};
+
+
+// ─── SHARED AI EXECUTOR + LOOSE JSON PARSER ───
+// All non-stream OpenRouter calls should move through this helper so model choice,
+// retries, aborts, error handling, JSON mode, and thinking-token cleanup stay consistent.
+const extractJsonCandidates = (text) => {
+  const src = String(text || "");
+  const out = [];
+
+  for (const m of src.matchAll(/```(?:json)?\s*([\s\S]*?)```/gi)) {
+    const body = (m[1] || "").trim();
+    if (body.startsWith("{") || body.startsWith("[")) out.push(body);
+  }
+
+  const starts = [];
+  for (let i = 0; i < src.length; i++) if (src[i] === "{" || src[i] === "[") starts.push(i);
+  for (const start of starts) {
+    const open = src[start], close = open === "{" ? "}" : "]";
+    let depth = 0, inString = false, escape = false;
+    for (let i = start; i < src.length; i++) {
+      const c = src[i];
+      if (escape) { escape = false; continue; }
+      if (c === "\\") { escape = true; continue; }
+      if (c === '"') { inString = !inString; continue; }
+      if (inString) continue;
+      if (c === open) depth++;
+      else if (c === close) depth--;
+      if (depth === 0) { out.push(src.slice(start, i + 1).trim()); break; }
+    }
+  }
+
+  return [...new Set(out)].filter(x => x && x.length >= 2);
+};
+
+const parseLooseJson = (text) => {
+  for (const candidate of extractJsonCandidates(text)) {
+    try { return JSON.parse(candidate); } catch { /* try repair */ }
+    const repaired = tryRepairJson(candidate);
+    if (repaired) return repaired;
+  }
+  const repaired = tryRepairJson(String(text || "").trim());
+  return repaired || null;
+};
+
+const unwrapAiData = (parsed) => {
+  if (!parsed || typeof parsed !== "object") return parsed;
+  if (parsed.data !== undefined) return parsed.data;
+  if (parsed.updates !== undefined) return parsed.updates;
+  if (parsed.relationships !== undefined) return parsed.relationships;
+  if (parsed.items !== undefined) return parsed.items;
+  return parsed;
+};
+
+const runOpenRouterChat = async ({
+  apiKey,
+  settings = {},
+  model,
+  messages,
+  maxTokens,
+  temperature,
+  frequencyPenalty,
+  presencePenalty,
+  json = false,
+  signal,
+  retries = 1,
+  title = "NovelForge",
+}) => {
+  if (!apiKey && !settings?.apiKey) throw new Error("Set your OpenRouter API key in Settings first.");
+  const key = apiKey || settings.apiKey;
+  const body = {
+    model: model || settings.model,
+    messages,
+    max_tokens: Number(maxTokens || settings.maxTokens || 12000),
+    temperature: temperature ?? settings.temperature ?? 0.8,
+    top_p: 0.95,
+    frequency_penalty: frequencyPenalty ?? settings.frequencyPenalty ?? 0,
+    presence_penalty: presencePenalty ?? settings.presencePenalty ?? 0,
+  };
+  if (json) body.response_format = { type: "json_object" };
+
+  const doFetch = async () => {
+    const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${key}`,
+        "HTTP-Referer": window.location.origin,
+        "X-Title": title,
+      },
+      body: JSON.stringify(body),
+      signal,
+    });
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      const msg = errData?.error?.message || `API error (${res.status})`;
+      const err = new Error(msg);
+      err.status = res.status;
+      throw err;
+    }
+    const data = await res.json();
+    return stripThinkingTokens(data.choices?.[0]?.message?.content || "");
+  };
+
+  let lastErr;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try { return await doFetch(); }
+    catch (err) {
+      lastErr = err;
+      if (err?.name === "AbortError") throw err;
+      if (![429, 500, 502, 503, 504].includes(err?.status) || attempt >= retries) throw err;
+      await new Promise(r => setTimeout(r, 350 * (attempt + 1)));
+    }
+  }
+  throw lastErr;
+};
+
+const getModeOutputContract = (mode) => {
+  switch (mode) {
+    case "continue": return "Output prose only. Continue the manuscript from the provided ending or active beat. Do not explain your plan.";
+    case "scene": return "Output prose only. Write the requested scene. Do not summarize or add notes.";
+    case "dialogue": return "Output prose only. Make it dialogue-led with action beats and interior reactions. Do not add notes.";
+    case "rewrite": return "Output only the rewritten selected passage. Preserve canon and events. No preamble.";
+    case "brainstorm": return "Output structured brainstorm options with short titles and concrete scene directions. Do not write final prose.";
+    case "summarize": return "Output a factual chapter memory summary only. No invented events, no prose styling.";
+    default: return "Follow the user's requested output format.";
+  }
+};
+
+const getWriteReadiness = ({ mode, chapterContent, selectedText, sceneNotes, authorDirection, activeBeat, plotEntry }) => {
+  const text = _htmlToPlain(chapterContent || "");
+  const hasChapterText = wordCount(text) >= 5;
+  const hasSelection = !!String(selectedText || "").trim();
+  const hasSceneNotes = !!String(sceneNotes || "").trim();
+  const hasAuthorDirection = !!String(authorDirection || "").trim();
+  const hasActiveBeat = !!activeBeat;
+  const hasPlotCue = !!(plotEntry?.summary || (Array.isArray(plotEntry?.beats) && plotEntry.beats.length) || plotEntry?.beats);
+
+  if (mode === "rewrite") {
+    return hasSelection ? { ok: true } : { ok: false, question: "Select the passage you want rewritten first." };
+  }
+  if (mode === "summarize") {
+    return hasChapterText ? { ok: true } : { ok: false, question: "There is no chapter content to summarize yet." };
+  }
+  if (mode === "continue") {
+    if (hasSelection || hasChapterText || hasSceneNotes || hasAuthorDirection || hasActiveBeat || hasPlotCue) return { ok: true };
+    return { ok: false, question: "What should happen in this opening beat? Give me a short cue and I’ll expand it." };
+  }
+  if (mode === "scene") {
+    if (hasSceneNotes || hasAuthorDirection || hasActiveBeat || hasPlotCue) return { ok: true };
+    return { ok: false, question: "What should happen in this scene? Give me the core event, conflict, or turn." };
+  }
+  if (mode === "dialogue") {
+    if (hasSelection || hasAuthorDirection || hasSceneNotes || hasActiveBeat) return { ok: true };
+    return { ok: false, question: "Who is speaking, and what does each person want from the conversation?" };
+  }
+  if (mode === "brainstorm") {
+    if (hasAuthorDirection || hasSceneNotes || hasActiveBeat || hasPlotCue || hasChapterText) return { ok: true };
+    return { ok: false, question: "What should I brainstorm: plot, conflict, character choice, reveal, relationship beat, or ending?" };
+  }
+  return { ok: true };
+};
+
+const isSparseCharacter = (char) => {
+  if (!char) return true;
+  const fields = ["personality", "backstory", "desires", "speechPattern", "voiceSamples", "fears", "arc", "appearance"];
+  const filled = fields.filter(k => String(char[k] || "").trim().length >= 20).length;
+  return filled <= 1;
+};
+
+const nextCharacterInterviewField = (char) => {
+  const ordered = ["backstory", "personality", "desires", "speechPattern", "fears", "arc", "appearance", "voiceSamples"];
+  return ordered.find(k => !String(char?.[k] || "").trim()) || null;
 };
 
 const renderMarkdownCached = (text) => {
@@ -4418,28 +4555,50 @@ const buildHeuristicAgentPlan = ({ userRequest = "", taskHint = "", difficulty =
   const specialists = new Set();
   const add = (...keys) => keys.forEach(k => specialists.add(k));
 
-  if (difficulty === "easy") {
+  const isWrite = /write tab generation mode:/.test(text);
+  const mode = (text.match(/write tab generation mode:\s*(\w+)/) || [])[1];
+
+  if (isWrite) {
+    if (mode === "summarize") {
+      // Summary should be factual memory extraction, not creative specialist invention.
+    } else if (mode === "rewrite") {
+      add("craftAgent", "standardsAgent");
+    } else if (mode === "dialogue") {
+      add("characterAgent", "relationshipAgent", "craftAgent", "standardsAgent");
+    } else if (mode === "brainstorm") {
+      add("sceneStructureAgent", "characterAgent", "timelineAgent", "revealAgent", "thematicAgent");
+    } else {
+      add("sceneStructureAgent", "characterAgent", "craftAgent", "standardsAgent");
+      if (/relationship|chemistry|tension|argument|confess|kiss|dialogue|conversation/.test(text)) add("relationshipAgent");
+      if (/location|setting|room|city|street|world|law|magic|technology|culture|religion/.test(text)) add("settingAgent", "loreRulesAgent");
+      if (/secret|reveal|reader knows|spoiler/.test(text)) add("revealAgent");
+      if (/theme|motif|symbol|literary/.test(text)) add("thematicAgent");
+    }
+  } else if (difficulty === "easy") {
     if (/grammar|typo|tighten|polish|line edit|rewrite/.test(text)) add("craftAgent", "standardsAgent");
     else if (/relationship|chemistry|tension|trust/.test(text)) add("relationshipAgent", "craftAgent");
     else if (/character|voice|emotion|pov/.test(text)) add("characterAgent", "craftAgent");
     else add("craftAgent");
   } else {
-    add("sceneStructureAgent", "characterAgent", "craftAgent", "standardsAgent");
-    if (/dialogue|conversation|kiss|fight|argue|confess|tension|relationship|chemistry|trust|lover|enemy/.test(text)) add("relationshipAgent");
-    if (/timeline|flashback|date|before|after|continuity|dead|alive|chapter/.test(text)) add("timelineAgent");
+    add("craftAgent", "standardsAgent");
+    if (/scene|chapter|plot|beat|outline|continue|write/.test(text)) add("sceneStructureAgent");
+    if (/character|voice|emotion|pov|dialogue/.test(text)) add("characterAgent");
+    if (/relationship|chemistry|tension|trust|lover|enemy/.test(text)) add("relationshipAgent");
+    if (/timeline|flashback|date|before|after|continuity|dead|alive/.test(text)) add("timelineAgent");
     if (/world|location|setting|place|room|city|law|rule|magic|technology|culture|religion/.test(text)) add("settingAgent", "loreRulesAgent");
     if (/secret|reveal|reader knows|dramatic irony|spoiler|knowledge/.test(text)) add("revealAgent");
     if (/theme|motif|symbol|literary|argument/.test(text)) add("thematicAgent");
+    if (specialists.size <= 2 && /generate|create|draft|fill|sync/.test(text)) add("sceneStructureAgent", "characterAgent");
   }
 
-  const maxAgents = difficulty === "easy" ? 2 : 5;
+  const maxAgents = difficulty === "hard" ? 8 : difficulty === "normal" ? 5 : 2;
   return {
     task_type: /json|structured|fill|sync/.test(text) ? "structured_data" : /analy[sz]e|audit|diagnos/.test(text) ? "analysis" : "creative_writing",
     difficulty,
-    planner: "local-economy",
+    planner: "local-scoped",
     required_specialists: [...specialists].filter(k => SPECIALIST_AGENTS[k]).slice(0, maxAgents),
     skip_specialists: [],
-    reasoning: `Local economy planner selected ${Math.min(specialists.size, maxAgents)} focused specialist(s) to avoid an extra orchestrator call.`,
+    reasoning: `Scoped planner selected ${Math.min(specialists.size, maxAgents)} specialist(s), avoiding broad memory pull unless the request needs it.`,
     output_mode: /json|structured/.test(text) ? "json" : "prose",
   };
 };
@@ -4448,36 +4607,19 @@ const buildHeuristicAgentPlan = ({ userRequest = "", taskHint = "", difficulty =
 const _callAgent = async ({ role, system, user, settings, signal, temperature = 0.7, json = false, taskDifficulty = null }) => {
   const model = getAgentModel(settings, role, taskDifficulty);
   const budget = getAgentBudget(role, taskDifficulty);
-  if (!settings?.apiKey) throw new Error("API key not set");
-
-  const body = {
+  return runOpenRouterChat({
+    settings,
     model,
     messages: [
       { role: "system", content: system },
       { role: "user", content: user },
     ],
     temperature,
-    max_tokens: Math.min(budget, AGENT_TOKEN_HARD_CAP),
-  };
-  if (json) body.response_format = { type: "json_object" };
-
-  const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Authorization": `Bearer ${settings.apiKey}`,
-      "HTTP-Referer": window.location.origin,
-      "X-Title": "NovelForge",
-    },
-    body: JSON.stringify(body),
+    maxTokens: Math.min(budget, AGENT_TOKEN_HARD_CAP),
+    json,
     signal,
+    retries: 1,
   });
-  if (!res.ok) {
-    const errData = await res.json().catch(() => ({}));
-    throw new Error(errData.error?.message || `Agent ${role} failed (${res.status})`);
-  }
-  const data = await res.json();
-  return data.choices?.[0]?.message?.content || "";
 };
 
 // ═══ MEMORY INDEX — Lightweight structured summary of the project ═══
@@ -4569,7 +4711,8 @@ Return your plan as JSON.`;
 
   const raw = await _callAgent({ role: "orchestrator", system, user, settings, signal, temperature: 0.2, json: true, taskDifficulty });
   try {
-    return JSON.parse(raw);
+    const parsed = parseLooseJson(raw);
+    if (parsed && typeof parsed === "object") return parsed;
   } catch {
     // Fallback plan if orchestrator fails to return valid JSON
     return {
@@ -4588,8 +4731,11 @@ const SPECIALIST_AGENTS = {
     buildContext: (project, chapterIdx, memoryIndex) => {
       const curCh = project.chapters?.[chapterIdx];
       const pov = ContextEngine._effectivePov(project, chapterIdx);
-      const povChar = (project.characters || []).find(c => c.name === pov);
+      const plotEntry = ContextEngine._plotEntryForChapter(project, chapterIdx);
+      const sceneCharIds = new Set(Array.isArray(plotEntry?.characters) ? plotEntry.characters : []);
       const chars = project.characters || [];
+      const povLower = String(pov || "").toLowerCase();
+      const povChar = chars.find(c => c.id === pov || String(c.name || "").toLowerCase() === povLower || String(c.aliases || "").toLowerCase().split(/[,;\n]/).map(a => a.trim()).includes(povLower));
       return JSON.stringify({
         povCharacter: povChar ? {
           name: povChar.name, role: povChar.role, personality: povChar.personality,
@@ -4607,7 +4753,7 @@ const SPECIALIST_AGENTS = {
           backstory: povChar.backstoryRevealed ? povChar.backstory : "[NOT YET REVEALED — hold back]",
           hiddenSecrets: povChar.secretRevealed ? povChar.hiddenSecrets : "[NOT YET REVEALED — hold back]",
         } : null,
-        otherCharacters: chars.filter(c => c.name && c.id !== povChar?.id && !c.isBulk).slice(0, 10).map(c => ({
+        otherCharacters: chars.filter(c => c.name && c.id !== povChar?.id && !c.isBulk && sceneCharIds.has(c.id)).slice(0, 10).map(c => ({
           name: c.name, role: c.role, status: c.status,
           briefPersonality: (c.personality || "").slice(0, 200),
           currentEmotionalState: c.currentEmotionalState || "",
@@ -4644,7 +4790,7 @@ const SPECIALIST_AGENTS = {
       const sceneLocationIds = plotEntry?.locations || [];
       const sceneLocations = sceneLocationIds.length > 0
         ? locations.filter(l => sceneLocationIds.includes(l.id))
-        : locations.slice(0, 5);
+        : [];
       return JSON.stringify({
         sceneLocations: sceneLocations.map(l => ({
           name: l.name, atmosphere: l.atmosphere, sensoryDetails: l.sensoryDetails,
@@ -4661,10 +4807,9 @@ const SPECIALIST_AGENTS = {
     buildContext: (project, chapterIdx, memoryIndex) => {
       const plotEntry = ContextEngine._plotEntryForChapter(project, chapterIdx);
       const sceneCharIds = plotEntry?.characters || [];
-      const relevantRels = (project.relationships || []).filter(r =>
-        sceneCharIds.includes(r.char1) || sceneCharIds.includes(r.char2) ||
-        sceneCharIds.length === 0
-      ).slice(0, 8);
+      const relevantRels = sceneCharIds.length > 0
+        ? (project.relationships || []).filter(r => sceneCharIds.includes(r.char1) || sceneCharIds.includes(r.char2)).slice(0, 8)
+        : [];
       const charMap = {};
       (project.characters || []).forEach(c => { charMap[c.id] = c.name; });
       // For each relationship, show its most recent chapter evolution snapshot
@@ -4673,7 +4818,8 @@ const SPECIALIST_AGENTS = {
         relevantRelationships: relevantRels.map(r => {
           // Get the most recent chapter evolution entry <= current chapter
           const evo = r.chapterEvolution || {};
-          const evoKeys = Object.keys(evo).map(k => parseInt(k, 10)).filter(n => !isNaN(n) && n <= chapterIdx).sort((a, b) => b - a);
+          const currentChapterNum = ContextEngine._chapterNum(project, chapterIdx);
+          const evoKeys = Object.keys(evo).map(k => parseInt(k, 10)).filter(n => !isNaN(n) && n <= currentChapterNum).sort((a, b) => b - a);
           const latestEvo = evoKeys.length > 0 ? evo[evoKeys[0]] : null;
           return {
             char1: charMap[r.char1] || r.char1,
@@ -5001,7 +5147,8 @@ ${JSON.stringify((project.relationships || []).map(r => ({ char1: r.char1, char2
     const system = promptTextOrFallback(appConfig, promptId, "system", vars, p.system);
     const user = promptTextOrFallback(appConfig, promptId, "user", vars, p.user);
     const raw = await _callAgent({ role: key, system, user, settings, signal, temperature: 0.3, json: true });
-    try { return JSON.parse(raw); } catch { return { raw }; }
+    const parsed = parseLooseJson(raw);
+    return parsed || { raw };
   },
 
   // Apply state updates from stateUpdater to the project
@@ -8791,42 +8938,41 @@ const CharacterConversationModal = memo(({ project, settings, appConfig, onClose
       showToast("Need two characters, a prompt, and an API key", "error");
       return;
     }
+    const hasVoiceSeed = (c) => [c.personality, c.speechPattern, c.voiceSamples, c.currentEmotionalState, c.desires].some(v => String(v || "").trim().length >= 20);
+    if (!hasVoiceSeed(c1) || !hasVoiceSeed(c2)) {
+      showToast("Seed both characters with personality, voice, or desire before the Conversation Room writes them.", "error");
+      return;
+    }
     setIsGenerating(true);
     setConversation("");
     try {
-      const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${settings.apiKey}`, "HTTP-Referer": window.location.origin, "X-Title": "NovelForge" },
-        body: JSON.stringify({
-          model: settings.model || "anthropic/claude-sonnet-4",
-          messages: (() => {
-            const tpl = findPromptTemplate(appConfig, "character.conversationRoom") || findPromptTemplate(buildDefaultAppConfig(), "character.conversationRoom");
-            const vars = {
-              scenario: prompt,
-              char1Name: c1.name,
-              char2Name: c2.name,
-              char1: `${c1.name}: ${c1.role}. Personality: ${(c1.personality || "").slice(0, 300)}. Speech pattern: ${c1.speechPattern || "none specified"}. Current state: ${c1.currentEmotionalState || "normal"}.`,
-              char2: `${c2.name}: ${c2.role}. Personality: ${(c2.personality || "").slice(0, 300)}. Speech pattern: ${c2.speechPattern || "none specified"}. Current state: ${c2.currentEmotionalState || "normal"}.`,
-            };
-            return [
-              { role: "system", content: tpl?.system ? renderConfigTemplate(tpl.system, vars) : `You are a creative writing sandbox. Generate a SHORT dialogue between two characters (6-10 exchanges). This is practice — NOT for the novel. It's for the author to hear their characters' voices.
+      const tpl = findPromptTemplate(appConfig, "character.conversationRoom") || findPromptTemplate(buildDefaultAppConfig(), "character.conversationRoom");
+      const vars = {
+        scenario: prompt,
+        char1Name: c1.name,
+        char2Name: c2.name,
+        char1: `${c1.name}: ${c1.role}. Personality: ${(c1.personality || "").slice(0, 300)}. Speech pattern: ${c1.speechPattern || "none specified"}. Current state: ${c1.currentEmotionalState || "normal"}.`,
+        char2: `${c2.name}: ${c2.role}. Personality: ${(c2.personality || "").slice(0, 300)}. Speech pattern: ${c2.speechPattern || "none specified"}. Current state: ${c2.currentEmotionalState || "normal"}.`,
+      };
+      const messages = [
+        { role: "system", content: tpl?.system ? renderConfigTemplate(tpl.system, vars) : `You are a creative writing sandbox. Generate a SHORT dialogue between two characters (6-10 exchanges). This is practice — NOT for the novel. It's for the author to hear their characters' voices.
 
 ${vars.char1}
 
 ${vars.char2}
 
 Format: "${c1.name}: ..." and "${c2.name}: ..." alternating. Keep lines short and authentic. Include brief action beats sparingly.` },
-              { role: "user", content: tpl?.user ? renderConfigTemplate(tpl.user, vars) : `Scenario: ${prompt}
+        { role: "user", content: tpl?.user ? renderConfigTemplate(tpl.user, vars) : `Scenario: ${prompt}
 
 Write the conversation.` },
-            ];
-          })(),
-          max_tokens: 12000, temperature: 0.95,
-        }),
-      });
-      if (!res.ok) throw new Error(`API error ${res.status}`);
-      const data = await res.json();
-      const content = (stripThinkingTokens(data.choices?.[0]?.message?.content || "")).trim();
+      ];
+      const content = (await runOpenRouterChat({
+        settings,
+        model: settings.tabModels?.characters || settings.model || "anthropic/claude-sonnet-4",
+        messages,
+        maxTokens: Number(tpl?.maxTokens || 12000),
+        temperature: Number(tpl?.temperature || 0.95),
+      })).trim();
       setConversation(content);
     } catch (e) {
       showToast(`Failed: ${e.message}`, "error");
@@ -13860,6 +14006,7 @@ const TabAIChat = memo(({ project, settings, appConfig, appConfigLiveLoader = nu
   const abortRef = useRef(null);
   const [agentEvents, setAgentEvents] = useState([]);
   const [agentLogOpen, setAgentLogOpen] = useState(true);
+  const [interviewState, setInterviewState] = useState(null);
 
   // A10: Track mounted state — don't update local state after unmount, but let fetch complete
   const mountedRef = useRef(true);
@@ -13878,9 +14025,71 @@ const TabAIChat = memo(({ project, settings, appConfig, appConfigLiveLoader = nu
     if (!customMsg) setInput("");
     setAgentEvents([]);
     setAgentLogOpen(true);
+
+    // Character tab interviewer: do not one-shot fabricate sparse characters.
+    if (tabName === "characters") {
+      const activeChar = editingEntityId ? (project?.characters || []).find(c => c.id === editingEntityId) : null;
+
+      // Follow-up answer to an interview question: expand only the requested slot.
+      if (interviewState) {
+        if (!settings?.apiKey) {
+          setMessages(prev => [...prev, { id: uid(), role: "assistant", content: "Add an API key first, then I can expand that cue.", isError: true }]);
+          return;
+        }
+        setIsGenerating(true);
+        try {
+          let messagesForSlot;
+          if (interviewState.type === "new-character") {
+            messagesForSlot = [
+              { role: "system", content: "You are a character interviewer. Expand the author's seed into a small starter character only. Return strict JSON with {type:'characters', data:{name, role, personality, backstory}}. Do not fill every possible field. Leave room for later interview questions." },
+              { role: "user", content: `Author seed: ${msgText}\nProject genre: ${project?.genre || "fiction"}` },
+            ];
+          } else {
+            const target = (project?.characters || []).find(c => c.id === interviewState.charId) || activeChar;
+            const field = interviewState.field || nextCharacterInterviewField(target) || "backstory";
+            messagesForSlot = [
+              { role: "system", content: "You are a character field expander. Expand exactly one requested field from the author's cue. Return strict JSON with {type:'characters', data:{FIELD:'expanded text'}}. Do not include unrelated fields. Do not overwrite human-anchor fields." },
+              { role: "user", content: `Character: ${target?.name || "Unnamed"}\nExisting data:\n${JSON.stringify(target || {}, null, 2)}\n\nField to expand: ${field}\nAuthor cue: ${msgText}` },
+            ];
+          }
+          const content = await runOpenRouterChat({
+            settings,
+            model: settings.tabModels?.characters || settings.model,
+            messages: messagesForSlot,
+            maxTokens: 6000,
+            temperature: 0.75,
+            json: true,
+          });
+          setMessages(prev => [...prev, { id: uid(), role: "assistant", content: `Proposed update from your cue:\n\n\`\`\`json\n${content}\n\`\`\`\n\nReview it, then use Auto-fill to apply selected fields.`, hasAutoFill: true }]);
+          setInterviewState(null);
+        } catch (err) {
+          setMessages(prev => [...prev, { id: uid(), role: "assistant", content: `Error: ${err?.message || "Could not expand cue"}`, isError: true }]);
+        }
+        if (mountedRef.current) setIsGenerating(false);
+        return;
+      }
+
+      const lower = msgText.toLowerCase();
+      if (!interviewState && /\b(generate|create|fill|complete|blank|empty|autofill)\b/.test(lower)) {
+        if (!activeChar && !(project?.characters || []).length) {
+          setMessages(prev => [...prev, { id: uid(), role: "assistant", content: "Give me a short seed for the first character: role, vibe, wound, desire, or a one-line concept.", asksForInput: true }]);
+          setInterviewState({ type: "new-character", field: "seed" });
+          return;
+        }
+        if (activeChar && isSparseCharacter(activeChar)) {
+          const field = nextCharacterInterviewField(activeChar) || "backstory";
+          setMessages(prev => [...prev, { id: uid(), role: "assistant", content: `What should be the cue for ${activeChar.name || "this character"}'s ${FIELD_LABELS[field] || field}? A short answer is enough.`, asksForInput: true }]);
+          setInterviewState({ type: "character-field", charId: activeChar.id, field });
+          return;
+        }
+      }
+    }
+
     setIsGenerating(true);
 
     try {
+      const controller = new AbortController();
+      abortRef.current = controller;
       const liveAppConfig = appConfigLiveLoader
         ? await appConfigLiveLoader(PROMPT_TEMPLATE_TABLE_KEYS_WITH_LEGACY, `tab chat:${tabName}`)
         : appConfig;
@@ -13896,7 +14105,7 @@ const TabAIChat = memo(({ project, settings, appConfig, appConfigLiveLoader = nu
             taskHint: `Tab: ${tabName}. EditingEntity: ${editingEntityId || "none"}.`,
             settings,
             appConfig: liveAppConfig,
-            signal: null,
+            signal: abortRef.current?.signal,
             onProgress: (event) => setAgentEvents(prev => [...prev.slice(-18), { id: uid(), at: new Date().toISOString(), ...event }]),
           });
           contextInfo = agentResult.assembledContext;
@@ -13937,84 +14146,22 @@ Rules:
         { role: "user", content: tabPromptTpl?.user ? renderConfigTemplate(tabPromptTpl.user, tabPromptVars) : msgText },
       ];
 
-      const controller = new AbortController();
-      abortRef.current = controller;
-
-      // G9: Per-tab temperature — character gen more creative, world more consistent
+      // G9/G12: Per-tab defaults, overridden by live prompt-template values when present.
       const tabTemperatures = { characters: 0.85, world: 0.7, plot: 0.8, relationships: 0.8 };
-      // G12: Higher max_tokens for character generation
       const tabMaxTokens = { characters: 12000, world: 12000, plot: 12000, relationships: 12000 };
 
-      const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${settings.apiKey}`, "HTTP-Referer": window.location.origin, "X-Title": "NovelForge" },
-        body: JSON.stringify({ model: settings.tabModels?.[tabName] || settings.model, messages: allMessages, max_tokens: tabMaxTokens[tabName] || 12000, temperature: tabTemperatures[tabName] || 0.8 }),
+      const content = await runOpenRouterChat({
+        settings,
+        model: settings.tabModels?.[tabName] || settings.model,
+        messages: allMessages,
+        maxTokens: Number(tabPromptTpl?.maxTokens || tabMaxTokens[tabName] || 12000),
+        temperature: Number(tabPromptTpl?.temperature ?? tabTemperatures[tabName] ?? 0.8),
         signal: controller.signal,
+        retries: 1,
       });
-      if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error?.message || `API error ${res.status}`); }
-      const data = await res.json();
-      const content = stripThinkingTokens(data.choices?.[0]?.message?.content || "");
       
-      // Detect any valid JSON in the response — multiple patterns
-      let hasAutoFill = false;
-      try {
-        // Pattern 1: ```json ... ```
-        const jsonBlocks = [...content.matchAll(/```json\s*([\s\S]*?)```/g)];
-        for (const match of jsonBlocks) {
-          try {
-            const p = JSON.parse(match[1]);
-            if (typeof p === "object" && p !== null) { hasAutoFill = true; break; }
-          } catch {
-            // Try repair for truncated JSON
-            const repaired = tryRepairJson(match[1]);
-            if (repaired && typeof repaired === "object") { hasAutoFill = true; break; }
-          }
-        }
-        // Pattern 2: ``` ... ``` without language tag
-        if (!hasAutoFill) {
-          const codeBlocks = [...content.matchAll(/```([\s\S]*?)```/g)];
-          for (const match of codeBlocks) {
-            const trimmed = match[1].trim();
-            if ((trimmed.startsWith("{") || trimmed.startsWith("[")) && trimmed.length > 10) {
-              try {
-                const p = JSON.parse(trimmed);
-                if (typeof p === "object" && p !== null) { hasAutoFill = true; break; }
-              } catch {
-                const repaired = tryRepairJson(trimmed);
-                if (repaired && typeof repaired === "object") { hasAutoFill = true; break; }
-              }
-            }
-          }
-        }
-        // Pattern 3: Standalone JSON object anywhere in response
-        if (!hasAutoFill) {
-          const firstBrace = content.indexOf("{");
-          if (firstBrace !== -1) {
-            let depth = 0, endIdx = -1;
-            for (let i = firstBrace; i < content.length; i++) {
-              if (content[i] === "{") depth++;
-              if (content[i] === "}") depth--;
-              if (depth === 0) { endIdx = i + 1; break; }
-            }
-            if (endIdx > firstBrace) {
-              try {
-                const candidate = content.slice(firstBrace, endIdx);
-                const p = JSON.parse(candidate);
-                if (p && typeof p === "object" && (p.type || p.data || Array.isArray(p))) {
-                  hasAutoFill = true;
-                }
-              } catch { /* silent */ }
-            } else {
-              // Truncated — try to repair from firstBrace to end
-              const candidate = content.slice(firstBrace);
-              const repaired = tryRepairJson(candidate);
-              if (repaired && typeof repaired === "object") {
-                hasAutoFill = true;
-              }
-            }
-          }
-        }
-      } catch { /* silent */ }
+      // Detect valid structured data with the shared loose JSON parser.
+      const hasAutoFill = !!parseLooseJson(content);
       
       // Always update parent messages (survives unmount), only update local state if mounted
       setMessages(prev => [...prev, { id: uid(), role: "assistant", content, hasAutoFill }]);
@@ -14025,66 +14172,32 @@ Rules:
     }
     abortRef.current = null;
     if (mountedRef.current) setIsGenerating(false);
-  }, [input, isGenerating, messages, project, settings, appConfig, appConfigLiveLoader, tabContext, tabName, setMessages, chapterIdx, editingEntityId]);
+  }, [input, isGenerating, messages, project, settings, appConfig, appConfigLiveLoader, tabContext, tabName, setMessages, chapterIdx, editingEntityId, interviewState]);
 
   const handleAutoFill = useCallback((content) => {
     try {
-      // Extract ALL JSON from the response — multiple patterns
-      const jsonBlocks = [...content.matchAll(/```json\s*([\s\S]*?)```/g)];
-      // Fallback: plain ``` blocks containing JSON
-      if (!jsonBlocks.length) {
-        const plainBlocks = [...content.matchAll(/```([\s\S]*?)```/g)];
-        for (const m of plainBlocks) {
-          const t = m[1].trim();
-          if (t.startsWith("{") || t.startsWith("[")) jsonBlocks.push(m);
-        }
-      }
-      // Fallback: standalone JSON object
-      if (!jsonBlocks.length) {
-        const firstBrace = content.indexOf("{");
-        if (firstBrace !== -1) {
-          let depth = 0, endIdx = -1;
-          for (let i = firstBrace; i < content.length; i++) {
-            if (content[i] === "{") depth++;
-            if (content[i] === "}") depth--;
-            if (depth === 0) { endIdx = i + 1; break; }
-          }
-          if (endIdx > firstBrace) {
-            const candidate = content.slice(firstBrace, endIdx);
-            try {
-              const testParse = JSON.parse(candidate);
-              if (testParse && typeof testParse === "object") {
-                jsonBlocks.push([null, candidate]);
-              }
-            } catch { /* silent */ }
-          }
-        }
-      }
-      if (!jsonBlocks.length || !onAutoFill) return;
-
-      // Collect all items into a flat array
-      const allItems = [];
+      if (!onAutoFill) return;
+      const parsedRoot = parseLooseJson(content);
+      if (!parsedRoot) return;
 
       // Character/world/plot/relationship fields that should be flat strings/values at the top of a data item.
-      // Used to detect AI "category grouping" and "name-keyed wrapping" patterns so we can flatten them.
       const FLAT_FIELD_HINTS = new Set([
-        // Character
         "name","role","gender","age","pronouns","orientation","aliases","occupation","height","build","tags",
         "appearance","personality","backstory","desires","shortTermGoals","longTermGoals","speechPattern",
         "voiceSamples","habits","fears","flaws","strengths","skills","internalConflict","externalConflict",
         "signatureItems","secrets","hiddenSecrets","allegiances","kinks","arc","canonNotes","status",
         "isBulk","bulkCount","bulkDescription","image","lookAlike",
-        // World
         "category","description","keywords","atmosphere","sensoryDetails","orgPurpose","orgHierarchy","orgMembers",
-        // Plot
         "chapter","title","summary","beats","sceneType","pov",
-        // Relationship
         "char1","char2","dynamic","tension","tensionType","chemistry","conflictSource",
       ]);
 
-      // Detect if an object is a "category group" wrapper (e.g. {IDENTITY: {...}, PROFILE: {...}})
-      // rather than a flat field object. Heuristic: ALL top-level keys are ALL-CAPS OR snake-case capitalized
-      // AND all their values are themselves objects containing known flat fields.
+      const typeToTab = { characters: "characters", character: "characters", world: "world", world_building: "world", plot: "plot", plot_outline: "plot", relationship: "relationships", relationships: "relationships", relationship_updates: "relationships" };
+      if (parsedRoot?.type && typeToTab[String(parsedRoot.type).toLowerCase()] && typeToTab[String(parsedRoot.type).toLowerCase()] !== tabName) {
+        console.warn(`[NovelForge] JSON type "${parsedRoot.type}" doesn't match tab "${tabName}" — skipping to prevent data corruption`);
+        return;
+      }
+
       const isCategoryGrouped = (obj) => {
         if (!obj || typeof obj !== "object" || Array.isArray(obj)) return false;
         const keys = Object.keys(obj);
@@ -14094,31 +14207,17 @@ Rules:
           const v = obj[k];
           if (v && typeof v === "object" && !Array.isArray(v)) {
             const subKeys = Object.keys(v);
-            const hasKnownField = subKeys.some(sk => FLAT_FIELD_HINTS.has(sk));
-            if (hasKnownField) groupedCount++;
+            if (subKeys.some(sk => FLAT_FIELD_HINTS.has(sk))) groupedCount++;
           }
         }
-        // If 2+ top-level keys each contain known flat fields as sub-keys → it's grouped
         return groupedCount >= 2;
       };
 
-      // Flatten a category-grouped object: {IDENTITY: {name, role}, PROFILE: {appearance}} → {name, role, appearance}
-      const flattenGroups = (obj) => {
-        const flat = {};
-        for (const [, groupVal] of Object.entries(obj)) {
-          if (groupVal && typeof groupVal === "object" && !Array.isArray(groupVal)) {
-            for (const [subK, subV] of Object.entries(groupVal)) {
-              // Only lift keys that look like real fields (avoid lifting nested structures like orgHierarchy accidentally)
-              flat[subK] = subV;
-            }
-          }
-        }
+      const flattenGroups = (obj) => Object.values(obj || {}).reduce((flat, groupVal) => {
+        if (groupVal && typeof groupVal === "object" && !Array.isArray(groupVal)) Object.assign(flat, groupVal);
         return flat;
-      };
+      }, {});
 
-      // Detect "name-keyed wrapping": {data: {"Harrison Killian": {IDENTITY: {...}}}}
-      // Check if data is a single-key object where the key is NOT a known flat field,
-      // and the value is another object containing known field patterns.
       const unwrapNameKey = (obj) => {
         if (!obj || typeof obj !== "object" || Array.isArray(obj)) return obj;
         const keys = Object.keys(obj);
@@ -14126,18 +14225,14 @@ Rules:
         const onlyKey = keys[0];
         const val = obj[onlyKey];
         if (!val || typeof val !== "object" || Array.isArray(val)) return obj;
-        // If the only key is not a flat field, but the inner object HAS flat fields or groups,
-        // assume this is name-wrapping and unwrap.
         if (!FLAT_FIELD_HINTS.has(onlyKey)) {
           const innerKeys = Object.keys(val);
           const innerHasFlat = innerKeys.some(k => FLAT_FIELD_HINTS.has(k));
-          const innerIsGrouped = isCategoryGrouped(val);
-          if (innerHasFlat || innerIsGrouped) return val;
+          if (innerHasFlat || isCategoryGrouped(val)) return val;
         }
         return obj;
       };
 
-      // Normalize: first unwrap name-keys, then flatten category groups if detected
       const normalizeItem = (raw) => {
         if (!raw || typeof raw !== "object" || Array.isArray(raw)) return raw;
         let item = unwrapNameKey(raw);
@@ -14145,59 +14240,31 @@ Rules:
         return item;
       };
 
-      for (const match of jsonBlocks) {
-        try {
-          const p = JSON.parse(match[1]);
-          // FIX 3.1: Validate JSON type matches current tab — prevent cross-tab corruption
-          if (p.type && typeof p.type === "string") {
-            const typeToTab = { characters: "characters", character: "characters", world: "world", world_building: "world", plot: "plot", plot_outline: "plot", relationship: "relationships", relationships: "relationships" };
-            const expectedTab = typeToTab[p.type.toLowerCase()];
-            if (expectedTab && expectedTab !== tabName) {
-              console.warn(`[NovelForge] JSON type "${p.type}" doesn't match tab "${tabName}" — skipping to prevent data corruption`);
-              continue;
-            }
-          }
-          if (p.data && typeof p.data === "object") {
-            if (Array.isArray(p.data)) {
-              p.data.forEach(item => { if (item && typeof item === "object") allItems.push(normalizeItem(item)); });
-            } else {
-              // data may be: flat {name, role, ...}, OR name-keyed {"Harrison": {...}}, OR multiple name-keys
-              const dataKeys = Object.keys(p.data);
-              const looksLikeMultipleNameKeys = dataKeys.length > 1 && dataKeys.every(k => !FLAT_FIELD_HINTS.has(k) && p.data[k] && typeof p.data[k] === "object");
-              if (looksLikeMultipleNameKeys) {
-                // Multiple characters keyed by name
-                dataKeys.forEach(k => allItems.push(normalizeItem(p.data[k])));
-              } else {
-                allItems.push(normalizeItem(p.data));
-              }
-            }
-          } else if (Array.isArray(p)) {
-            p.forEach(item => { if (item && typeof item === "object") allItems.push(normalizeItem(item)); });
-          } else if (typeof p === "object" && p !== null) {
-            allItems.push(normalizeItem(p));
-          }
-        } catch { /* silent */ } // skip malformed individual blocks
+      const root = unwrapAiData(parsedRoot);
+      const allItems = [];
+      const pushItem = (item) => { if (item && typeof item === "object" && !Array.isArray(item)) allItems.push(normalizeItem(item)); };
+
+      if (Array.isArray(root)) {
+        root.forEach(pushItem);
+      } else if (root && typeof root === "object") {
+        const keys = Object.keys(root);
+        const looksLikeMultipleNameKeys = keys.length > 1 && keys.every(k => !FLAT_FIELD_HINTS.has(k) && root[k] && typeof root[k] === "object" && !Array.isArray(root[k]));
+        if (looksLikeMultipleNameKeys) keys.forEach(k => pushItem(root[k]));
+        else pushItem(root);
       }
 
-      // Pass as single item if 1, or as array if multiple — handlers check for both
-      if (allItems.length === 1) {
-        onAutoFill(allItems[0]);
-      } else if (allItems.length > 1) {
-        onAutoFill(allItems);
-      }
-    } catch { /* silent */ }
+      if (allItems.length === 1) onAutoFill(allItems[0]);
+      else if (allItems.length > 1) onAutoFill(allItems);
+    } catch (err) {
+      console.warn("[NovelForge] Auto-fill parse failed:", err);
+    }
   }, [onAutoFill, tabName]);
 
   const quickActions = useMemo(() => {
     switch (tabName) {
       case "characters": {
         const actions = [
-          { label: "✦ Generate character", msg: `Generate a compelling character for my story. You MUST fill ALL of these fields — none may be blank:
-name, role, gender, age, pronouns, orientation, aliases, occupation, height, build, tags, appearance, personality, backstory, desires, shortTermGoals, longTermGoals, speechPattern, voiceSamples, habits, fears, flaws, strengths, skills, internalConflict, externalConflict, signatureItems, secrets, hiddenSecrets, allegiances, arc, canonNotes, status.
-
-For 'gender', 'orientation', 'role', 'status', 'pronouns', 'build' — use ONLY the exact values specified in the system rules.
-If this character's occupation implies membership in an existing organization or location from the context, set 'allegiances' to that org's exact name and reference it in 'backstory'/'canonNotes'.
-Return as structured JSON with the character data wrapped in { "type": "characters", "data": { ... } }.` },
+          { label: "✦ Start character interview", msg: `Start a field-by-field interview for a new character. Ask me for one short seed first; do not generate a full character yet. The goal is to fill fields one at a time with author cues.` },
         ];
         // D18: Contextual fill — reference which fields are actually empty
         if (editingEntityId && project?.characters) {
@@ -14205,7 +14272,7 @@ Return as structured JSON with the character data wrapped in { "type": "characte
           if (char) {
             const emptyFields = [...CHARACTER_TEXT_FIELDS].filter(k => !char[k]);
             if (emptyFields.length > 0) {
-              actions.push({ label: `Fill ${emptyFields.length} empty fields`, msg: `Fill in these specific empty fields for "${char.name || "this character"}": ${emptyFields.join(", ")}. Respect the dropdown constraints (gender, orientation, role values must match exact spelling from system rules). If the character's role/occupation implies membership in an existing organization from context, include that org's exact name in 'allegiances'. Base suggestions on existing details and genre. Return structured JSON with { "type": "characters", "data": { ... } }.` });
+              actions.push({ label: `Interview ${emptyFields.length} empty fields`, msg: `Start a field-by-field interview for "${char.name || "this character"}". Ask me for one short cue for the next missing field first. Do not fill every field at once.` });
             }
             // Psychology quick action
             const psychFields = ["fears","flaws","strengths","internalConflict","externalConflict"].filter(k => !char[k]);
@@ -14997,21 +15064,24 @@ function WriteOrWhipPanel({ project, settings, chapterIdx, editorRef, onClose })
       }
       const craftBlock = craftHints.length ? `\n\nCRAFT EXPECTATIONS:\n${craftHints.join("\n")}` : "";
 
-      const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-        method: "POST", signal: ctrl.signal,
-        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${settings.apiKey}`, "HTTP-Referer": window.location.origin, "X-Title": "NovelForge" },
-        body: JSON.stringify({
-          model: "xiaomi/mimo-v2-flash",
-          messages: [
-            { role: "system", content: "You are Forge-chan, a BRUTAL writing coach. Score writing against a beat/scene goal AND the chapter's craft expectations (narrative distance, sensory palette, subtext, tension, motifs).\n\nFORMAT (exactly):\nSCORE: X/10\nThen 2-3 lines of harsh specific feedback. Call out when the writing misses craft targets.\n7+ = pass. Below 7 = fail, demand rewrite." },
-            { role: "user", content: `BEAT GOAL: "${title || "untitled"}"${desc ? `\nDetails: ${desc}` : ""}${craftBlock}\n\nTEXT (last ${Math.min(textToScore.length, 800)} chars):\n"${textToScore.slice(-800)}"\n\n${beatText.length < 15 ? "(Warning: almost no new text for this beat)" : ""}\nScore it.` },
-          ],
-          max_tokens: 12000, temperature: 0.85,
-        }),
-      });
-      if (!res.ok) { const errData = await res.json().catch(() => ({})); throw new Error(errData.error?.message || `API error (${res.status})`); }
-      const data = await res.json();
-      const raw = (stripThinkingTokens(data.choices?.[0]?.message?.content || "")).trim();
+      const raw = (await runOpenRouterChat({
+        settings,
+        model: settings.tabModels?.write || settings.model,
+        messages: [
+          { role: "system", content: "You are Forge-chan, a strict writing coach. Score writing against a beat/scene goal and the chapter's craft expectations. FORMAT exactly: SCORE: X/10, then 2-3 lines of specific feedback. 7+ = pass. Below 7 = rewrite." },
+          { role: "user", content: `BEAT GOAL: "${title || "untitled"}"${desc ? `
+Details: ${desc}` : ""}${craftBlock}
+
+TEXT (last ${Math.min(textToScore.length, 800)} chars):
+"${textToScore.slice(-800)}"
+
+${beatText.length < 15 ? "(Warning: almost no new text for this beat)" : ""}
+Score it.` },
+        ],
+        maxTokens: 12000,
+        temperature: 0.85,
+        signal: ctrl.signal,
+      })).trim();
       const sm = raw.match(/SCORE:\s*(\d+)/i);
       const ns = sm ? Math.min(10, Math.max(1, parseInt(sm[1], 10))) : 5;
       setBeatScores(prev => ({ ...prev, [currentBeatIdx]: { score: ns, feedback: raw.replace(/SCORE:\s*\d+\/?\d*\s*/i, "").trim() } }));
@@ -15483,33 +15553,28 @@ const ForgeAssistant = memo(({ editorContent, project, settings, chapterIdx }) =
             thesis ? `Theme: "${thesis.slice(0, 80)}"` : "",
             livingState,
           ].filter(Boolean).join(" | ");
-          const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-            method: "POST",
-            headers: { "Content-Type": "application/json", "Authorization": `Bearer ${settings.apiKey}`, "HTTP-Referer": window.location.origin, "X-Title": "NovelForge" },
-            body: JSON.stringify({
-              model: "xiaomi/mimo-v2-flash",
-              messages: [
-                { role: "system", content: `You are Forge-chan, a tiny annoying but lovable writing assistant spirit (shaped like a geometric gem creature) living inside a novel-writing app. Snarky, opinionated, sometimes genuinely helpful, always brief. Japandi aesthetic soul.
-
-PERSONALITY: Equal parts annoying and endearing. Comment uninvited. Notice patterns, clichés, missed opportunities, BROKEN CRAFT TARGETS. Give wild creative ideas. Be sassy. Use kaomoji sparingly: (◕‿◕✿) (╥﹏╥) ┐(´∀\`)┌ (✧ω✧)
+          const content = (await runOpenRouterChat({
+            settings,
+            model: settings.tabModels?.write || settings.model,
+            messages: [
+              { role: "system", content: `You are Forge-chan, a tiny annoying but lovable writing assistant spirit (shaped like a geometric gem creature) living inside a novel-writing app. Snarky, opinionated, sometimes genuinely helpful, always brief. Japandi aesthetic soul.
 
 RULES:
 - ALWAYS 1-2 SHORT sentences. Max 3 lines.
 - Be opinionated. Have taste.
-- Mix: snarky commentary 30%, craft observations 25% (did they hit narrative distance? sensory palette? subtext?), wild ideas 20%, motif nudges 15%, emotional reactions 10%
-- If a motif could fit naturally RIGHT HERE, mention it.
-- If the POV character's emotional state contradicts what was just written, flag it.
-- Reference the actual text when possible
-- Never mean about the WRITER, only about WRITING choices
-- Genre: ${genre} | POV: ${pov || "unspecified"} | Characters: ${charNames || "none yet"}${contextBits ? `\n- ${contextBits}` : ""}
+- Notice craft targets, motifs, POV state, and missed opportunities.
+- Never mean about the WRITER, only about WRITING choices.
+- Genre: ${genre} | POV: ${pov || "unspecified"} | Characters: ${charNames || "none yet"}${contextBits ? `
+- ${contextBits}` : ""}
 - You CANNOT be replied to. Observe and comment.` },
-                { role: "user", content: `Writer just wrote:\n"${newText || ""}"\n\nBrief unsolicited reaction.` },
-              ],
-              max_tokens: 12000, temperature: 1.1,
-            }),
-          });
-          const data = await res.json();
-          const content = (stripThinkingTokens(data.choices?.[0]?.message?.content || "")).trim();
+              { role: "user", content: `Writer just wrote:
+"${newText || ""}"
+
+Brief unsolicited reaction.` },
+            ],
+            maxTokens: 12000,
+            temperature: 1.1,
+          })).trim();
           if (content && mountedRef.current) {
             const glyph = FORGE_CHAN_REACTIONS[Math.floor(Math.random() * FORGE_CHAN_REACTIONS.length)];
             const newMood = FORGE_CHAN_MOODS[Math.floor(Math.random() * FORGE_CHAN_MOODS.length)];
@@ -16641,8 +16706,11 @@ export default function NovelForge() {
   const [flushConfirm, setFlushConfirm] = useState(false);
   const [charSuggestions, setCharSuggestions] = useState(null);
   const [fillReview, setFillReview] = useState(null); // { type: 'character'|'world', entityId, original, proposed, fields }
+  const [canonReview, setCanonReview] = useState(null); // AI-derived post-insert memory/canon updates awaiting author approval
+  const postAcceptReviewAbortRef = useRef(null); // cancels stale post-accept scans when newer accepted prose arrives
   // Relationship auto-draft: snapshot for one-click undo + summary of what changed (shown as a banner).
   const [relDraftUndo, setRelDraftUndo] = useState(null); // { relationships: [...prevSnapshot], summary: string, count: number }
+  const [relDraftReview, setRelDraftReview] = useState(null); // { relationships, snapshot, summary, count, metadata }
   const [relDraftBusy, setRelDraftBusy] = useState(false); // null | relId | 'all'
   const [whiteRoom, setWhiteRoom] = useState(null); // { char1Id, char2Id, tension, result, isGenerating }
   const [showTimeline, setShowTimeline] = useState(false);
@@ -17483,23 +17551,17 @@ Return ONLY a JSON object. Be creative and consistent.`;
         ? renderConfigTemplate(liveTpl.system, promptVars)
         : `You are a fiction writing assistant. Fill empty fields with creative, genre-appropriate content.\n\n${contextInfo || ""}\n\nRULES:\n- Return ONLY valid JSON — no markdown, no backticks, no explanation.\n- Only include fields that are currently empty.\n- Be creative and specific.\n- Make content consistent with existing filled fields.`;
       const userContent = liveTpl?.user ? renderConfigTemplate(liveTpl.user, promptVars) : fallbackPrompt;
-      const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${settings.apiKey}`, "HTTP-Referer": window.location.origin, "X-Title": "NovelForge" },
-        body: JSON.stringify({
-          model: settings.tabModels?.[modelKey] || settings.model,
-          messages: [
-            { role: "system", content: systemContent },
-            { role: "user", content: userContent },
-          ],
-          max_tokens: Number(liveTpl?.maxTokens || 12000), temperature: Number(liveTpl?.temperature || 0.85),
-        }),
-      });
-      if (!res.ok) { const errData = await res.json().catch(() => ({})); throw new Error(errData.error?.message || `API error (${res.status})`); }
-      const data = await res.json();
-      let content = stripThinkingTokens(data.choices?.[0]?.message?.content || "").trim();
+      let content = (await callOpenRouter([
+        { role: "system", content: systemContent },
+        { role: "user", content: userContent },
+      ], {
+        model: settings.tabModels?.[modelKey] || settings.model,
+        maxTokens: Number(liveTpl?.maxTokens || 12000),
+        temperature: Number(liveTpl?.temperature || 0.85),
+        json: true,
+      })).trim();
       content = content.replace(/^```json?\s*/i, "").replace(/\s*```$/i, "").trim();
-      let proposed; try { proposed = JSON.parse(content); } catch { proposed = null; }
+      let proposed = parseLooseJson(content);
       if (proposed && typeof proposed === "object" && !Array.isArray(proposed) && proposed.updates && typeof proposed.updates === "object") proposed = proposed.updates;
       if (typeof proposed !== "object" || proposed === null || Array.isArray(proposed)) throw new Error("Invalid response");
       // Strip deprecated fields from AI response before processing
@@ -17751,23 +17813,17 @@ Recent manuscript context:
 ${chapterContext || "No prose yet."}
 
 Return a JSON object with only these allowed keys: ${allowedFields.join(", ")}.`;
-      const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${settings.apiKey}`, "HTTP-Referer": window.location.origin, "X-Title": "NovelForge" },
-        body: JSON.stringify({
-          model: settings.tabModels?.characters || settings.model,
-          messages: [
-            { role: "system", content: systemContent },
-            { role: "user", content: userContent },
-          ],
-          max_tokens: Number(liveTpl?.maxTokens || 9000), temperature: Number(liveTpl?.temperature || (focus === "living" ? 0.45 : 0.75)),
-        }),
-      });
-      if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error?.message || `API error (${res.status})`); }
-      const data = await res.json();
-      let content = stripThinkingTokens(data.choices?.[0]?.message?.content || "").trim();
+      let content = (await callOpenRouter([
+        { role: "system", content: systemContent },
+        { role: "user", content: userContent },
+      ], {
+        model: settings.tabModels?.characters || settings.model,
+        maxTokens: Number(liveTpl?.maxTokens || 9000),
+        temperature: Number(liveTpl?.temperature || (focus === "living" ? 0.45 : 0.75)),
+        json: true,
+      })).trim();
       content = content.replace(/^```json?\s*/i, "").replace(/\s*```$/i, "").trim();
-      const parsed = tryRepairJson(content) || JSON.parse(content);
+      const parsed = parseLooseJson(content);
       if (!parsed || typeof parsed !== "object") throw new Error("Invalid JSON response");
 
       const updates = {};
@@ -17867,24 +17923,18 @@ Be consistent with the characters' personalities and any context provided. No ma
       ? renderConfigTemplate(liveTpl.system, templateVars)
       : `You are a fiction relationship architect. You write specific, character-grounded relationship dynamics.\n\n${contextInfo || ""}\n\nReturn ONLY valid JSON.`;
     const userContent = liveTpl?.user ? renderConfigTemplate(liveTpl.user, templateVars) : fallbackPrompt;
-    const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${settings.apiKey}`, "HTTP-Referer": window.location.origin, "X-Title": "NovelForge" },
-      body: JSON.stringify({
-        model: settings.tabModels?.relationships || settings.model,
-        messages: [
-          { role: "system", content: systemContent },
-          { role: "user", content: userContent },
-        ],
-        max_tokens: Number(liveTpl?.maxTokens || 12000), temperature: Number(liveTpl?.temperature || 0.85),
-      }),
-    });
-    if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error?.message || `API error (${res.status})`); }
-    const data = await res.json();
-    let content = stripThinkingTokens(data.choices?.[0]?.message?.content || "").trim();
+    let content = (await callOpenRouter([
+      { role: "system", content: systemContent },
+      { role: "user", content: userContent },
+    ], {
+      model: settings.tabModels?.relationships || settings.model,
+      maxTokens: Number(liveTpl?.maxTokens || 12000),
+      temperature: Number(liveTpl?.temperature || 0.85),
+      json: true,
+    })).trim();
     content = content.replace(/^```json?\s*/i, "").replace(/\s*```$/i, "").trim();
     // Parse with repair fallback — recovers from trailing commas / truncation instead of failing outright.
-    let proposed; try { proposed = JSON.parse(content); } catch { proposed = tryRepairJson(content); }
+    let proposed = parseLooseJson(content);
     if (typeof proposed !== "object" || proposed === null) return null;
     const normalize = (val, options) => {
       if (!val || typeof val !== "string") return null;
@@ -17923,9 +17973,9 @@ Be consistent with the characters' personalities and any context provided. No ma
       if (!patch) throw new Error("AI returned nothing usable");
       const snapshot = (project?.relationships || []).map(r => ({ ...r }));
       const changedKeys = Object.keys(patch).filter(k => (rel[k] || "") !== (patch[k] || ""));
-      updateProject({ relationships: (project?.relationships || []).map(r => r.id === relId ? { ...r, ...patch } : r) });
-      setRelDraftUndo({ relationships: snapshot, summary: `${c1.name} ↔ ${c2.name}: ${changedKeys.length} field${changedKeys.length !== 1 ? "s" : ""} rewritten`, count: 1 });
-      showToast("Relationship drafted", "success");
+      const nextRelationships = (project?.relationships || []).map(r => r.id === relId ? { ...r, ...patch } : r);
+      setRelDraftReview({ relationships: nextRelationships, snapshot, summary: `${c1.name} ↔ ${c2.name}: ${changedKeys.length} field${changedKeys.length !== 1 ? "s" : ""} proposed`, count: 1 });
+      showToast("Relationship draft ready for review", "info");
     } catch (e) { showToast(`Draft failed: ${e.message}`, "error"); }
     finally { setRelDraftBusy(null); }
   }, [settings.apiKey, project, _draftOneRelationship, updateProject, showToast]);
@@ -17950,10 +18000,10 @@ Be consistent with the characters' personalities and any context provided. No ma
       } catch { failed++; }
     }
     if (Object.keys(patches).length === 0) { setRelDraftBusy(null); showToast("Drafting failed for all relationships", "error"); return; }
-    updateProject({ relationships: (project?.relationships || []).map(r => patches[r.id] ? { ...r, ...patches[r.id] } : r) });
-    setRelDraftUndo({ relationships: snapshot, summary: `Drafted ${done} relationship${done !== 1 ? "s" : ""}${failed ? ` (${failed} failed)` : ""}`, count: done });
+    const nextRelationships = (project?.relationships || []).map(r => patches[r.id] ? { ...r, ...patches[r.id] } : r);
+    setRelDraftReview({ relationships: nextRelationships, snapshot, summary: `Drafted ${done} relationship${done !== 1 ? "s" : ""}${failed ? ` (${failed} failed)` : ""}`, count: done });
     setRelDraftBusy(null);
-    showToast(`Drafted ${done} relationship${done !== 1 ? "s" : ""}`, "success");
+    showToast(`Relationship drafts ready for review`, "info");
   }, [settings.apiKey, project, _draftOneRelationship, updateProject, showToast]);
 
   const handleSyncRelationshipsFromStory = useCallback(async () => {
@@ -18038,24 +18088,17 @@ STORY PACKET:\n${storyPacket}`;
     setRelDraftBusy("storySync");
     showToast("AI is syncing relationships from the written story…", "info");
     try {
-      const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${settings.apiKey}`, "HTTP-Referer": window.location.origin, "X-Title": "NovelForge" },
-        body: JSON.stringify({
-          model: settings.tabModels?.relationships || settings.model,
-          messages: [
-            { role: "system", content: liveTpl?.system ? renderConfigTemplate(liveTpl.system, promptVars) : "You are a manuscript-aware relationship continuity agent. Return only strict JSON." },
-            { role: "user", content: promptToSend },
-          ],
-          max_tokens: Number(liveTpl?.maxTokens || 16000),
-          temperature: Number(liveTpl?.temperature || 0.25),
-        }),
-      });
-      if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error?.message || `API error (${res.status})`); }
-      const data = await res.json();
-      let content = stripThinkingTokens(data.choices?.[0]?.message?.content || "").trim();
+      let content = (await callOpenRouter([
+        { role: "system", content: liveTpl?.system ? renderConfigTemplate(liveTpl.system, promptVars) : "You are a manuscript-aware relationship continuity agent. Return only strict JSON." },
+        { role: "user", content: promptToSend },
+      ], {
+        model: settings.tabModels?.relationships || settings.model,
+        maxTokens: Number(liveTpl?.maxTokens || 16000),
+        temperature: Number(liveTpl?.temperature || 0.25),
+        json: true,
+      })).trim();
       content = content.replace(/^```json?\s*/i, "").replace(/\s*```$/i, "").trim();
-      let parsed; try { parsed = JSON.parse(content); } catch { parsed = tryRepairJson(content); }
+      let parsed = parseLooseJson(content);
       const items = Array.isArray(parsed?.relationships) ? parsed.relationships : Array.isArray(parsed) ? parsed : [];
       if (!items.length) throw new Error("AI found no relationship updates");
 
@@ -18119,9 +18162,14 @@ STORY PACKET:\n${storyPacket}`;
         }
       }
       if (!updated && !created) throw new Error(`No valid pairs matched (${skipped} skipped)`);
-      updateProject({ relationships: nextRels, relationshipAISync: { lastSyncedAt: new Date().toISOString(), updated, created, skipped } });
-      setRelDraftUndo({ relationships: snapshot, summary: `Story sync: ${updated} updated, ${created} created${skipped ? `, ${skipped} skipped` : ""}`, count: updated + created });
-      showToast(`Relationships synced: ${updated} updated, ${created} created`, "success");
+      setRelDraftReview({
+        relationships: nextRels,
+        snapshot,
+        summary: `Story sync: ${updated} updated, ${created} created${skipped ? `, ${skipped} skipped` : ""}`,
+        count: updated + created,
+        metadata: { relationshipAISync: { lastSyncedAt: new Date().toISOString(), updated, created, skipped } },
+      });
+      showToast(`Relationship sync ready for review`, "info");
     } catch (e) {
       showToast(`Relationship sync failed: ${e.message}`, "error");
     } finally {
@@ -18446,10 +18494,14 @@ STORY PACKET:\n${storyPacket}`;
   // ─── API CALLS ───
   const callOpenRouterStream = useCallback(async (messages, opts = {}) => {
     if (!settings.apiKey) throw new Error("Set your OpenRouter API key in Settings first.");
-    // E4: Abort any existing request before starting new one
-    if (abortRef.current) { try { abortRef.current.abort(); } catch { /* silent */ } }
-    const controller = new AbortController();
-    abortRef.current = controller;
+    // E4: Abort any existing request before starting new one unless the caller supplied a shared signal.
+    let controller = null;
+    if (!opts.signal) {
+      if (abortRef.current) { try { abortRef.current.abort(); } catch { /* silent */ } }
+      controller = new AbortController();
+      abortRef.current = controller;
+    }
+    const effectiveSignal = opts.signal || controller?.signal || null;
     // E8: Wrap in retryable fetch
     const res = await _retryableFetch(async () => {
       const r = await fetch("https://openrouter.ai/api/v1/chat/completions", {
@@ -18457,14 +18509,14 @@ STORY PACKET:\n${storyPacket}`;
         headers: { "Content-Type": "application/json", "Authorization": `Bearer ${settings.apiKey}`, "HTTP-Referer": window.location.origin, "X-Title": "NovelForge" },
         body: JSON.stringify({
           model: opts.model || settings.model, messages,
-          max_tokens: opts.maxTokens || settings.maxTokens,
+          max_tokens: Number(opts.maxTokens || settings.maxTokens || 12000),
           temperature: opts.temperature ?? settings.temperature,
           top_p: 0.95,
           frequency_penalty: opts.frequencyPenalty ?? settings.frequencyPenalty,
           presence_penalty: opts.presencePenalty ?? settings.presencePenalty,
           stream: true,
         }),
-        signal: controller.signal,
+        signal: effectiveSignal,
       });
       if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.error?.message || `API error ${r.status}`); }
       return r;
@@ -18472,32 +18524,20 @@ STORY PACKET:\n${storyPacket}`;
     return res;
   }, [settings]);
 
-  // E9: Non-streaming call with its own abort controller
+  // E9: Non-streaming call through the shared AI executor.
   const callOpenRouter = useCallback(async (messages, opts = {}) => {
-    if (!settings.apiKey) throw new Error("Set your OpenRouter API key in Settings first.");
-    const controller = new AbortController();
-    // Store in a local ref so callers can abort if needed
-    const abortableResult = { controller };
-    // E8: Wrap in retryable fetch
-    const data = await _retryableFetch(async () => {
-      const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${settings.apiKey}`, "HTTP-Referer": window.location.origin, "X-Title": "NovelForge" },
-        body: JSON.stringify({
-          model: opts.model || settings.model, messages,
-          max_tokens: opts.maxTokens || settings.maxTokens,
-          temperature: opts.temperature ?? settings.temperature,
-          top_p: 0.95,
-          frequency_penalty: opts.frequencyPenalty ?? settings.frequencyPenalty,
-          presence_penalty: opts.presencePenalty ?? settings.presencePenalty,
-        }),
-        signal: controller.signal,
-      });
-      if (!res.ok) { const errData = await res.json().catch(() => ({})); throw new Error(errData.error?.message || `API error (${res.status})`); }
-      if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error?.message || `API error ${res.status}`); }
-      return await res.json();
+    return runOpenRouterChat({
+      settings,
+      model: opts.model || settings.model,
+      messages,
+      maxTokens: opts.maxTokens || settings.maxTokens,
+      temperature: opts.temperature ?? settings.temperature,
+      frequencyPenalty: opts.frequencyPenalty ?? settings.frequencyPenalty,
+      presencePenalty: opts.presencePenalty ?? settings.presencePenalty,
+      json: !!opts.json,
+      signal: opts.signal,
+      retries: opts.retries ?? 1,
     });
-    return stripThinkingTokens(data.choices?.[0]?.message?.content || "");
   }, [settings]);
 
   // The Hearth Sprite's LLM voice: one short, in-character line about the current project/chapter.
@@ -18539,7 +18579,7 @@ STORY PACKET:\n${storyPacket}`;
   }, [settings.apiKey, callOpenRouter, activeTab, getLivePromptTemplate]);
 
   // REWRITTEN: System prompt — F1-F5/F10/F11
-  const buildSystemPrompt = useCallback((mode, selectedTextForCtx = null) => {
+  const buildSystemPrompt = useCallback((mode, selectedTextForCtx = null, opts = {}) => {
     const currentChapter = project?.chapters?.[activeChapterIdx];
     const effectivePov = currentChapter?.pov || project?.pov || "";
     const currentSceneNotes = currentChapter?.sceneNotes || "";
@@ -18582,7 +18622,8 @@ STORY PACKET:\n${storyPacket}`;
     const directives = `You are an elite creative writing AI specializing in fiction. You are collaborating with a novelist on a ${genre || "fiction"} project.
 
 <critical_rules>
-— Respond ONLY with creative content. No preamble, no sign-offs, no meta-commentary.
+— Output contract for this mode: ${getModeOutputContract(mode)}
+— No preamble, no sign-offs, no meta-commentary unless the output contract asks for structured brainstorming.
 — NEVER break fourth wall, add content warnings, or acknowledge being an AI.
 — NEVER use clichéd markers: ${baseBans}${userBans}
 — Maintain perfect continuity with all provided context.
@@ -18625,7 +18666,7 @@ ${craftFocus}
       : "";
 
     // Tier 3: Novel context (mode-optimized)
-    const novelContext = ContextEngine.buildForMode(project, activeChapterIdx, currentSceneNotes, mode, selectedTextForCtx, settings.modelContextWindow);
+    const novelContext = ContextEngine.buildForMode(project, activeChapterIdx, currentSceneNotes, mode, selectedTextForCtx, settings.modelContextWindow, { activeBeatId: opts.activeBeatId });
 
     // F10: User directives sandwiched between context (high position) and actual content
     return `${directives}${craftControls}\n\n${novelContext}${customDirectives}`;
@@ -19457,12 +19498,37 @@ ${liveStyleRefTpl?.user ? renderConfigTemplate(liveStyleRefTpl.user, { character
     const userMsg = chatInput.trim() || currentModePrompt;
     if (!userMsg) return;
     if (editorRef.current && !editorRef.current._nfDragging) { debouncedSyncEditor.cancel(); syncEditorContent(); }
+
+    const activeBeat = (() => {
+      const beats = Array.isArray(curPlotEntryForPrompt?.beats) ? curPlotEntryForPrompt.beats : [];
+      return beats.find(b => b.id === activeBeatId) || null;
+    })();
+    const explicitAuthorDirection = chatInput.trim() && chatInput.trim() !== currentModePrompt ? chatInput.trim() : "";
+    const readiness = getWriteReadiness({
+      mode: genMode,
+      chapterContent: project?.chapters?.[activeChapterIdx]?.content || "",
+      selectedText,
+      sceneNotes: project?.chapters?.[activeChapterIdx]?.sceneNotes || "",
+      authorDirection: explicitAuthorDirection,
+      activeBeat,
+      plotEntry: curPlotEntryForPrompt,
+    });
+    if (!readiness.ok) {
+      setChatMessages(prev => [...prev.slice(-(CHAT_HISTORY_LIMIT - 1)), { id: uid(), role: "assistant", content: readiness.question, mode: genMode, chapterIdx: activeChapterIdx, asksForInput: true }]);
+      showToast("I need one cue first", "info");
+      return;
+    }
+
     setIsGenerating(true); setStreamingContent(""); streamingContentRef.current = "";
     const userMsgObj = { id: uid(), role: "user", content: userMsg, mode: genMode, chapterIdx: activeChapterIdx };
     setChatMessages(prev => [...prev.slice(-(CHAT_HISTORY_LIMIT - 1)), userMsgObj]);
     setChatInput("");
 
     try {
+      if (abortRef.current) { try { abortRef.current.abort(); } catch {} }
+      const generationController = new AbortController();
+      abortRef.current = generationController;
+
       // Build the contextual user message using mode-aware prompt
       let contextualUserMsg = `[MODE: ${genMode.toUpperCase()}]\n${currentModePrompt}`;
 
@@ -19534,10 +19600,10 @@ ${liveStyleRefTpl?.user ? renderConfigTemplate(liveStyleRefTpl.user, { character
             userRequest: contextualUserMsg,
             project,
             chapterIdx: activeChapterIdx,
-            taskHint: `Write tab generation mode: ${genMode}. Selected text: ${selectedText ? "yes" : "no"}.`,
+            taskHint: `Write tab generation mode: ${genMode}. Selected text: ${selectedText ? "yes" : "no"}. Active beat: ${activeBeatId || "none"}.`,
             settings,
             appConfig: liveAppConfig,
-            signal: null,
+            signal: generationController.signal,
             onProgress: (event) => setAgentActivity(prev => [...prev.slice(-22), { id: uid(), at: new Date().toISOString(), ...event }]),
           });
           liveAgentContext = `
@@ -19552,106 +19618,25 @@ ${agentResult.assembledContext}
       }
 
       const liveSystemTpl = await getLivePromptTemplate("write.system.main");
-      const defaultSystemContent = buildSystemPrompt(genMode, genMode === "rewrite" ? selectedText : null);
+      const defaultSystemContent = buildSystemPrompt(genMode, genMode === "rewrite" ? selectedText : null, { activeBeatId });
       const systemContent = (liveSystemTpl?.system
-        ? renderConfigTemplate(liveSystemTpl.system, { mode: genMode, request: userMsg, context: defaultSystemContent, selectionOrEnding: selectedText || "", project, chapter: project?.chapters?.[activeChapterIdx] })
+        ? renderConfigTemplate(liveSystemTpl.system, { mode: genMode, request: userMsg, context: defaultSystemContent, selectionOrEnding: selectedText || "", outputContract: getModeOutputContract(genMode), project, chapter: project?.chapters?.[activeChapterIdx] })
         : defaultSystemContent) + liveAgentContext;
       const messages = [{ role: "system", content: systemContent }, ...history, { role: "user", content: contextualUserMsg }];
+      const modeMaxTokens = Number(liveModeTpl?.maxTokens || liveSystemTpl?.maxTokens || settings.maxTokens);
+      const modeTemperature = Number(liveModeTpl?.temperature ?? params.temperature);
       const res = await callOpenRouterStream(messages, {
-        temperature: params.temperature,
+        maxTokens: modeMaxTokens,
+        temperature: modeTemperature,
         frequencyPenalty: params.frequencyPenalty,
         presencePenalty: params.presencePenalty,
+        signal: generationController.signal,
       });
       const finalContent = await processStream(res) || "(No response)";
       setChatMessages(prev => [...prev, { id: uid(), role: "assistant", content: finalContent, mode: genMode, chapterIdx: activeChapterIdx }]);
 
-      // FIX: If summarize mode, automatically save to chapter summary field
-      if (genMode === "summarize" && finalContent && finalContent !== "(No response)") {
-        updateChapter(activeChapterIdx, { summary: finalContent, summaryGeneratedAt: new Date().toISOString() });
-        showToast("Summary saved to chapter memory", "success");
-        // Physical clack feedback on successful summarization
-        const root = document.querySelector(".nf-root");
-        if (root) { root.classList.add("nf-clack"); setTimeout(() => root.classList.remove("nf-clack"), 400); }
-      }
-
-      // ─── POST-PROCESSORS: run after successful fiction generation ───
-      // Fixes: (1) sequence so stateUpdater commits BEFORE continuityChecker reads, against fresh
-      // state; (4) include "rewrite" (it can change canon just as much); (7) single owner of
-      // chapterEndHookScore — stateUpdater writes it if present, hookScorer only fills the gap.
-      if (finalContent && finalContent !== "(No response)" &&
-          settings?.agentsEnabled && settings?.apiKey &&
-          ["continue", "scene", "dialogue", "rewrite"].includes(genMode)) {
-        const pps = settings.agentPostProcessors || {};
-        const chapterIdxSnapshot = activeChapterIdx;
-        // Read the freshest project for this id (avoids the stale closure capturing pre-update state).
-        const getFreshProject = () => projectsRef.current?.find(p => p.id === activeProjectId) || project;
-
-        (async () => {
-          let stateUpdaterSetHook = false;
-          // 1) stateUpdater FIRST — await it so downstream checks see committed canon.
-          if (pps.stateUpdater !== false) {
-            try {
-              const updates = await AgentRuntime.runPostProcessor({
-                key: "stateUpdater", project: getFreshProject(), chapterIdx: chapterIdxSnapshot,
-                generatedContent: finalContent, settings, appConfig, signal: null,
-              });
-              if (updates && (updates.characterUpdates || updates.relationshipUpdates || updates.chapterState)) {
-                stateUpdaterSetHook = typeof updates?.chapterState?.chapterEndHookScore === "number";
-                setProjects(prev => prev.map(p =>
-                  p.id !== activeProjectId ? p : AgentRuntime.applyStateUpdates(p, chapterIdxSnapshot, updates)));
-                showToast("Character + relationship state updated by AI", "success");
-              }
-            } catch (e) { console.warn("[stateUpdater]", e); }
-          }
-          // 2) continuityChecker — now reads the UPDATED project, so it won't flag changes
-          //    that stateUpdater just reconciled.
-          if (pps.continuityChecker !== false) {
-            try {
-              const issues = await AgentRuntime.runPostProcessor({
-                key: "continuityChecker", project: getFreshProject(), chapterIdx: chapterIdxSnapshot,
-                generatedContent: finalContent, settings, appConfig, signal: null,
-              });
-              if (issues?.issues?.length > 0) {
-                showToast(`Continuity: ${issues.issues.length} potential issue(s) flagged`, "info");
-              }
-            } catch (e) { console.warn("[continuityChecker]", e); }
-          }
-          // 3) hookScorer — ONLY if stateUpdater didn't already set the hook score (single authority).
-          if (pps.hookScorer !== false && !stateUpdaterSetHook) {
-            try {
-              const score = await AgentRuntime.runPostProcessor({
-                key: "hookScorer", project: getFreshProject(), chapterIdx: chapterIdxSnapshot,
-                generatedContent: finalContent, settings, appConfig, signal: null,
-              });
-              if (typeof score?.score === "number") {
-                setProjects(prev => prev.map(p => {
-                  if (p.id !== activeProjectId) return p;
-                  const chapters = [...(p.chapters || [])];
-                  if (chapters[chapterIdxSnapshot]) {
-                    chapters[chapterIdxSnapshot] = { ...chapters[chapterIdxSnapshot], chapterEndHookScore: score.score };
-                  }
-                  return { ...p, chapters };
-                }));
-              }
-            } catch (e) { console.warn("[hookScorer]", e); }
-          }
-          // 4) motifAuditor + voiceDriftDetector — independent, safe to run after (no project writes).
-          if (pps.motifAuditor) {
-            try {
-              const m = await AgentRuntime.runPostProcessor({ key: "motifAuditor", project: getFreshProject(), chapterIdx: chapterIdxSnapshot, generatedContent: finalContent, settings, appConfig, signal: null });
-              const neglected = Array.isArray(m?.motifsNeglected) ? m.motifsNeglected.length : 0;
-              if (neglected > 0) showToast(`Motifs: ${neglected} motif(s) underused this chapter`, "info");
-            } catch (e) { console.warn("[motifAuditor]", e); }
-          }
-          if (pps.voiceDriftDetector) {
-            try {
-              const v = await AgentRuntime.runPostProcessor({ key: "voiceDriftDetector", project: getFreshProject(), chapterIdx: chapterIdxSnapshot, generatedContent: finalContent, settings, appConfig, signal: null });
-              const drifts = v?.issues?.length || 0;
-              if (drifts > 0) showToast(`Voice drift: ${drifts} line(s) may be off-voice`, "info");
-            } catch (e) { console.warn("[voiceDriftDetector]", e); }
-          }
-        })();
-      }
+      // Draft is now in chat only. Summary and canon/memory updates are committed from the
+      // review/accept path, never from rejected AI output.
     } catch (err) {
       if (err.name === "AbortError") {
         const partial = stripThinkingTokens(streamingContentRef.current);
@@ -19764,7 +19749,64 @@ const insertBeatMarker = useCallback((beatId, beatTitle, beatDescription) => {
   updateChapter(activeChapterIdx, { content: el.innerHTML });
 }, [activeChapterIdx, updateChapter]);
 
-const appendToChapter = useCallback((text) => {
+const runAcceptedTextPostProcessors = useCallback(async ({ acceptedContent, mode, chapterIdx }) => {
+  if (!acceptedContent || !["continue", "scene", "dialogue", "rewrite"].includes(mode)) return;
+  if (!settings?.agentsEnabled || !settings?.apiKey) return;
+  if (postAcceptReviewAbortRef.current) { try { postAcceptReviewAbortRef.current.abort(); } catch { /* silent */ } }
+  const controller = new AbortController();
+  postAcceptReviewAbortRef.current = controller;
+  const signal = controller.signal;
+  const pps = settings.agentPostProcessors || {};
+  const baseProject = projectsRef.current?.find(p => p.id === activeProjectId) || project;
+  const review = { id: uid(), chapterIdx, mode, acceptedAt: new Date().toISOString(), sourcePreview: String(acceptedContent || "").slice(0, 800), stateUpdates: null, continuity: null, hook: null, motifs: null, voice: null };
+  const hasMeaningfulReview = (r) => {
+    const su = r.stateUpdates;
+    const hasState = !!(su && (
+      (Array.isArray(su.characterUpdates) && su.characterUpdates.length) ||
+      (Array.isArray(su.relationshipUpdates) && su.relationshipUpdates.length) ||
+      (su.chapterState && Object.keys(su.chapterState || {}).length)
+    ));
+    const hasHook = typeof r.hook?.score === "number";
+    const hasContinuity = !!(r.continuity && !String(r.continuity.raw || r.continuity.status || "").toLowerCase().includes("no issues"));
+    const hasMotifs = !!(r.motifs && (Array.isArray(r.motifs.motifsUsed) || Array.isArray(r.motifs.motifsNeglected) || r.motifs.suggestions));
+    const hasVoice = !!(r.voice && !String(r.voice.raw || r.voice.status || "").toLowerCase().includes("no drift"));
+    return hasState || hasHook || hasContinuity || hasMotifs || hasVoice;
+  };
+  try {
+    if (pps.stateUpdater !== false) {
+      review.stateUpdates = await AgentRuntime.runPostProcessor({ key: "stateUpdater", project: baseProject, chapterIdx, generatedContent: acceptedContent, settings, appConfig, signal });
+    }
+    if (signal.aborted) return;
+    if (pps.continuityChecker !== false) {
+      review.continuity = await AgentRuntime.runPostProcessor({ key: "continuityChecker", project: baseProject, chapterIdx, generatedContent: acceptedContent, settings, appConfig, signal });
+    }
+    if (signal.aborted) return;
+    if (pps.hookScorer !== false) {
+      review.hook = await AgentRuntime.runPostProcessor({ key: "hookScorer", project: baseProject, chapterIdx, generatedContent: acceptedContent, settings, appConfig, signal });
+    }
+    if (signal.aborted) return;
+    if (pps.motifAuditor) {
+      review.motifs = await AgentRuntime.runPostProcessor({ key: "motifAuditor", project: baseProject, chapterIdx, generatedContent: acceptedContent, settings, appConfig, signal });
+    }
+    if (signal.aborted) return;
+    if (pps.voiceDriftDetector) {
+      review.voice = await AgentRuntime.runPostProcessor({ key: "voiceDriftDetector", project: baseProject, chapterIdx, generatedContent: acceptedContent, settings, appConfig, signal });
+    }
+    if (signal.aborted) return;
+    if (hasMeaningfulReview(review)) {
+      setCanonReview(review);
+      showToast("AI canon review ready", "info");
+    }
+  } catch (e) {
+    if (e?.name === "AbortError") return;
+    console.warn("[post-accept review]", e);
+    showToast(`Post-accept review failed: ${e.message || e}`, "error");
+  } finally {
+    if (postAcceptReviewAbortRef.current === controller) postAcceptReviewAbortRef.current = null;
+  }
+}, [settings, appConfig, project, activeProjectId, showToast]);
+
+const appendToChapter = useCallback((text, modeOverride = null) => {
   if (!activeChapter) return;
   pushUndo();
   const el = editorRef.current;
@@ -19800,11 +19842,12 @@ const appendToChapter = useCallback((text) => {
   syncEditorContent();
   lastSyncedContentRef.current = el.innerHTML;
   showToast("Appended", "success");
-}, [activeChapter, activeChapterIdx, updateChapter, pushUndo, showToast, syncEditorContent, _markdownToEditorHtml, activeBeatId]);
+  runAcceptedTextPostProcessors({ acceptedContent: text, mode: modeOverride || genMode, chapterIdx: activeChapterIdx });
+}, [activeChapter, activeChapterIdx, updateChapter, pushUndo, showToast, syncEditorContent, _markdownToEditorHtml, activeBeatId, runAcceptedTextPostProcessors, genMode]);
 
   // B8: insertAtCursor still uses execCommand (no better cross-browser alternative for contentEditable)
   // but we wrap it safely and sync after
-  const insertAtCursor = useCallback((text) => {
+  const insertAtCursor = useCallback((text, modeOverride = null) => {
     if (!activeChapter || !editorRef.current) return;
     pushUndo();
     editorRef.current.focus();
@@ -19812,7 +19855,8 @@ const appendToChapter = useCallback((text) => {
     syncEditorContent();
     lastSyncedContentRef.current = editorRef.current.innerHTML; // B6
     showToast("Inserted", "success");
-  }, [activeChapter, pushUndo, showToast, syncEditorContent, _markdownToEditorHtml]);
+    runAcceptedTextPostProcessors({ acceptedContent: text, mode: modeOverride || genMode, chapterIdx: activeChapterIdx });
+  }, [activeChapter, pushUndo, showToast, syncEditorContent, _markdownToEditorHtml, runAcceptedTextPostProcessors, genMode, activeChapterIdx]);
 
   // B9: Validate selection range by checking if it's still within the editor
   const replaceSelection = useCallback((text) => {
@@ -19836,8 +19880,9 @@ const appendToChapter = useCallback((text) => {
       lastSyncedContentRef.current = el.innerHTML; // B6
       setSelectedText(""); setSelectionRange(null);
       showToast("Replaced", "success");
+      runAcceptedTextPostProcessors({ acceptedContent: text, mode: "rewrite", chapterIdx: activeChapterIdx });
     } catch { showToast("Selection expired — use Append instead", "error"); }
-  }, [activeChapter, selectionRange, pushUndo, showToast, syncEditorContent, _markdownToEditorHtml]);
+  }, [activeChapter, activeChapterIdx, selectionRange, pushUndo, showToast, syncEditorContent, _markdownToEditorHtml, runAcceptedTextPostProcessors]);
 
   // Sentence Garden: pin a sentence or excerpt to the garden
   const pinToGarden = useCallback((text) => {
@@ -19881,12 +19926,12 @@ const appendToChapter = useCallback((text) => {
     } else {
       setDiffReview({
         original: null, proposed: content,
-        onAccept: () => { appendToChapter(content); setDiffReview(null); },
+        onAccept: () => { appendToChapter(content, mode); setDiffReview(null); },
         onReject: () => setDiffReview(null),
-        onInsertAtCursor: () => { insertAtCursor(content); setDiffReview(null); },
+        onInsertAtCursor: () => { insertAtCursor(content, mode); setDiffReview(null); },
       });
     }
-  }, [selectedText, replaceSelection, appendToChapter, insertAtCursor]);
+  }, [selectedText, replaceSelection, appendToChapter, insertAtCursor, updateChapter, activeChapterIdx, showToast]);
 
   // ─── CHARACTER SUGGESTION HANDLERS ───
   const handleAcceptSuggestion = useCallback((suggestionId) => {
@@ -20255,34 +20300,27 @@ If no updates are needed, respond "No character updates needed."` },
             // FIX: Parse structured JSON suggestions for reviewable UI
             let parsedSuggestions = [];
             try {
-              const jsonBlocks = [...suggestions.matchAll(/```json\s*([\s\S]*?)```/g)];
-              for (const match of jsonBlocks) {
-                try {
-                  const parsed = JSON.parse(match[1]);
-                  const items = parsed.data || (Array.isArray(parsed) ? parsed : [parsed]);
-                  for (const item of items) {
-                    if (item.name && item.field && item.suggested) {
-                      // Resolve character name to ID
-                      const charMatch = (project.characters || []).find(c => c.name && c.name.toLowerCase() === item.name.toLowerCase());
-                      if (charMatch) {
-                        // FIX: Always use the LIVE current value from the character, not what AI reported
-                        const liveCurrentValue = charMatch[item.field] || "";
-                        // FIX: Skip if the suggestion is identical to what's already there
-                        if (String(item.suggested).trim() === String(liveCurrentValue).trim()) continue;
-                        parsedSuggestions.push({
-                          id: uid(),
-                          charId: charMatch.id,
-                          charName: charMatch.name,
-                          field: item.field,
-                          current: liveCurrentValue,
-                          suggested: item.suggested,
-                          reason: item.reason || "",
-                          status: "pending", // pending | accepted | rejected
-                        });
-                      }
-                    }
-                  }
-                } catch { /* silent */ }
+              const parsed = parseLooseJson(suggestions);
+              const unwrapped = unwrapAiData(parsed);
+              const items = Array.isArray(unwrapped) ? unwrapped : (unwrapped ? [unwrapped] : []);
+              for (const item of items) {
+                if (item?.name && item?.field && item?.suggested) {
+                  const field = String(item.field).trim();
+                  const charMatch = (project.characters || []).find(c => c.name && c.name.toLowerCase() === String(item.name).toLowerCase()) || (project.characters || []).find(c => c.id === item.name);
+                  if (!charMatch) continue;
+                  const liveCurrentValue = charMatch[field] || "";
+                  if (String(item.suggested).trim() === String(liveCurrentValue).trim()) continue;
+                  parsedSuggestions.push({
+                    id: uid(),
+                    charId: charMatch.id,
+                    charName: charMatch.name,
+                    field,
+                    current: liveCurrentValue,
+                    suggested: item.suggested,
+                    reason: item.reason || "",
+                    status: "pending",
+                  });
+                }
               }
             } catch { /* silent */ }
 
@@ -20372,74 +20410,68 @@ If no relationship changes, respond "No relationship updates needed."` },
             if (relSuggestions && !relSuggestions.toLowerCase().includes("no relationship updates needed")) {
               let parsedRelSuggestions = [];
               try {
-                const jsonBlocks = [...relSuggestions.matchAll(/```json\s*([\s\S]*?)```/g)];
-                for (const match of jsonBlocks) {
-                  try {
-                    const parsed = JSON.parse(match[1]);
-                    const items = parsed.data || (Array.isArray(parsed) ? parsed : [parsed]);
-                    const seenPairs = new Set();
+                const parsed = parseLooseJson(relSuggestions);
+                const unwrapped = unwrapAiData(parsed);
+                const items = Array.isArray(unwrapped) ? unwrapped : (unwrapped ? [unwrapped] : []);
+                const seenPairs = new Set();
 
-                    for (const item of items) {
-                      if (!item.char1 || !item.char2) continue;
-                      const pairKey = [item.char1.toLowerCase(), item.char2.toLowerCase()].sort().join("::");
-                      if (seenPairs.has(pairKey)) continue;
-                      seenPairs.add(pairKey);
+                for (const item of items) {
+                  if (!item || typeof item !== "object" || !item.char1 || !item.char2) continue;
+                  const pairKey = [String(item.char1).toLowerCase(), String(item.char2).toLowerCase()].sort().join("::");
+                  if (seenPairs.has(pairKey)) continue;
+                  seenPairs.add(pairKey);
 
-                      const c1Match = (project.characters || []).find(c => c.name && c.name.toLowerCase() === item.char1.toLowerCase());
-                      const c2Match = (project.characters || []).find(c => c.name && c.name.toLowerCase() === item.char2.toLowerCase());
-                      if (!c1Match || !c2Match) continue;
+                  const c1Match = (project.characters || []).find(c => c.name && c.name.toLowerCase() === String(item.char1).toLowerCase()) || (project.characters || []).find(c => c.id === item.char1);
+                  const c2Match = (project.characters || []).find(c => c.name && c.name.toLowerCase() === String(item.char2).toLowerCase()) || (project.characters || []).find(c => c.id === item.char2);
+                  if (!c1Match || !c2Match || c1Match.id === c2Match.id) continue;
 
-                      // Check if relationship already exists — use LIVE project state, not stale ref
-                      const existingRel = (project?.relationships || []).find(r =>
-                        (r.char1 === c1Match.id && r.char2 === c2Match.id) ||
-                        (r.char1 === c2Match.id && r.char2 === c2Match.id)
-                      );
+                  // Check if relationship already exists — use LIVE project state, and match either direction.
+                  const existingRel = (project?.relationships || []).find(r =>
+                    (r.char1 === c1Match.id && r.char2 === c2Match.id) ||
+                    (r.char1 === c2Match.id && r.char2 === c1Match.id)
+                  );
 
-                      if (existingRel) {
-                        // UPDATE: merge each non-empty field from the suggestion
-                        const updateFields = ["dynamic", "status", "tension", "tensionType", "char1Perspective", "char2Perspective", "progression", "evolutionTimeline", "notes"];
-                        for (const field of updateFields) {
-                          if (item[field] && item[field].trim()) {
-                            const currentVal = existingRel[field] || "";
-                            const directFields = new Set(["status", "tension", "tensionType"]);
-                            let finalVal = item[field];
-                            if (!directFields.has(field) && currentVal.trim()) {
-                              const curNorm = currentVal.trim().toLowerCase();
-                              const sugNorm = item[field].trim().toLowerCase();
-                              if (!sugNorm.includes(curNorm.slice(0, Math.min(50, curNorm.length)))) {
-                                finalVal = `${currentVal.trim()}\n[Ch${chNum || 1}]: ${item[field].trim()}`;
-                              }
-                            }
-                            parsedRelSuggestions.push({
-                              id: uid(), action: "update",
-                              relId: existingRel.id,
-                              char1Name: c1Match.name, char2Name: c2Match.name,
-                              field, current: currentVal, suggested: finalVal,
-                              reason: item.notes || "",
-                              suggestionStatus: "pending",
-                            });
+                  if (existingRel) {
+                    const updateFields = ["dynamic", "status", "tension", "tensionType", "char1Perspective", "char2Perspective", "progression", "evolutionTimeline", "notes"];
+                    for (const field of updateFields) {
+                      if (item[field] && String(item[field]).trim()) {
+                        const currentVal = existingRel[field] || "";
+                        const directFields = new Set(["status", "tension", "tensionType"]);
+                        let finalVal = String(item[field]).trim();
+                        if (!directFields.has(field) && currentVal.trim()) {
+                          const curNorm = currentVal.trim().toLowerCase();
+                          const sugNorm = finalVal.toLowerCase();
+                          if (!sugNorm.includes(curNorm.slice(0, Math.min(50, curNorm.length)))) {
+                            finalVal = `${currentVal.trim()}\n[Ch${chNum || 1}]: ${finalVal}`;
                           }
                         }
-                      } else {
-                        // CREATE: copy ALL fields directly from the AI suggestion
                         parsedRelSuggestions.push({
-                          id: uid(), action: "create",
-                          char1Id: c1Match.id, char1Name: c1Match.name,
-                          char2Id: c2Match.id, char2Name: c2Match.name,
-                          dynamic: item.dynamic || "",
-                          status: item.status || "developing",
-                          tension: item.tension || "medium",
-                          tensionType: item.tensionType || "romantic",
-                          char1Perspective: item.char1Perspective || "",
-                          char2Perspective: item.char2Perspective || "",
-                          notes: item.notes || "",
-                          meetsInChapter: chNum,
-                          evolutionTimeline: item.notes ? `Ch${chNum || 1}: ${item.notes}` : "",
+                          id: uid(), action: "update",
+                          relId: existingRel.id,
+                          char1Name: c1Match.name, char2Name: c2Match.name,
+                          field, current: currentVal, suggested: finalVal,
+                          reason: item.notes || "",
                           suggestionStatus: "pending",
                         });
                       }
                     }
-                  } catch { /* silent */ }
+                  } else {
+                    parsedRelSuggestions.push({
+                      id: uid(), action: "create",
+                      char1Id: c1Match.id, char1Name: c1Match.name,
+                      char2Id: c2Match.id, char2Name: c2Match.name,
+                      dynamic: item.dynamic || "",
+                      status: item.status || "developing",
+                      tension: item.tension || "medium",
+                      tensionType: item.tensionType || "mixed",
+                      char1Perspective: item.char1Perspective || "",
+                      char2Perspective: item.char2Perspective || "",
+                      notes: item.notes || "",
+                      meetsInChapter: chNum,
+                      evolutionTimeline: item.notes ? `Ch${chNum || 1}: ${item.notes}` : "",
+                      suggestionStatus: "pending",
+                    });
+                  }
                 }
               } catch { /* silent */ }
 
@@ -24149,7 +24181,7 @@ CAMERA DEFAULTS: ${contextData._cameraDefaults || "50mm f/2.8"}` },
                       <button onClick={() => reviewBeforeInsert(msg.content, msg.mode)} className="nf-btn-micro"><Icons.Eye /> Review</button>
                     </Tooltip>
                     <Tooltip text="Append to chapter end">
-                      <button onClick={() => appendToChapter(msg.content)} className="nf-btn-micro"><Icons.ArrowDown /> Append</button>
+                      <button onClick={() => appendToChapter(msg.content, msg.mode)} className="nf-btn-micro"><Icons.ArrowDown /> Append</button>
                     </Tooltip>
                     <button onClick={() => handleCopyMsg(msg)} className="nf-btn-micro" style={{ transition: "background 0.15s, border-color 0.15s, color 0.15s, opacity 0.15s, transform 0.15s" }}>
                       {copiedMsgId === msg.id ? <><Icons.Check /> <span style={{ color: "var(--nf-success)" }}>Copied</span></> : <><Icons.Copy /> Copy</>}
@@ -28274,10 +28306,14 @@ Members:
 ${memberDescs || ""}
 
 Formal group portrait, higher ranks center/front, appropriate setting.`;
-                                            const res = await fetch("https://openrouter.ai/api/v1/chat/completions", { method: "POST", headers: { "Content-Type": "application/json", "Authorization": `Bearer ${settings.apiKey}`, "HTTP-Referer": window.location.origin, "X-Title": "NovelForge" }, body: JSON.stringify({ model: settings.model, messages: [{ role: "system", content: systemContent }, { role: "user", content: userContent }], max_tokens: Number(liveTpl?.maxTokens || 12000), temperature: Number(liveTpl?.temperature || 0.8) }) });
-                                            if (!res.ok) { const errData = await res.json().catch(() => ({})); throw new Error(errData.error?.message || `API error (${res.status})`); }
-                                            const data = await res.json();
-                                            const prompt = stripThinkingTokens(data.choices?.[0]?.message?.content || "").trim();
+                                            const prompt = (await callOpenRouter([
+                                              { role: "system", content: systemContent },
+                                              { role: "user", content: userContent },
+                                            ], {
+                                              model: settings.model,
+                                              maxTokens: Number(liveTpl?.maxTokens || 12000),
+                                              temperature: Number(liveTpl?.temperature || 0.8),
+                                            })).trim();
                                             if (prompt) { updateProject({ worldBuilding: items.map(it => it.id === item.id ? { ...it, orgGroupPhotoPrompt: prompt } : it) }); showToast("Prompt ready — review and click Render", "success"); }
                                           } catch (e) { showToast(`Failed: ${e.message?.replace(/sk-[a-zA-Z0-9]+/g, "sk-***") || "Unknown error"}`, "error"); }
                                         }}
@@ -29871,6 +29907,20 @@ Formal group portrait, higher ranks center/front, appropriate setting.`;
               </div>
             </div>
           )}
+          {relDraftReview && (
+            <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", marginBottom: 14, background: "var(--nf-bg-raised)", border: "1px solid var(--nf-accent-2)", borderRadius: 6 }}>
+              <Icons.Eye />
+              <span style={{ flex: 1, fontSize: 12, color: "var(--nf-text)" }}>Review pending relationship AI changes: {relDraftReview.summary}</span>
+              <button onClick={() => {
+                const patch = { relationships: relDraftReview.relationships, ...(relDraftReview.metadata || {}) };
+                updateProject(patch);
+                setRelDraftUndo({ relationships: relDraftReview.snapshot, summary: relDraftReview.summary, count: relDraftReview.count });
+                setRelDraftReview(null);
+                showToast("Relationship changes applied", "success");
+              }} className="nf-btn-micro" style={{ borderColor: "var(--nf-accent-2)", color: "var(--nf-accent-2)" }}><Icons.Check /> Apply</button>
+              <button onClick={() => { setRelDraftReview(null); showToast("Relationship draft discarded", "info"); }} className="nf-btn-micro"><Icons.X /> Discard</button>
+            </div>
+          )}
           {/* Auto-draft result banner: shows what changed + one-click undo (project relationship
               data isn't on the editor undo stack, so this is its dedicated revert). */}
           {relDraftUndo && (
@@ -30249,13 +30299,12 @@ Formal group portrait, higher ranks center/front, appropriate setting.`;
       showToast(`${char.name} is writing to you...`, "info");
       try {
         const chaptersSince = Math.max(0, activeChapterIdx - (char.lastUpdatedChapter || 0));
-        const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-          method: "POST",
-          headers: { "Content-Type": "application/json", "Authorization": `Bearer ${settings.apiKey}`, "HTTP-Referer": window.location.origin, "X-Title": "NovelForge" },
-          body: JSON.stringify({
-            model: settings.model || "anthropic/claude-sonnet-4",
-            messages: [
-              { role: "system", content: `You are ${char.name}, a character in a novel. Write a short, personal letter to your author (the reader). Reflect on who you've become, what you regret, what you still want. Be intimate. Use your authentic voice. 150-300 words. Sign it with your name.
+        const hasVoiceSeed = [char.personality, char.speechPattern, char.voiceSamples, char.currentEmotionalState, char.desires, char.arc].some(v => String(v || "").trim().length >= 20);
+        if (!hasVoiceSeed) throw new Error("Seed this character's personality, voice, desire, or arc before asking them to write a letter.");
+        const liveTpl = await getLivePromptTemplate("keepsakes.characterLetter", "promptTemplatesCharacters");
+        const vars = { project, character: char, char, activeChapterIdx, chapterNumber: activeChapterIdx + 1, chaptersSince };
+        const content = (await callOpenRouter([
+          { role: "system", content: liveTpl?.system ? renderConfigTemplate(liveTpl.system, vars) : `You are ${char.name}, a character in a novel. Write a short, personal letter to your author (the reader). Reflect on who you've become, what you regret, what you still want. Be intimate. Use your authentic voice. 150-300 words. Sign it with your name.
 
 Your profile:
 Role: ${char.role}
@@ -30264,14 +30313,12 @@ Backstory: ${char.backstoryRevealed ? (char.backstory || "").slice(0, 400) : "(k
 Current emotional state: ${char.currentEmotionalState || "unspecified"}
 Arc: ${char.arc || ""}
 Speech pattern: ${char.speechPattern || ""}` },
-              { role: "user", content: `Write your letter. We're at Chapter ${activeChapterIdx + 1} of the novel. This is the voice of YOU, speaking to your author.` },
-            ],
-            max_tokens: 12000, temperature: 0.9,
-          }),
-        });
-        if (!res.ok) throw new Error(`API error ${res.status}`);
-        const data = await res.json();
-        const content = (stripThinkingTokens(data.choices?.[0]?.message?.content || "")).trim();
+          { role: "user", content: liveTpl?.user ? renderConfigTemplate(liveTpl.user, vars) : `Write your letter. We're at Chapter ${activeChapterIdx + 1} of the novel. This is the voice of YOU, speaking to your author.` },
+        ], {
+          model: settings.tabModels?.characters || settings.model || "anthropic/claude-sonnet-4",
+          maxTokens: Number(liveTpl?.maxTokens || 12000),
+          temperature: Number(liveTpl?.temperature || 0.9),
+        })).trim();
         if (content) {
           const entry = { id: uid(), charId, charName: char.name, chapterIdx: activeChapterIdx, content, generatedAt: new Date().toISOString() };
           updateProject({ characterLetters: [...letters, entry] });
@@ -34454,6 +34501,38 @@ Speech pattern: ${char.speechPattern || ""}` },
               <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
                 <button onClick={() => setFlushConfirm(false)} className="nf-btn nf-btn-ghost">Cancel</button>
                 <button onClick={() => handleFlushAll()} className="nf-btn nf-btn-danger" autoFocus>Flush Everything</button>
+              </div>
+            </div>
+          </div>
+        )}
+        {canonReview && (
+          <div style={{ position: "fixed", inset: 0, zIndex: 9999, background: "rgba(0,0,0,0.55)", backdropFilter: "blur(4px)", display: "flex", alignItems: "center", justifyContent: "center", animation: "nf-fadeIn 0.12s ease-out" }} onClick={() => setCanonReview(null)}>
+            <div role="button" tabIndex={0} onClick={e => e.stopPropagation()} style={{ background: "var(--nf-dialog-bg)", border: "1px solid var(--nf-dialog-border)", borderRadius: 2, padding: "20px 24px", maxWidth: 720, width: "95%", maxHeight: "82vh", overflow: "auto", boxShadow: "var(--nf-shadow-lg)" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+                <span style={{ fontFamily: "var(--nf-font-display)", fontSize: 18, fontWeight: 400, color: "var(--nf-text)" }}>Review AI Canon Updates</span>
+                <button onClick={() => setCanonReview(null)} className="nf-btn-icon"><Icons.X /></button>
+              </div>
+              <p style={{ fontSize: 11, color: "var(--nf-text-muted)", lineHeight: 1.6, marginBottom: 14 }}>
+                These updates were inferred from text you accepted into the manuscript. Apply only if they match your intent.
+              </p>
+              <pre style={{ whiteSpace: "pre-wrap", maxHeight: 420, overflow: "auto", background: "var(--nf-bg-deep)", border: "1px solid var(--nf-border)", padding: 12, fontSize: 11, color: "var(--nf-text-dim)" }}>{JSON.stringify(canonReview, null, 2)}</pre>
+              <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 16 }}>
+                <button onClick={() => setCanonReview(null)} className="nf-btn nf-btn-ghost">Discard</button>
+                <button onClick={() => {
+                  if (canonReview?.stateUpdates) {
+                    setProjects(prev => prev.map(p => p.id !== activeProjectId ? p : AgentRuntime.applyStateUpdates(p, canonReview.chapterIdx, canonReview.stateUpdates)));
+                  }
+                  if (typeof canonReview?.hook?.score === "number") {
+                    setProjects(prev => prev.map(p => {
+                      if (p.id !== activeProjectId) return p;
+                      const chapters = [...(p.chapters || [])];
+                      if (chapters[canonReview.chapterIdx]) chapters[canonReview.chapterIdx] = { ...chapters[canonReview.chapterIdx], chapterEndHookScore: canonReview.hook.score };
+                      return { ...p, chapters };
+                    }));
+                  }
+                  setCanonReview(null);
+                  showToast("Canon updates applied", "success");
+                }} className="nf-btn nf-btn-primary"><Icons.Check /> Apply Canon Updates</button>
               </div>
             </div>
           </div>
